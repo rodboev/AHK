@@ -10,6 +10,7 @@
 ; Double click from Everything and uTorrent launches from Explorer
 ; Ctrl+W in sublime toggles word wrap
 ; Del in MPC deletes file, skips rl    Media_Next
+; Esc, Alt+F4 in Everything hide window
 
 
 #SingleInstance Force
@@ -23,16 +24,12 @@ SetWorkingDir %A_ScriptDir%
 
 ; Prevent script proceeding
 if (WinActive("ahk_class TscShellContainerClass"))
-        Return
-
-; #Include FindText.ahk
-
-; DllCall("SystemParametersInfo", UInt, 0x69, UInt, 3, UInt, 0, UInt, 0) ; Restore original value
+    Return
 
 ; FileGetAttrib, attribs, %A_ScriptFullPath%
 ; if (attribs="A") {
 ;        FileSetAttrib, -A, %A_ScriptFullPath%
-;        TrayTip, AutoHotKey, Reloaded script from:`n%A_ScriptFullPath%,, 1
+;        TrayTip, Reloaded script, %A_ScriptFullPath%,, 1
 ; }
 ; OnExit, ExitSub
 ; Return
@@ -43,9 +40,13 @@ if (WinActive("ahk_class TscShellContainerClass"))
 ; ExitApp
 
 
+; ~LButton:: 
+; If (A_TimeSincePriorHotkey<400) and (A_PriorHotkey="~LButton")
+;  ToolTip, You double Left clicked on something 
+; Return
+
+
 ; #Include WindowDraggingResizing.ahk
-
-
 ; #Include TaskbarNavigation-NumPadMapped.ahk
 ; #Include TaskbarNavigation-AltTabMapped.ahk
 
@@ -65,12 +66,10 @@ if (WinActive("ahk_class TscShellContainerClass"))
 ;
 ; AHK bindings
 ;
-; MsgBox, %attribs%
 +!r::Reload
-+!x::Suspend
 +!p::
-#p::
-    Pause
+    Suspend
+    Pause,,1
 Return
 
 
@@ -85,17 +84,19 @@ Return
     ^w::Send {Alt Down}v{AltUp}w
     ~^s::
         SetTitleMatchMode, RegEx
-        #IfWinActive "^AutoHotKey(.*)? - Sublime Text"
+        #IfWinActive "^AutoHotKey.ahk .*? - Sublime Text"
+        SetTitleMatchMode, 1
             Reload
         #IfWinActive
     Return
+    ^;::Send ^/
     Return
 #IfWinActive
+; Alt+Shift+E = Edit current script as normal user
++!e::Run RunFromProcess-x64 explorer.exe notepad %A_ScriptFullPath%
++!t::Run RunFromProcess-x64 explorer.exe notepad "C:\Users\Rod\Desktop\Pip's Island\todo.txt"
 
-
-;
 ; Google Chrome
-;
 #IfWinActive ahk_exe chrome.exe
     +!d::
         ; ToolTip, Duplicating tab
@@ -120,13 +121,6 @@ Return
     Return
 #IfWinActive
 
-
-; TODO check for title starting with "AutoHotkey.ahk" and ending with " - Sublime Text*"
-;    *^s::
-        
-;        Reload
-;        ; Send {CtrlDown}{Alt Down}r{Ctrl Up}{Alt Up}
-;    Return
 
 ;;
 ;; Detect Open/Save dialog
@@ -223,12 +217,9 @@ Return
 ; #IfWinActive
 
 
-;;
 ;; http://www.autohotkey.com/board/topic/95834-using-winwait-effectively-or-how-else-should-i-execute-an-action-when-a-pop-up-window-appears/#entry603588
-;;
-;;
-; TODO group
-;
+;; https://autohotkey.com/board/topic/121689-virustotal-uploader-script-to-auto-close-its-dialog-windows/
+; TODO:
 ; μTorrent
 ; ahk_class #32770
 ; ahk_exe uTorrent.exe
@@ -236,53 +227,78 @@ Return
 ; ClassNN: Button1
 ; Text: &Yes
 ;
+; TODO:
 ; Dropbox Notification
 ; ahk_class Qt5QWindowToolSaveBits
 ; ahk_exe Dropbox.exe
-; 
+
+
+; ; Close VirusTotal window
 ; IfWinExist ahk_exe VirusTotalUploader2.2.exe {
 ;    winactivate ahk_class Chrome_WidgetWin_1
 ; else
 ;    run, "C:\Users\xxx\AppData\Local\Google\Chrome\Application\chrome.exe"
 ; WinWaitActive ahk_class Chrome_WidgetWin_1
-;
-;; uTorrent
-;; https://autohotkey.com/docs/commands/WinWaitActive.htm
-;; https://autohotkey.com/docs/misc/WinTitle.htm#LastFoundWindow
-;; https://autohotkey.com/docs/commands/WinActive.htm
-; #IfWinActive chrome
-; if WinActive("ahk_class Chrome_WidgetWin_1")
-; WinWaitActive, ahk_exe uTorrent.exe
-; WinClose
-; #IfWinActive
-;
-;; https://autohotkey.com/board/topic/99219-can-i-do-this-close-specific-windows-when-they-open/#entry642311
-;
-;; Shift+WheelUp/Down = Scroll by 3 lines
-;; {Click WheelDown 3}
-;; {Click WheelUp 3}
-;; #IfWinActive ahk_class MPC-BE
-; #IfWinActive ahk_class MediaPlayerClassicW
-;; +WheelDown::SendMessage,0x0111,904,,,ahk_class MPC-BE
-;; +WheelUp::SendMessage,0x0111,903,,,ahk_class MPC-BE 
-;; +WheelDown::SendMessage,0x0111,904,,,ahk_class MediaPlayerClassicW
-;; +WheelUp::SendMessage,0x0111,903,,,ahk_class MediaPlayerClassicW 
-; $+WheelDown::
-;    SendInput, {Shift Down}{Right}{Shift Up}
+
+; Loop 
+; {
+;     WinWait, VirusTotal Uploader
+;     IfWinExist, VirusTotal Uploader
+;         {
+;         ControlGetText, Status, Static1
+;         IfInString, Status, Checking, WinHide
+;         IfInString, Status, Hash found
+;             {
+;                 Sleep, 100
+;                 WinClose
+;             }
+;         }
+;     Sleep, 500
+; }
 ; Return
-; $+WheelUp::
-;    SendInput, {Shift Down}{Left}{Shift Up}
-; Return
-; ToolTip, WheelDown MPC
-;; $+WheelDown::SendInput, {Shift Down}{Right}{Shift Up}
-;; $+WheelUp::SendInput, {Shift Down}{Left}{Shift Up}
-;; $+WheelDown::SendInput, {Click WheelDown 3}
-;; $+WheelUp::SendInput, {Click WheelUp 3}
-; #IfWinActive
+
+
+; ; MPC Shift+WheelUp/Down = Scroll by 3 lines
+; ; If (WinActive("ahk_class QWidget") and (WinActive("ahk_class QWidget")) {
+; MPC MClick + WheelUp/Down Scroll by 3 lines
+; Tags: fast wheel scroll
+; ; #IfWinActive ahk_class MPC-BE
+; ; +WheelDown::SendMessage,0x0111,904,,,ahk_class MPC-BE
+; ; +WheelUp::SendMessage,0x0111,903,,,ahk_class MPC-BE 
+; +WheelDown::SendMessage,0x0111,904,,,ahk_class MediaPlayerClassicW
+; +WheelUp::SendMessage,0x0111,903,,,ahk_class MediaPlayerClassicW 
+; this enables the hotkey - i.e. "begins waiting for LButton"
+; Hotkey, LButton, left_button, On
+#IfWinActive ahk_class MediaPlayerClassicW
+; #IfWinExist ahk_class MediaPlayerClassicW
+; left_button:  ; <-- this is a regular label
+    ; MouseGetPos, , , mWin, mCont
+    ; WinExist may be used to check that mWin is the correct window.
+    ; MouseGetPos, CursorX, CursorY, Window, ClassNN
+    ; WinGetClass, ahk_class, ahk_id %Window%
+    ; ; check if winexist ahk_class
+    ; RButton & WheelDown::SendInput, {Shift Down}{Right}{Shift Up}
+    ; ToolTip, RButton+WheelDown MPC
+    ; RButton & WheelUp::SendInput, {Shift Down}{Right}{Shift Up}
+    ; ToolTip, RButton+WheelUp MPC
++WheelDown::SendInput, {Shift Down}{Right}{Shift Up}
++WheelUp::SendInput, {Shift Down}{Left}{Shift Up}
+; return
+; RButton & WheelDown::SendInput, {Shift Down}{Right}{Shift Up}
+; ;RButton & WheelUp::SendInput, {Shift Down}{Left}{Shift Up}
+; #IfWinExist
+#IfWinActive
+; ~MWheel & RButto::
+;  ToolTip, WheelDown MPC
+; ; $+WheelDown::SendInput, {Shift Down}{Right}{Shift Up}
+; ; $+WheelUp::SendInput, {Shift Down}{Left}{Shift Up}
+; ; $+WheelDown::SendInput, {Click WheelDown 3}
+; ; $+WheelUp::SendInput, {Click WheelUp 3}
+; }
 
 
 ;
-; VLC
+; VLC next on mouse middle
 ;
 #IfWinActive ahk_class QWidget
 $*MButton::Send n
@@ -371,45 +387,42 @@ $*MButton::Send n
 
 
 ;
-; Restore Win+X key functionality disabled via Group Policy
+; Restore Win+X key functionality disabled via Group Policy on CORE
 ;
-#r::
-    SetTitleMatchMode, 3
-    IfWinExist, Run
+if (A_ComputerName = "CORE") {
+    #r::
+        SetTitleMatchMode, 3
+        IfWinExist, Run
             WinActivate
-    else
+        else
             Run, shell:::{2559a1f3-21d7-11d4-bdaf-00c04f60b9f0}
-            IfWinNotActive
-                    WinWait, Run
-                    WinActivate
+        IfWinNotActive
+            WinWait, Run
+        WinActivate
     Return
+
+
+    ; Win+D = Show desktop
+    toggle = 0
+    #d::
+        if toggle := !toggle
+            WinMinimizeAll
+        else
+            WinMinimizeAllUndo
+    Return
+}
 
 ;; Win+L: Turn off monitor
 #l::
-;    if (A_ComputerName = "CORE") {
-;        Run RunFromProcess-x64 explorer.exe nircmd cmdwait 200 monitor off
+        Run RunFromProcess-x64 explorer.exe nircmd cmdwait 200 monitor off
         SendMessage, 0x112, 0xF140, 0,, Program Manager
         Sleep 3000
         VarSetCapacity(screen_saver_active,4,0)
         SPI_GETSCREENSAVERRUNNING = 0x0072
         result := DllCall( "user32.dll\SystemParametersInfo", "uint", SPI_GETSCREENSAVERRUNNING, "uint", 0, "uint*", screen_saver_active, "uint", 0 )
         WinGetActiveTitle, Title
-        ; MsgBox, The active window is "%Title%"
         if (Title = "")
             SendMessage, 0x112, 0xF170, 2,, Program Manager ; Shut off monitor
-        ; if (ScreenSaverRunning)
-            ; {
-            ; MsgBox,
-;    }
-Return
-
-; Win+D = Show desktop
-toggle = 0
-#d::
-    if toggle := !toggle
-            WinMinimizeAll
-    else
-            WinMinimizeAllUndo
 Return
 
 
@@ -425,82 +438,89 @@ Return
 ; Return
 
 
-;
 ; Win+S = Run or activate Everything
-;
-; #s::
-;;
-;; to send original key:
-;;
-;; SendInput {RWin Down}
-;; Send s
-;; SendInput {RWin Up}
-;; Return
-;;
-; If (WinActive("ahk_class EVERYTHING")) {
-;    Send !d
-; }
-; Else If (WinExist("ahk_class EVERYTHING")) {
-;    WinActivate
-; }
-; Else {
-;        Run RunFromProcess-x64 explorer.exe C:\Program Files\Everything\Everything.exe
-; }
-; Return
+; to send original key:
+; SendInput {RWin Down}s{RwinUp}
 
+
+DetectHiddenWindows, On
 #s::
-SetTitleMatchMode, RegEx
-IfWinActive ^(.* - )?Everything$
-        Return 
-IfWinExist ^(.* - )?Everything$
+;     If WinActive("ahk_class EVERYTHING")
+;         Send !d
+;     Else If WinExist("ahk_class EVERYTHING")
+    If WinExist("ahk_class EVERYTHING") {
+        WinShow
         WinActivate
-else
+    }
+    Else
         Run RunFromProcess-x64 explorer.exe C:\Program Files\Everything\Everything.exe
-        IfWinNotActive
-                WinWait, ^(.* - )?Everything
-                WinActivate
+Return
+DetectHiddenWindows, Off
+
+Esc::
+!F4::
+    If WinActive("ahk_class EVERYTHING")
+        If WinExist("ahk_class EVERYTHING_DROPDOWNLIST")
+            WinClose
+    WinHide
 Return
 
+; #s::
+; SetTitleMatchMode, RegEx
+; IfWinActive ^(.* - )?Everything$
+;         Return 
+; IfWinExist ^(.* - )?Everything$
+;         WinActivate
+; Else
+;         Run RunFromProcess-x64 explorer.exe C:\Program Files\Everything\Everything.exe
+;         IfWinNotActive
+;                 WinWait, ^(.* - )?Everything
+;                 WinActivate
+; Return
 
-;;
-;; Shift+WheelUp/Down = Scroll by 30 lines
-;; Alt+WheelUp/Down = Scroll horizontally
-;;
+; ; Doesn't work
+; SetTitleMatchMode, RegEx
+; #IfWinActive ^(.* - )?Everything$
+;     WinClose
+; #IfWinActive
+; 
+; DetectHiddenWindows, On
+; #IfWinNotExist ^(.* - )?Everything$
+;     Run RunFromProcess-x64 explorer.exe C:\Program Files\Everything\Everything.exe
+; #IfWinExist
+; DetectHiddenWindows, Off
+; SetTitleMatchMode, 1
+
+
+; ; Doesn't work
+; ; Shift+WheelUp/Down = Scroll by 30 lines
+; ; Alt+WheelUp/Down = Scroll horizontally
 ; +WheelUp::Send {Click WheelUp 30}
 ; +WheelDown::Send {Click WheelDown 30}
-;; #IfWinActive ahk_class PX_WINDOW_CLASS
-;; {
-;        ; WheelUp::Click WheelUp 3
-;        ; WheelDown::Click WheelDown 3
-;        ; Return
-;; }
-;; !WheelUp::Send {Click WheelLeft 2}
-;; !WheelDown::Send {Click WheelRight 2}
+; ; #IfWinActive ahk_class PX_WINDOW_CLASS
+; ; {
+;         ; WheelUp::Click WheelUp 3
+;         ; WheelDown::Click WheelDown 3
+;         ; Return
+; ; }
+; ; !WheelUp::Send {Click WheelLeft 2}
+; ; !WheelDown::Send {Click WheelRight 2}
 
 
-;
 ; Run Process Hacker
-;
 ^+`::Run nircmd runassystem "C:\Program Files\Process Hacker 2\ProcessHacker.exe"
 
-;
-; Alt+Shift+E = Edit current script (as normal user)
-;
-+!e::Run RunFromProcess-x64 explorer.exe notepad %A_ScriptFullPath%
-
-;
 ; http://www.howtogeek.com/howto/8955/make-backspace-in-windows-7-or-vista-explorer-go-up-like-xp-did/
-;
-#IfWinActive, ahk_exe explorer.exe
+; Fixed quotes
+#IfWinActive, ahk_class CabinetWClass
 Backspace::
-     ControlGet renamestatus,Visible,,Edit1,A
-     ControlGetFocus focussed, A
-     if(renamestatus!=1&&(focussed=”DirectUIHWND3″||focussed=SysTreeView321))
-     {
+    ControlGet renamestatus,Visible,,Edit1,A
+    ControlGetFocus focused, A
+    If (renamestatus != 1 and (focused = "DirectUIHWND3" or focused = "SysTreeView321"))
         SendInput {Alt Down}{Up}{Alt Up}
-    }else{
-            Send {Backspace}
-    }
+    Else
+      Send {Backspace}
+Return
 #IfWinActive
 
 ;
@@ -527,169 +547,45 @@ Return
 ; https://autohotkey.com/board/topic/94263-problem-with-using-multiple-mouse-buttons-as-hotkey/
 ; https://autohotkey.com/board/topic/36239-spotify-global-hotkeys/
 
-; #IfWinExist ahk_class SpotifyMainWindow
+DetectHiddenWindows, On 
+#IfWinExist ahk_class SpotifyMainWindow
++!Left::
+    Send {Media_Prev}
+    ; ControlSend, ahk_parent, ^{Left}, ahk_class SpotifyMainWindow 
+    ; TrayTip, , Previous track
+return 
 ~XButton1 & XButton2::
 ~XButton2 & XButton1::
-+!Left:: 
-    ; SetTitleMatchMode, 2
-    DetectHiddenWindows, On 
-    ; Send {Media_Prev}
-    ControlSend, ahk_parent, ^{Left}, ahk_class SpotifyMainWindow 
-    DetectHiddenWindows, Off 
-return 
-
 +!Right::
-    ; SetTitleMatchMode, 2
-    DetectHiddenWindows, On 
-    ; Send {Media_Next}
-    ControlSend, ahk_parent, ^{Right}, ahk_class SpotifyMainWindow 
-    DetectHiddenWindows, Off 
+    ; DetectHiddenWindows, On 
+    Send {Media_Next}
+    ; ControlSend, ahk_parent, ^{Right}, ahk_class SpotifyMainWindow 
+    ; DetectHiddenWindows, Off
+    ; TrayTip, , Next track
 Return
-; #IfWinExist
 
-
-;;
-;; Accelerated Scrolling v2
-;; https://autohotkey.com/board/topic/48426-accelerated-scrolling-script/?p=333222
-;;
-;; ==== Script Initialize ========================================================
-;
-; If Not A_IsAdmin                                                                    ; need Admin privilege to scroll programs run as Admin
-; {
-;    DllCall("shell32\ShellExecuteA", uint, 0, str, "RunAs", str, A_AhkPath, str, """" . A_ScriptFullPath . """", str, A_WorkingDir, int, 0)
-;    ExitApp
-; }
-;
-; #MaxThreads 2                                                                       ; need two "threads", one to accumulate buffered events and one to send scroll messages
-; #MaxThreadsPerHotkey 2
-; #MaxHotkeysPerInterval 2000                                                         ; the hyper wheel on a Logitech mouse generates events very quickly when in free spinning mode
-;
-; Process Priority, , H                                                               ; run in high speed
-; SetBatchLines -1                                                                    ; do not interrupt a "thread" after processing a number of script lines
-; CoordMode Mouse, Screen                                                             ; use screen coordinates
-;
-;; ==== WheelUp/Down Initialize ==================================================
-;
-; ScrollLines := 1                                                                    ; scroll 1 line at once, though 3 is system default
-; DllCall("SystemParametersInfo", UInt, 0x69, UInt, ScrollLines, UInt, 0, UInt, 0)    ; 0x69 is SPI_SETWHEELSCROLLLINES
-; WheelUnits := 120                                                                   ; most mice report 120 units per detent (WheelUp/Down "click")
-; WheelDelta := WheelUnits << 16                                                      ; shift value 2 bytes to the left, as the scroll message expects step size in the most significant 2 bytes
-;
-; DllCall("QueryPerformanceFrequency",  "Int64 *", Freq)                              ; retrieve the frequency of the high-resolution performance counter
-; TickPerMs := Freq / 1000                                                            ; ticks per millisecond
-;
-; ThresholdCtrl := 200 * TickPerMs                                                    ; threshold to block Ctrl + WheelUp/Down until wheel stops scrolling
-; ThresholdSingle := 400 * TickPerMs                                                  ; threshold to determine whether it is an intended continuous scrolling
-; ThresholdAccelMin := 140 * TickPerMs                                                ; threshold to begin accelerating the wheel scrolling speed
-; ThresholdAccelMax := 20 * TickPerMs                                                 ; threshold of maximum acceleration of the wheel scrolling speed
-; BoostPeak := 6                                                                      ; limit on peak boost
-; BoostMult := BoostPeak / (ThresholdAccelMin - ThresholdAccelMax)                    ; multiplier for linear acceleration profile, in x / tick (1 / 10 is 1x boost per 10 tick below ThresholdAccelMin)
-;
-; WheelSteps := 0                                                                     ; wheel steps, used when wheel steps have been buffered or accelerated
-; Available := true                                                                   ; lock to allow buffering while only one "thread" sends scroll messages
-; PriorTick := 0                                                                      ; previous value of the high-resolution performance counter (tick since boot)
-; PriorWin := 0                                                                       ; previously hovered window
-; PriorCtl := ""                                                                      ; previously hovered control
-; MsgType := 0                                                                        ; type of scroll message to send
-;
-;; ==== WheelUp/Down Routine =====================================================
-;
-; WheelUp::
-; WheelDown::
-;    Critical
-;
-;    DllCall("QueryPerformanceCounter", "Int64 *", Tick)                             ; retrieves the current value of the high-resolution performance counter (tick since boot)
-;    Dur := (Tick - PriorTick) / A_EventInfo                                         ; time since last WheelUp/Down (most mice combine multiple WheelUp/Down within 8ms into one event)
-;    If (Dur > ThresholdSingle || A_ThisHotkey != A_PriorHotkey)                     ; this is a single step, as opposed to continuous scrolling
-;        WheelSteps := A_EventInfo                                                   ; clear leftover buffered message
-;    Else If (Dur <= ThresholdAccelMax)                                              ; fastest continuous wheel scrolling
-;        WheelSteps += (BoostPeak + 1) * A_EventInfo                                 ; add peak acceleration boost to wheel steps
-;    Else If (Dur < ThresholdAccelMin)                                               ; fast continuous wheel scrolling
-;        WheelSteps += ((ThresholdAccelMin - Dur) * BoostMult + 1) * A_EventInfo     ; add linear acceleration boost to wheel steps
-;    Else
-;        WheelSteps += A_EventInfo                                                   ; add wheel steps
-;    PriorTick := Tick
-;
-;    If (Available)                                                                  ; only enter the send message section if it's not already running in the other "thread"
+;SetTimer, Toast, 1000
+;    ToolTip,
+;Return
+;Toast:
+;    DetectHiddenWindows, On
+;    WinGetTitle, text, ahk_class SpotifyMainWindow
+;    ToolTip, %text%
+;    StringTrimLeft, text2, text, 10
+;    IfNotInString, Title, %text2%
 ;    {
-;        Available := false                                                          ; lock this send message section to run one single instance
-;
-;        Loop                                                                        ; loop to continue sending messages as they are accumulated in the other "thread", and also to handle the program that does not handle larger scrolls
-;        {
-;            Critical Off
-;            Sleep -1                                                                ; interrupt this "thread" here to accumulate wheel steps for any buffered WheelUp/Down events
-;            Critical
-;
-;            Step := Round(WheelSteps)                                               ; round to nearest whole wheel step
-;            If (Step < 1)                                                           ; wheel steps have reached zero or close to zero
-;                Break                                                               ; exit the loop
-;
-;            MouseGetPos X, Y, Win, Ctl                                              ; get the coordinates, window, and control under the mouse cursor
-;            If (PriorWin != Win || PriorCtl != Ctl)                                 ; mouse was moved over a different window or control
-;            {
-;                If (Dur <= ThresholdCtrl && A_ThisHotkey == A_PriorHotkey)          ; the wheel is still doing a scroll from before mouse was moved over a different window or control
-;                {
-;                    WheelSteps := 0                                                 ; clear buffered message
-;                    Break                                                           ; exit the loop
-;                }
-;                Else
-;                {
-;                    PriorWin := Win
-;                    PriorCtl := Ctl
-;                    If Ctl in TSideBySideFolders1,TXListBox1,TXListBox2             ; program does not handle larger scrolls (Beyond Compare 2.5.3)
-;                        MsgType := 1                                                ; type 1 means repeat message for each wheel step instead of sending a single message with size of step
-;                    Else If (Ctl == "OPWindowClass2" && Win == WinExist("A"))       ; program does not receive posted scroll messages correctly (Remote Desktop 6.1.7600)
-;                        MsgType := 2                                                ; type 2 means use standard way of sending scroll message
-;                    Else If (Ctl == "")                                             ; program doesn't expose a control name for the editor panel (Visual Studio 2010 10.0.30319.1)
-;                    {
-;                        WinGetTitle Title, ahk_id %Win%
-;                        If Title contains Microsoft Visual Studio
-;                            MouseClick Middle                                       ; activate the hovered control
-;                        MsgType := 0                                                ; type 0 means use send message to post scroll message
-;                    }
-;                    Else                                                            ; assume that other programs correctly receive posted scroll messages
-;                        MsgType := 0                                                ; type 0 means use send message to post scroll message
-;                }
-;            }
-;
-;            If (MsgType == 1)                                                       ; type 1 means repeat message for each wheel step instead of sending a single message with size of step
-;                Step := 1                                                           ; setting step to 1 means it will loop again for each wheel step
-;            If (MsgType == 2)                                                       ; type 2 means use standard way of sending scroll message
-;                MouseClick %A_ThisHotkey%, , , %Step%                               ; send scroll message in standard way
-;            Else                                                                    ; type 0 means use send message to post scroll message
-;                SendMessage 0x20A, (A_ThisHotkey == "WheelUp" ? 1 : -1) * Step * WheelDelta, Y << 16 | (X & 0xFFFF), %Ctl%, ahk_id %Win% ; post scroll message to window under cursor, and wait for response
-;
-;            WheelSteps -= Step                                                      ; subtract whole wheel steps, leaving the remainder buffered for the next post
-;            ; Tooltip % Step . SubStr("  ||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||", 1 + (Step >= 10) + (Step >= 100), Step + (Step < 10) + (Step < 100)) ; %; display bar graph of wheel acceleration (the commented second '%' is only there to fix syntax highlighting in Notepad++)
-;        }
-;
-;        Available := true                                                           ; unlock this send message section
+;        Title = %text2%
+;        TrayTip, % Title
 ;    }
-;
-;    Critical Off
-;    Return
-;
-;; ==== Ctrl + WheelUp/Down Routine ==============================================
-;
-; *WheelUp::
-; *WheelDown::
-;    Critical
-;    DllCall("QueryPerformanceCounter", "Int64 *", Tick)                             ; retrieves the current value of the high-resolution performance counter (tick since boot)
-;    Dur := (Tick - PriorTick) / A_EventInfo                                         ; time since last WheelUp/Down (most mice combine multiple WheelUp/Down within 8ms into one event)
-;    If (Dur <= ThresholdCtrl)                                                       ; the wheel is still doing a scroll from before Ctrl was pressed
-;    {
-;        WheelSteps := 0                                                             ; clear leftover buffered message, so acceleration is not boosted by this
-;        PriorTick := Tick                                                           ; continue to block Ctrl + WheelUp/Down until wheel stops scrolling
-;    }
-;    Else If (A_ThisHotkey == "*WheelUp")
-;        MouseClick WheelUp                                                          ; send only a single Ctrl + WheelUp, no acceleration
-;    Else
-;        MouseClick WheelDown                                                        ; send only a single Ctrl + WheelDown, no acceleration
-;    Critical Off
-; Return
+;Return
+#IfWinExist
+DetectHiddenWindows, Off
 
 ;;
 ;; Accelerated scrolling
+;; OR:
+;; Accelerated Scrolling v2
+;; https://autohotkey.com/board/topic/48426-accelerated-scrolling-script/?p=333222
 ;;
 ;;; #If (WinActive("ahk_exe explorer.exe") or WinActive("ahk_class PROCMON_WINDOW_CLASS") or 
 ; #IfWinNotActive, abcd
@@ -759,25 +655,15 @@ WheelUp::
 WheelDown::
     ; Critical
     CoordMode, Mouse, Screen
-    #MaxThreadsPerHotkey 5
-    ; MouseGetPos, CursorX, CursorY, Window ; , Control
-    MouseGetPos, CursorX, CursorY, Window, Control
+    ; #MaxThreadsPerHotkey 5
+    MouseGetPos, CursorX, CursorY, Window ; , ClassNN
+    WinGetClass, ahk_class, ahk_id %Window%
     ; -- Window under mouse cursor --
     WinGetTitle, Title, ahk_id %Window%
-    WinGetClass, ahk_class, ahk_id %Window%
     WinGetText, VisibleText, ahk_id %Window%
     WinGet, WindowPID, PID, ahk_id %Window%
     WinGet, ControlText, ControlList, ahk_id %Window%
-    WinGetTitle, Title, ahk_id %Window%
-    WinGetClass, ahk_class, ahk_id %Window%
-    WinGetText, VisibleText, ahk_id %Window%
-    ; CursorHwnd := MouseGetPos, , , hwnd
-    ; MouseGetPos, , CursorHwnd, ClassNN
-    ; WinGetTitle, Title, ahk_pid %CursorHWnd%
     CursorHwnd := DllCall("WindowFromPoint", "int64", CursorX | (CursorY << 32), "Ptr")
-    ; WinGetClass, ahk_class, ahk_id %CursorHwnd%
-    ; This works:
-    ; ToolTip, %CursorHwnd%
     If not(ahk_class = "ApplicationFrameWindow" or ahk_class = "Button") { ; DllCall doesn't work on these
         WheelSteps := A_EventInfo
         DllCall("SendMessage", "Ptr", CursorHwnd, "UInt", 0x20A, "Ptr", WheelSteps * (A_ThisHotkey == "WheelUp" ? 1 : -1) * 120 << 16, "Ptr", ( CursorY << 16 )|CursorX)
@@ -831,7 +717,7 @@ GetUnderCursorInfo(ByRef CursorX, ByRef CursorY)
             . "title: " Title "`n"
             . "control: " Control "`n"
             . "PID: " PID "`n"
-            . "CursorHwnd: " CursorHwnd "`n"
+            . "Cursor`" CursorHwnd "`n"
             . "process name: " PName "`n"
             . "top left (" WindowX ", " WindowY ")`n"
             . "(width x height) (" Width " x " Height ")`n"
@@ -859,18 +745,6 @@ ToolTipUnderCursor:
         , ( (A_ScreenHeight // 2) + TTYOffset )
 Return
 
-#e::
-     UnderCursorToggle := ( ! UnderCursorToggle )
-     If ( UnderCursorToggle )
-            SetTimer ToolTipUnderCursor, 250
-     Else
-     {
-            SetTimer ToolTipUnderCursor, Off
-            ToolTip
-            Clipboard := GetUnderCursorInfo(X, Y)
-     }
-Return
-
 
 ; Description: Get extended attributes of window under mouse cursor
 ; Tags: Extended info window, 
@@ -878,171 +752,218 @@ Return
 ; Author: aph
 ; Version: 0.6
 ; Hotkey: Win+w
-; If not WinActive(ahk_class = "AutoHotkeyGUI") {
-; #IfWinNotActive ahk_class AutoHotkeyGUI
-    #w::
-        ;
-        ; TODO:
-        ; SendInput !{TAB}
-        ; https://autohotkey.com/board/topic/60521-how-to-activate-the-window-currently-under-mouse-cursor/
-        ;
-        Centered = 0 ; Change this to 1 to center the window on the screen, otherwise it will snap near the bottom right
-        DetectHiddenText, On
-        MouseGetPos, CursorX, CursorY, Window, Control
-        Window := HexToDec(Window)
-        ; MouseGetPos, , CursorHwnd, ClassNN
-        CursorHwnd := DllCall("WindowFromPoint", "int64", CursorX | (CursorY << 32), "Ptr")
-        WinGetClass, ahk_class, ahk_id %CursorHwnd%
-        WinGetTitle, Title, ahk_id %Window%
-        WinGetTitle, CursorPID, ahk_pid %CursorHWnd%
-        WinGetTitle = Title: ahk_id %Window%
-        WinGetClass, ahk_class, ahk_id %Window%
-        WinGetText, WindowText, ahk_id %Window%
-        ; WinGetClass, ahk_class, ahk_id %Window%
-        WinGet, WindowPID, PID, ahk_id %Window%
-        WinGet, ControlText, ControlList, ahk_id %Window%
-        StringReplace, ControlText, ControlText, `n, %A_SPACE%, All
-        ; ControlText = %ControlText%
-        WinGetTitle, Title, ahk_id %Window%
-        WinGetText, WindowText, ahk_id %Window%
-        StringReplace, WindowText, WindowText, `n,  , All
-        StringReplace, WindowText, WindowText, %A_SPACE%%A_SPACE%, , All
-        If not (WindowText = "")
-            WindowText = `n%WindowText%
-        WinGetTitle, Title, ahk_id %Window% ; retrieves window title from HWND
-        ; --- Control ---
-        ; https://autohotkey.com/boards/viewtopic.php?t=23987
-        WinGetTitle, Title, ahk_id %Window%
-        ; ControlGet, OutputVar, Hwnd,, %FocusedClassNN%, %Title%
-        ; ControlGetText, ControlText, , ahk_id %ControlHwnd%
-        ; ControlGet, ListList, List, Selected, %FocusedClassNN%, %Title%
-        Loop, Parse, ListList, `n
-        { ; Rows are delimited by linefeeds (`n).
-            RowNumber := A_Index
-            Loop, Parse, A_LoopField, %A_Tab% ; Fields (columns) in each row are delimited by tabs (A_Tab).
-                ListRows := ListRows . Row #%RowNumber% Col #%A_Index% is %A_LoopField%
-        }
-    ;    Loop Parse, List, `n    ; Rows are delimited by linefeeds (`n).
-    ;    {
-    ;            RowNumber := A_Index
-    ;            Loop Parse, A_LoopField, A_Tab    ; Fields (columns) in each row are delimited by tabs (A_Tab).
-    ;                    ; ListRows := ListRows . "Row #" RowNumber " Col #" A_Index " is " A_LoopField
-    ;                    ListRows := ListRows . RowNumber ", " A_Index ": " A_LoopField "`n"
-    ;    }
-        StringReplace, ListRows, List, `t, `n, All
-        ; ControlGet, ListList, List,, %FocusedClassNN%, %Title%
-        ; Loop, Parse, ListList, `n
-        ;     ComboBoxItems = ComboBox Item number %A_Index% is "%A_LoopField%."
-        ; ControlGet, ListText, List, , , ahk_id %ControlHwnd% ; "List", retrieves all the text from a ListView, ListBox, or ComboBox controls
-        WinGetTitle, Title, ahk_id %Window%
-        ; DetectHiddenText, On
-        WinGetText, Text, ahk_id %Window%
-        ; count := StrSplit(WindowText, "`n")
-        ; TrayTip, , % "Number of newlines: "count
-        ; Loop, Parse, WindowText, `n
-        ; {
-            ; Loop, Parse, A_LoopField, `n
-                ; WindowText := WindowText . " `n"
-        ; }
-        ; Loop, Parse, WindowText, \n
-            ; StringReplace, WindowText, WindowText, %A_LoopField%
-        ;StringReplace, WindowText, WindowText, `n, %A_SPACE%,, All
-        WinGet, ahk_exe, ProcessName, ahk_id %Window%
-        WinGet, Path, ProcessPath, ahk_id %Window%
-        ; List Text: %ListText%
-        ; List Rows: %ListRows%
-        ; CursorHwnd: %CursorHwnd%
-        ; PID: %CursorPID%
-        UnderCursor = 
+#w::
+    MouseGetPos, CursorX, CursorY, Window, ClassNN
+    WinGetTitle, Title, ahk_id %Window%
+    WinGetClass, ahk_class, ahk_id %Window%
+    DetectHiddenText, On
+    WinGetText, WindowText, ahk_id %Window%
+    WinGet, WindowPID, PID, ahk_id %Window%
+    WinGet, ControlText, ControlList, ahk_id %Window%
+    CursorHwnd := DllCall("WindowFromPoint", "int64", CursorX | (CursorY << 32), "Ptr")
+    WinGet, ControlText, ControlList, ahk_id %Window%
+    StringReplace, ControlText, ControlText, `n, %A_SPACE%, All
+    StringReplace, WindowText, WindowText, `n,  , All
+    StringReplace, WindowText, WindowText, %A_SPACE%%A_SPACE%, , All
+    If not (WindowText = "")
+        WindowText = `n%WindowText%
+    WinGetText, Text, ahk_id %Window%
+    WinGet, ahk_exe, ProcessName, ahk_id %Window%
+    WinGet, Path, ProcessPath, ahk_id %Window%
+    ; TODO: Rewrite using . syntax
+    UnderCursor =
 (
-%Title%
+Title: %Title%
 ahk_id = %Window%
 ahk_exe = %ahk_exe%
 ahk_class = %ahk_class%
 Path: %Path%
-PID: %WindowPID%
-Control ClassNN: %Control%
+Process ID: %WindowPID%
+Control ClassNN: %ClassNN%
 CursorHwnd: %CursorHwnd%
 
-Window Visible Text:%WindowText%
+Window Text:%WindowText%
 
-Control Visible Text:
+Control Text:
 %ControlText%
 )
-        ; TODO:
-        ; Add copy to clipboard buttons
-        Gui, Destroy
-        SysGet, Workspace, MonitorWorkArea
-        ; Gui, Show, AutoSize Center
-        ; Gui, Add, Edit, vInfo ReadOnly +Wrap w300, %UnderCursor%
-        Gui, Add, Text, , Ctrl+C to copy to clipboard. Repeat %A_ThisHotkey% to update.
-        ; Style with BG color instead of making editable
-        ; Gui, Add, Edit, vInfo ReadOnly +Wrap w400, %UnderCursor%
-        Gui, Add, Edit, vInfo +Wrap w400, %UnderCursor%
-        ; WinGetPos, ParentX, ParentY,,, ahk_id %ParentHWND%
-        ; GuiControl, Move, Info, % "w"WorkSpaceRight/8.5 " h"WorkSpaceBottom/7 ; Height inherits from control. Width too small on Chrome
-        ; GuiControl, Delete
-        DetectHiddenWindows, On
-        Gui, +LastFound +AlwaysOnTop +Resize +Owner
-        GuiHwnd := WinExist()
-        ; WinGet, scriptPID, PID, %A_ScriptFullPath% - AutoHotkey v
-        WinGet, scriptPID, PID, %A_ScriptName%
-        ; ControlGet, Edit1Hwnd, %scriptPID%, , Edit1
-        ; GuiControlGet,TextVarName
-        ; Gui, Add, Edit, vInfo ReadOnly +Wrap w300, %UnderCursor%
-        ; Gui, Add, Edit, vInfo w400 +Wrap w400, %UnderCursor%
-        ; WinGetPos, ParentX, ParentY,,, ahk_id %ParentHWND%
-        ; GuiControl, Delete
-        ; Gui, Hide
-        ; GuiControl, Move, Info, h500
-        ; Gui, Add, Text, , GuiHwnd: %GuiHwnd%`nScriptPID: %scriptPID%
-        ; Gui, Show, Hide
-        ; Gui, Show, h400 Hide
-        ; GuiControl, Move, vInfo, h280
-        ; Gui, Show, h%GuiCtrlH% Hide
-        Gui, Show, h260 Hide
-        GuiControlGet, GuiCtrl, Pos, Info  ; The position/size will be stored in GuiCtrlX, GuiCtrlY, GuiCtrlW, and GuiCtrlH
-        ; ToolTip, %GuiCtrlX% %GuiCtrlY% %GuiCtrlW% %GuiCtrlH%
-        GuiControl, Move, Info, h220
-        ; GuiControl, Move, OK, x100 y200 h500  ; Move the OK button to a new location.
-        ; ControlGet, Edit1Hwnd, , , ahk_id %ControlHwnd%
-        AspectRatio := WorkspaceRight/WorkSpaceBottom
-        ; GuiControl, Move, OK, x100 y200 h500  ; Move the OK button to a new location.
-        ; GuiControl, Focus, LastName  ; Set keyboard focus to the control whose variable or text is "LastName".
-        ; TextVar:="text second time"
-        ; GuiControl,,TextVar,%TextVar%
-        If (!Centered) {
-            GUI_ID := WinExist()
-            WinGetPos, GUIX, GUIY, GUIWidth, GUIHeight, ahk_id %GUI_ID%
-            ; ToolTip, GUIX: %GUIX% GUIY: %GUIY% GUIWidth: %GUIWidth% GUIHeight: %GUIHeight%
-            ; Gui, Add, Text, , GUIX: %GUIX%, GUIY: %GUIY%, GUIWidth: %GUIWidth%, GUIHeight: %GUIHeight%
-            Offset = 30
-            ; %GUIX% %GUIY% %GUIWidth% %GUIHeight%
-            if not (WorkSpace) {
-                ; Gui, Show, +AutoSize % "x"WorkspaceRight-GUIWidth-WorkspaceRight/Offset/AspectRatio " y"WorkspaceBottom-GUIHeight-WorkSpaceBottom/Offset, Cursor info
-                ; Gui, Show, AutoSize Center, Cursor info
-                ; Gui, Show, h500, Cursor info
-                ;  x(WorkspaceRight-GUIWidth-WorkspaceRight/Offset/AspectRatio) y(WorkspaceBottom-GUIHeight-WorkSpaceBottom/Offset)
-                ; Gui, Show, % "x"WorkspaceRight-GUIWidth-WorkspaceRight/Offset/AspectRatio " y"WorkspaceBottom-GUIHeight-WorkSpaceBottom/Offset, Window under cursor
-                Gui, Show, % "x"WorkspaceRight-GUIWidth-WorkspaceRight/Offset/AspectRatio " y"WorkspaceBottom-GUIHeight-WorkSpaceBottom/Offset, Window under cursor
-                ; Gui, Show, "x"WorkspaceRight-GUIWidth-WorkspaceRight/Offset/AspectRatio " y"WorkspaceBottom-GUIHeight-WorkSpaceBottom/Offset " hAuto", Window under cursor
-            }
-        }
-        Else {
-            Gui, Show, , Window Extended Info ; Empty param can be AutoSize Center
-        }
-        WinActivate, %Window%
-        ; ~Esc::
-            ; KeyWait, Esc, D
-            ; if (WinActive("ahk_id " GUI_ID)) {
-                ; Gui, Destroy
-                ;; Process, Exist, %GUI_ID%
-                ;; If (ErrorLevel = 0)
-                    ;; Process, Close, %GUI_ID%
-            ; }
-        Return
+    Gui, Destroy
+    SysGet, Workspace, MonitorWorkArea
+    Gui, Add, Text, , Ctrl+C to copy to clipboard. Repeat %A_ThisHotkey% to update.
+    Gui, Add, Edit, vInfo +Wrap w380, %UnderCursor%
+    DetectHiddenWindows, On
+    Gui, +LastFound +AlwaysOnTop +Owner
+    Gui, Show, NoActivate h255 Hide
+    GuiControl, Move, Info, h220
+    AspectRatio := WorkspaceRight/WorkSpaceBottom
+    GUI_ID := WinExist()
+    WinGetPos, GUIX, GUIY, GUIWidth, GUIHeight, ahk_id %GUI_ID%
+    Offset = 30
+    Gui, Show, % "NoActivate x"WorkspaceRight-GUIWidth-WorkspaceRight/Offset/AspectRatio " y"WorkspaceBottom-GUIHeight-WorkSpaceBottom/Offset, Window under cursor
     Return
-; }
+Return
+
+; ; If not WinActive(ahk_class = "AutoHotkeyGUI") {
+; ; #IfWinNotActive ahk_class AutoHotkeyGUI
+;     #w::
+;         ; TODO:
+;         ; SendInput !{TAB}
+;         ; https://autohotkey.com/board/topic/60521-how-to-activate-the-window-currently-under-mouse-cursor/
+;         Centered = 0 ; Change this to 1 to center the window on the screen, otherwise it will snap near the bottom right
+;         DetectHiddenText, On
+;         MouseGetPos, CursorX, CursorY, Window, ClassNN
+;         ; MouseGetPos, , CursorHwnd, ClassNN
+;         ; WinGetClass, ahk_class, ahk_id %CursorHwnd%
+;         WinGetTitle, Title, ahk_id %Window%
+;         ; WinGetTitle, CursorPID, ahk_pid %CursorHWnd%
+;         ; WinGetTitle = Title: ahk_id %Window%
+;         WinGetClass, ahk_class, ahk_id %Window%
+;         WinGetText, WindowText, ahk_id %Window%
+;         WinGet, WindowPID, PID, ahk_id %Window%
+;         ; WinGet, CursorHwnd, ID, ahk_pid %PID%
+;         CursorHwnd := DllCall("WindowFromPoint", "int64", CursorX | (CursorY << 32), "Ptr")
+;         ; WinGetTitle, CursorPID, ahk_pid %WindowPID%
+;         WinGet, ControlText, ControlList, ahk_id %Window%
+;         StringReplace, ControlText, ControlText, `n, %A_SPACE%, All
+;         ; ControlText = %ControlText%
+;         WinGetText, WindowText, ahk_id %Window%
+;         StringReplace, WindowText, WindowText, `n,  , All
+;         StringReplace, WindowText, WindowText, %A_SPACE%%A_SPACE%, , All
+;         If not (WindowText = "")
+;             WindowText = `n%WindowText%
+;         ; WinGetTitle, Title, ahk_id %Window% ; retrieves window title from HWND
+;         ; --- Control ---
+;         ; https://autohotkey.com/boards/viewtopic.php?t=23987
+;         ; ControlGet, OutputVar, Hwnd,, %FocusedClassNN%, %Title%
+;         ; ControlGetText, ControlText, , ahk_id %ControlHwnd%
+;         ; ControlGet, ListList, List, Selected, %FocusedClassNN%, %Title%
+;         Loop, Parse, ListList, `n
+;         { ; Rows are delimited by linefeeds (`n).
+;             RowNumber := A_Index
+;             Loop, Parse, A_LoopField, %A_Tab% ; Fields (columns) in each row are delimited by tabs (A_Tab).
+;                 ListRows := ListRows . Row #%RowNumber% Col #%A_Index% is %A_LoopField%
+;         }
+;     ;    Loop Parse, List, `n    ; Rows are delimited by linefeeds (`n).
+;     ;    {
+;     ;            RowNumber := A_Index
+;     ;            Loop Parse, A_LoopField, A_Tab    ; Fields (columns) in each row are delimited by tabs (A_Tab).
+;     ;                    ; ListRows := ListRows . "Row #" RowNumber " Col #" A_Index " is " A_LoopField
+;     ;                    ListRows := ListRows . RowNumber ", " A_Index ": " A_LoopField "`n"
+;     ;    }
+;         StringReplace, ListRows, List, `t, `n, All
+;         ; ControlGet, ListList, List,, %FocusedClassNN%, %Title%
+;         ; Loop, Parse, ListList, `n
+;         ;     ComboBoxItems = ComboBox Item number %A_Index% is "%A_LoopField%."
+;         ; ControlGet, ListText, List, , , ahk_id %ControlHwnd% ; "List", retrieves all the text from a ListView, ListBox, or ComboBox controls
+;         ; DetectHiddenText, On
+;         WinGetText, Text, ahk_id %Window%
+;         ; count := StrSplit(WindowText, "`n")
+;         ; TrayTip, , % "Number of newlines: "count
+;         ; Loop, Parse, WindowText, `n
+;         ; {
+;             ; Loop, Parse, A_LoopField, `n
+;                 ; WindowText := WindowText . " `n"
+;         ; }
+;         ; Loop, Parse, WindowText, \n
+;             ; StringReplace, WindowText, WindowText, %A_LoopField%
+;         ;StringReplace, WindowText, WindowText, `n, %A_SPACE%,, All
+;         WinGet, ahk_exe, ProcessName, ahk_id %Window%
+;         WinGet, Path, ProcessPath, ahk_id %Window%
+;         ; List Text: %ListText%
+;         ; List Rows: %ListRows%
+;         ; CursorHwnd: %CursorHwnd%
+;         ; PID: %CursorPID%
+;         UnderCursor = 
+; (
+; Title: %Title%
+; ahk_id = %Window%
+; ahk_exe = %ahk_exe%
+; ahk_class = %ahk_class%
+; Path: %Path%
+; PID: %WindowPID%
+; Control ClassNN: %ClassNN%
+; CursorHwnd: %CursorHwnd%
+
+; Window Text:%WindowText%
+
+; Control Text:
+; %ControlText%
+; )
+;         ; TODO:
+;         ; Add copy to clipboard buttons
+;         Gui, Destroy
+;         SysGet, Workspace, MonitorWorkArea
+;         ; Gui, Show, AutoSize Center
+;         ; Gui, Add, Edit, vInfo ReadOnly +Wrap w300, %UnderCursor%
+;         Gui, Add, Text, , Ctrl+C to copy to clipboard. Repeat %A_ThisHotkey% to update.
+;         ; Style with BG color instead of making editable
+;         ; Gui, Add, Edit, vInfo ReadOnly +Wrap w400, %UnderCursor%
+;         Gui, Add, Edit, vInfo +Wrap w400, %UnderCursor%
+;         ; WinGetPos, ParentX, ParentY,,, ahk_id %ParentHWND%
+;         ; GuiControl, Move, Info, % "w"WorkSpaceRight/8.5 " h"WorkSpaceBottom/7 ; Height inherits from control. Width too small on Chrome
+;         ; GuiControl, Delete
+;         Gui, +LastFound +AlwaysOnTop +Resize +Owner
+;         GuiHwnd := WinExist()
+;         ; WinGet, scriptPID, PID, %A_ScriptFullPath% - AutoHotkey v
+;         WinGet, scriptPID, PID, %A_ScriptName%
+;         ; ControlGet, Edit1Hwnd, %scriptPID%, , Edit1
+;         ; GuiControlGet,TextVarName
+;         ; Gui, Add, Edit, vInfo ReadOnly +Wrap w300, %UnderCursor%
+;         ; Gui, Add, Edit, vInfo w400 +Wrap w400, %UnderCursor%
+;         ; WinGetPos, ParentX, ParentY,,, ahk_id %ParentHWND%
+;         ; GuiControl, Delete
+;         ; Gui, Hide
+;         ; GuiControl, Move, Info, h500
+;         ; Gui, Add, Text, , GuiHwnd: %GuiHwnd%`nScriptPID: %scriptPID%
+;         ; Gui, Show, Hide
+;         ; Gui, Show, h400 Hide
+;         ; GuiControl, Move, vInfo, h280
+;         ; Gui, Show, h%GuiCtrlH% Hide
+;         Gui, Show, NoActivate h260 Hide
+;         GuiControlGet, GuiCtrl, Pos, Info  ; The position/size will be stored in GuiCtrlX, GuiCtrlY, GuiCtrlW, and GuiCtrlH
+;         ; ToolTip, %GuiCtrlX% %GuiCtrlY% %GuiCtrlW% %GuiCtrlH%
+;         GuiControl, Move, Info, h220
+;         ; GuiControl, Move, OK, x100 y200 h500  ; Move the OK button to a new location.
+;         ; ControlGet, Edit1Hwnd, , , ahk_id %ControlHwnd%
+;         AspectRatio := WorkspaceRight/WorkSpaceBottom
+;         ; GuiControl, Move, OK, x100 y200 h500  ; Move the OK button to a new location.
+;         ; GuiControl, Focus, LastName  ; Set keyboard focus to the control whose variable or text is "LastName".
+;         ; TextVar:="text second time"
+;         ; GuiControl,,TextVar,%TextVar%
+;         If (!Centered) {
+;             GUI_ID := WinExist()
+;             DetectHiddenWindows, On
+;             WinGetPos, GUIX, GUIY, GUIWidth, GUIHeight, ahk_id %GUI_ID%
+;             DetectHiddenWindows, Off
+;             ; ToolTip, GUIX: %GUIX% GUIY: %GUIY% GUIWidth: %GUIWidth% GUIHeight: %GUIHeight%
+;             ; Gui, Add, Text, , GUIX: %GUIX%, GUIY: %GUIY%, GUIWidth: %GUIWidth%, GUIHeight: %GUIHeight%
+;             Offset = 30
+;             ; %GUIX% %GUIY% %GUIWidth% %GUIHeight%
+;             if not (WorkSpace) {
+;                 ; Gui, Show, +AutoSize % "x"WorkspaceRight-GUIWidth-WorkspaceRight/Offset/AspectRatio " y"WorkspaceBottom-GUIHeight-WorkSpaceBottom/Offset, Cursor info
+;                 ; Gui, Show, AutoSize Center, Cursor info
+;                 ; Gui, Show, h500, Cursor info
+;                 ;  x(WorkspaceRight-GUIWidth-WorkspaceRight/Offset/AspectRatio) y(WorkspaceBottom-GUIHeight-WorkSpaceBottom/Offset)
+;                 ; Gui, Show, % "x"WorkspaceRight-GUIWidth-WorkspaceRight/Offset/AspectRatio " y"WorkspaceBottom-GUIHeight-WorkSpaceBottom/Offset, Window under cursor
+;                 Gui, Show, % "NoActivate x"WorkspaceRight-GUIWidth-WorkspaceRight/Offset/AspectRatio " y"WorkspaceBottom-GUIHeight-WorkSpaceBottom/Offset, Window under cursor
+;                 ; Gui, Show, "x"WorkspaceRight-GUIWidth-WorkspaceRight/Offset/AspectRatio " y"WorkspaceBottom-GUIHeight-WorkSpaceBottom/Offset " hAuto", Window under cursor
+;             }
+;         }
+;         Else {
+;             Gui, Show, NoActivate, Window Extended Info ; Empty param can be AutoSize Center
+;         }
+;         ; WinActivate, %Window%
+;         ; ~Esc::
+;             ; KeyWait, Esc, D
+;             ; if (WinActive("ahk_id " GUI_ID)) {
+;                 ; Gui, Destroy
+;                 ;; Process, Exist, %GUI_ID%
+;                 ;; If (ErrorLevel = 0)
+;                     ;; Process, Close, %GUI_ID%
+;             ; }
+;         Return
+;     Return
+; ; }
 
 ;
 ; #Include TT.ahk
@@ -1173,169 +1094,338 @@ Control Visible Text:
 ; return
 
 
-; Description: Scroll Explorer on middle mouse button drag
-; Permalink: https://autohotkey.com/boards/viewtopic.php?t=43715
-; Author: aph
-; Version: 0.1
-; Hotkey: Middle mouse button down
-$*MButton::
-    TrayTip, interrupted
-    MouseGetPos, CursorX, CursorY, Window, Control
-    WinGetTitle, WindowTitle, ahk_id %Window%
-    WinGetClass, ahk_class, ahk_id %Window%
-    ; OR: WinGet ahk_class, ProcessName, ahk_class %Window%
-    WinGet ahk_exe, ProcessName, ahk_id %Window%
-    WinGet PID, PID, ahk_id %Window%
-    WinGetText, VisibleText, ahk_id %Window%
-    WinActivate, %WindowTitle%
-    CursorHwnd := DllCall("WindowFromPoint", "int64", CursorX | (CursorY << 32), "Ptr")
-    ; ControlFocus, , ahk_title, WinText, ExcludeTitle, ExcludeText]
-    ; ControlFocus, %Control%
-    ; ControlClick, %Control%
-    ; ControlGetFocus, %Control%
-    ; ControlGetFocus, ControlWithFocus, %Control%
-    ; ToolTip, %ControlWithFocus%
-    AllowedKeys := GetKeyState("LWin", "D")
-    AllowedKeys ? "MButton Up" : "MButton Down"
-    ControlClick, %Control%, %WindowTitle% ; , WinText, WhichButton, ClickCount, Options, ExcludeTitle, ExcludeText]
-    ;; TODO:
-    ; AllowedApp := InStr(ahk_exe, "explorer.exe", "explorer.exe" . "sublime_text.exe" . "mmc.exe" . "RegWorkshopX64.exe")
-    ; AllowedApp := ahk_exe.HasKey(AllowedApps)
-    ; AllowedApp := "explorer.exe" . "sublime_text.exe" . "mmc.exe" . "RegWorkshopX64.exe" . "systempropertiesadvanced.exe" . "7zFM.exe"
-    ; AllowedApp := InStr("explorer.exe", AllowedApp)
-    ; if (AllowedApp >= 1)
-    ;    AllowedApp = 1
-    AllowedText := InStr(VisibleText, "Tree View") or InStr(VisibleText, "FolderView")
-    if (AllowedText >= 1)
-        AllowedText = 1
-    AllowedApp := (ahk_exe = "explorer.exe") or (ahk_exe = "RegWorkshopX64.exe") or (ahk_exe = "sublime_text.exe") or (ahk_exe = "mmc.exe") or (ahk_exe = "systempropertiesadvanced.exe") or (ahk_exe = "7zFM.exe") or (ahk_exe = "cmd.exe")
-    ;; TODO:
-    ; ahk_class = "CabinetWClass" ; add "Shell_TrayWnd"
-    Sublime := (ahk_exe = "sublime_text.exe")
-    SublimeModifiers := GetKeyState("Alt", "D") or (GetKeyState("LWin", "D")) or (GetKeyState("Ctrl", "D")) or (GetKeyState("Shift", "D"))
-    TrayTipText = % "AllowedApp: " AllowedApp
-        . "`nAllowedKeys: " AllowedKeys
-        . "`nSublime: " Sublime
-        . "`nModifiers: " SublimeModifiers
-        . "`n"
-        . "`n" WindowTitle
-        . "`nahk_exe: " ahk_exe
-        . "`nahk_class: " ahk_class
-        . "`nClassNN:" Control
-        . "`nCursorHwnd: " CursorHwnd
-    If (!AllowedKeys and !AllowedApp and !(WindowTitle = "Change Icon")) or (Sublime and SublimeModifiers)  {
-        SendInput, {MButton Down}
-        TrayTip, % "Not using middle button scroll", %TrayTipText%
-        WinActivate, %WindowTitle%
-    }
-    Else {
-        TrayTip, % "Scrolling with middle button", %TrayTipText%
-        MiddleScroll := 1
-        SetSystemCursor("SIZEALL")
-        Sensitivity = 10 ; How far the middle mouse wheel has to be dragged before scrolling is triggered
-        MouseGetPos, X1, Y1, , c, 2
-        OrigTimer := 40 ; How quickly the file list scrolls
-        SetTimer, MBScroll, %OrigTimer%
-        MBScroll:
-            MouseGetPos, X2, Y2
-            Distance := Abs(Y2-Y1)
-            If (Distance >= Sensitivity) {
-                Rounded := % Round((Distance / 200)**1.25+1)
-                ;; TODO: Try
-                ; %OrigTimer%/40
-                DllCall("SystemParametersInfo", UInt, 0x69, UInt, Round(Ln(Rounded)+1), UInt, 0, UInt, 0) ; Vary lines scrolled by distance of drag 
-                Timer := Round(OrigTimer - (OrigTimer/2*Percent/100))
-                SetTimer, MBScroll, %Timer%
-                Percent := (A_ScreenHeight - (Max(Y1, Abs(Y1-A_ScreenHeight)) - Distance)) / A_ScreenHeight * 100
-                SendInput, % "{Blind}{Wheel" (Y2 > Y1 ? "Down" : "Up") " " Rounded "}"
-            }
-        Return ; MBScroll
-        $*MButton Up::
-            ; Set back to original 3 lines per scroll event when dragging stops
-            DllCall("SystemParametersInfo", UInt, 0x69, UInt, 3, UInt, 0, UInt, 0)
-            SetTimer, MBScroll, off
-            SetSystemCursor()
-            MiddleScroll := 0
-            SendInput {MButton Up}
-            SetSystemCursor(Cursor="") {
-                SystemCursors := "32512IDC_ARROW|32513IDC_IBEAM|32514IDC_WAIT|32515IDC_CROSS|32516IDC_UPARROW|32642IDC_SIZENWSE|32643IDC_SIZENESW|32644IDC_SIZEWE|32645IDC_SIZENS|32646IDC_SIZEALL|32648IDC_NO|32649IDC_HAND|32650IDC_APPSTARTING|32651IDC_HELP"
-                If (Cursor = "")
-                    Return DllCall("SystemParametersInfo", "UInt", 0x57, "UInt", 0, "UInt", 0, "UInt", 0) 
-                If (StrLen(SystemCursors) = 221)
-                    Loop, Parse, SystemCursors, |
-                        StringReplace, SystemCursors, SystemCursors, %A_LoopField%, % DllCall("LoadCursor", "UInt", 0, "Int", SubStr(A_LoopField, 1, 5)) A_LoopField
-                If !(Cursor := SubStr(SystemCursors, InStr(SystemCursors "|", "IDC_" Cursor "|") - 5 - p := (StrLen(SystemCursors) - 221) / 14, 5))
-                    MsgBox, 262160, %A_ScriptName% - %A_ThisFunc%(): Error, Invalid cursor name!
-                Else
-                    Loop, Parse, SystemCursors, |
-                        DllCall("SetSystemCursor", "UInt", DllCall("CopyIcon", "UInt", Cursor), "Int", SubStr(A_LoopField, 6, p))
-                }
-        Return
-    }
-    
+; ; Description: Scroll Explorer on middle mouse button drag
+; ; Permalink: https://autohotkey.com/boards/viewtopic.php?t=43715
+; ; Tags: Drag Explorer
+; ; Author: aph
+; ; Version: 0.2
+; ; Hotkey: Middle mouse button down
 ; $*MButton::
-;    MouseGetPos, CursorX, CursorY, Window, Control
-;    WinGetTitle, WindowTitle, ahk_id %Window%
-;    WinGetClass, ahk_class, ahk_id %Window%
-;    WinGet ahk_exe, ProcessName, ahk_id %Window%
-;    WinGet PID, PID, ahk_id %Window%
-;    WinGetText, VisibleText, ahk_id %Window%
-;    TreeViewFound = 0
-;    IfInString, VisibleText, Tree View
-;        TreeViewFound = 1
-;    If (not (ahk_exe = "explorer.exe") or (%TreeViewFound%) or (ahk_class = "EVERYTHING")) {
-;        Send {MButton Down}
-;    }
-;    Else {
-;        WinActivate, %WindowTitle%
-;        Sensitivity = 10 ; how far it takes before the scroll happens
-;        MouseGetPos, X1, Y1, , c, 2
-;        OrigTimer := 40
-;        SetTimer, MBScroll, %OrigTimer%
-;        MBScroll:
-;            MouseGetPos, X2, Y2
-;            Distance := Abs(Y2-Y1)
-;            If (Distance >= Sensitivity) {
-;                MiddleScroll := 1
-;                Rounded := % Round((Distance / 200)**1.25+1)
-;                ; DllCall("SystemParametersInfo", UInt, 0x69, UInt, Round(Ln(Rounded)+1), UInt, 0, UInt, 0) ; Set to 1 line per
-;                DllCall("SystemParametersInfo", UInt, 0x69, UInt, 1, UInt, 0, UInt, 0) ; Set to 1 line per
-;                Timer := Round(OrigTimer - (OrigTimer/2*Percent/100))
-;                SetTimer, MBScroll, %Timer%
-;                Percent := (A_ScreenHeight - (Max(Y1, Abs(Y1-A_ScreenHeight)) - Distance)) / A_ScreenHeight * 100
-;                ; TrayTip, % "Moved " Round(Percent) "%", % "Wheel speed: " Round(Ln(Rounded)+1) "`n Timer: " Timer , 1
-;                ; SystemCursor("Off")
-;                SetSystemCursor("SIZEALL") 
-;                SendInput, % "{Blind}{Wheel" (Y2 > Y1 ? "Down" : "Up") " " Rounded "}"
-;                ; MouseMove, 0, % Y1 - Y2, 0, R
-;            }
-;        Return
-;        $*MButton Up::
-;        If (MiddleScroll = 1) {
-;            DllCall("SystemParametersInfo", UInt, 0x69, UInt, 3, UInt, 0, UInt, 0) ; Restore original value
-;            ; DllCall("SystemParametersInfo", UInt, 0x69, UInt, Scroll_Lines, UInt, 0, UInt, 0) ; Restore original value
-;            SetTimer, MBScroll, off
-;            ; SystemCursor("On")
-;            SetSystemCursor()
-;            MiddleScroll := 0
-;            ; TrayTip
-;        }
-;        else {
-;            SendInput {MButton Up}
-;        }
-;        SetSystemCursor(Cursor="") {
-;                SystemCursors := "32512IDC_ARROW|32513IDC_IBEAM|32514IDC_WAIT|32515IDC_CROSS|32516IDC_UPARROW|32642IDC_SIZENWSE|32643IDC_SIZENESW|32644IDC_SIZEWE|32645IDC_SIZENS|32646IDC_SIZEALL|32648IDC_NO|32649IDC_HAND|32650IDC_APPSTARTING|32651IDC_HELP"
-;                If (Cursor = "")
-;                        Return DllCall("SystemParametersInfo", "UInt", 0x57, "UInt", 0, "UInt", 0, "UInt", 0) 
-;                If (StrLen(SystemCursors) = 221)
-;                        Loop, Parse, SystemCursors, |
-;                                StringReplace, SystemCursors, SystemCursors, %A_LoopField%, % DllCall("LoadCursor", "UInt", 0, "Int", SubStr(A_LoopField, 1, 5)) A_LoopField
-;                If !(Cursor := SubStr(SystemCursors, InStr(SystemCursors "|", "IDC_" Cursor "|") - 5 - p := (StrLen(SystemCursors) - 221) / 14, 5))
-;                        MsgBox, 262160, %A_ScriptName% - %A_ThisFunc%(): Error, Invalid cursor name!
-;                Else
-;                        Loop, Parse, SystemCursors, |
-;                                DllCall("SetSystemCursor", "UInt", DllCall("CopyIcon", "UInt", Cursor), "Int", SubStr(A_LoopField, 6, p))
-;        }
-;    Return
-;    }
+;     MouseGetPos, CursorX, CursorY, Window, ClassNN
+;     WinGetTitle, Title, ahk_id %Window%
+;     WinGetClass, ahk_class, ahk_id %Window%
+;     WinGet ahk_exe, ProcessName, ahk_id %Window%
+;     WinGet ahk_PID, PID, ahk_id %Window%
+;     WinGetText, VisibleText, ahk_id %Window%
+;     MouseGetPos, CursorX_ended, CursorY_ended, Window_ended, ClassNN_ended
+;     WinGetClass, ahk_class_ended, ahk_id %Window_ended%
+;     WinGet ahk_exe_ended, ProcessName, ahk_id %Window_ended%
+;     AllowedApp := ahk_exe = "explorer.exe" or ahk_exe = "mmc.exe" or ahk_exe = "systempropertiesadvanced.exe" or ahk_exe = "filezilla.exe" or ahk_exe = "7zFM.exe" ; or ahk_exe = ; "RegWorkshopX64.exe"
+;     AllowedText := InStr(VisibleText, "Tree View") or InStr(VisibleText, "FolderView")
+;     LimitedApp := ahk_exe = "cmd.exe"
+;     DisabledApp := ahk_class_ended = "Shell_TrayWnd" or ahk_class_ended = "WorkerW"
+;     ; Toolbars := ClassNN = "ToolbarWindow32" or ClassNN = "ReBarWindow32" or ClassNN = "Edit" ; or ClassNN="SysListView32"
+;     ; IsToolbar := InStr(Toolars, "Tree View") or InStr(Toolbars, "FolderView")
+;     ;ToolTip, ClassNN %ClassNN% | isToolbar %IsToolbar%
+;     ; AllowedKeys := GetKeyState("LWin", "D")
+;     ; AllowedKeys ? "MButton Up" : "MButton Down"
+;     ; Sublime := ahk_exe = "sublime_text.exe"
+;     ; SublimeModifiers := GetKeyState("Alt", "D") or (GetKeyState("LWin", "D")) or (GetKeyState("Ctrl", "D")) or (GetKeyState("Shift", "D"))
+;     ; TrayTipText = % "AllowedApp: " AllowedApp
+;     ;     . "`nAllowedKeys: " AllowedKeys
+;     ;     . "`nSublime: " Sublime
+;     ;     . "`nModifiers: " SublimeModifiers
+;     ;     . "`n"
+;     ;     . "`n" Title
+;     ;     . "`nahk_exe: " ahk_exe
+;     ;     . "`nahk_class: " ahk_class
+;     ;     . "`nClassNN:" ClassNN
+;     ;     ; . "`nCursorHwnd: " CursorHwnd
+;     if (AllowedText >= 1)
+;         AllowedText = 1
+;     If (DisabledApp) {
+;         SendInput, {MButton Down}
+;         Return
+;     }
+;     Else If (!AllowedApp and !LimitedApp and !AllowedText) { ; !AllowedKeys
+;         ; TrayTip, % "Not scrolling with middle button", %TrayTipText%
+;         SendInput, {MButton Down}
+;         Return
+;     }
+;     ; Else {
+;     ;     ; #IfWinActive, ahk_exe explorer.exe
+;     ;     ;      ControlGet renamestatus,Visible,,Edit1,A
+;     ;     ;      ControlGetFocus focussed, A
+;     ;     ;      if(renamestatus!=1&&(focussed=”DirectUIHWND3″||focussed=SysTreeView321))
+;     ;     ;      {
+;     ;     ;      ToolTip, %focussed%
+;     ;     ;     }
+;     ;     ; #IfWinActive
+;     ;     }
+;     Else {
+;         If (AllowedApp) {
+;             SendInput, {MButton}
+;             ; ToolTip, %ClassNN% ToolbarFound %Toolbars%
+;         }
+;         ; Process, Exist, %Window%
+;         ; ToolTip, % DllCall("WindowFromPoint", "int64", CursorX | (CursorY << 32), "Ptr")
+;         ; ControlFocus, CursorHw, WinTitle, WinText, ExcludeTitle, ExcludeText]
+;         ; TrayTip, % "Scrolling with middle button", %TrayTipText%
+;         MiddleScroll := 1
+;         SetSystemCursor("SIZEALL")
+;         Sensitivity = 10 ; How far the middle mouse wheel has to be dragged before scrolling is triggered
+;         MouseGetPos, X1, Y1, , c, 2
+;         OrigTimer := 50 ; How quickly the file list scrolls
+;         SetTimer, MBScroll, %OrigTimer%
+;         MBScroll:
+;             MouseGetPos, X2, Y2
+;             Distance := Abs(Y2-Y1)
+;             If (Distance >= Sensitivity) {
+;                 Rounded := % Round((Distance / 200)**1.25+1)
+;                 DllCall("SystemParametersInfo", UInt, 0x69, UInt, Round(Ln(Rounded)+1), UInt, 0, UInt, 0) ; Vary lines scrolled by distance of drag 
+;                 Timer := Round(OrigTimer - (OrigTimer/2*Percent/100))
+;                 SetTimer, MBScroll, %Timer%
+;                 Percent := (A_ScreenHeight - (Max(Y1, Abs(Y1-A_ScreenHeight)) - Distance)) / A_ScreenHeight * 100
+;                 SendInput, % "{Blind}{Wheel" (Y2 > Y1 ? "Down" : "Up") " " Rounded "}"
+;             }
+;         Return
+;         $*MButton Up::
+;             DllCall("SystemParametersInfo", UInt, 0x69, UInt, 3, UInt, 0, UInt, 0) ; Set back to 3 lines scrolled
+;             SetTimer, MBScroll, off
+;             SetSystemCursor()
+;             MiddleScroll := 0
+;             SendInput {MButton Up}
+;             SetSystemCursor(Cursor="") {
+;                 SystemCursors := "32512IDC_ARROW|32513IDC_IBEAM|32514IDC_WAIT|32515IDC_CROSS|32516IDC_UPARROW|32642IDC_SIZENWSE|32643IDC_SIZENESW|32644IDC_SIZEWE|32645IDC_SIZENS|32 646IDC_SIZEALL|32648IDC_NO|32649IDC_HAND|32650IDC_APPSTARTING|32651IDC_HELP"
+;                 If (Cursor = "")
+;                     Return DllCall("SystemParametersInfo", "UInt", 0x57, "UInt", 0, "UInt", 0, "UInt", 0) 
+;                 If (StrLen(SystemCursors) = 221)
+;                     Loop, Parse, SystemCursors, |
+;                         StringReplace, SystemCursors, SystemCursors, %A_LoopField%, % DllCall("LoadCursor", "UInt", 0, "Int", SubStr(A_LoopField, 1, 5)) A_LoopField
+;                 If !(Cursor := SubStr(SystemCursors, InStr(SystemCursors "|", "IDC_" Cursor "|") - 5 - p := (StrLen(SystemCursors) - 221) / 14, 5))
+;                     MsgBox, 262160, %A_ScriptName% - %A_ThisFunc%(): Error, Invalid cursor name!
+;                 Else
+;                     Loop, Parse, SystemCursors, |
+;                     {
+;                         ; 
+;                         ; IDC_ARROW := 32512
+;                         ; IDC_IBEAM := 32513
+;                         ; IDC_WAIT := 32514
+;                         ; IDC_CROSS := 32515
+;                         ; IDC_UPARROW := 32516
+;                         ; IDC_SIZE := 32640
+;                         ; IDC_ICON := 32641
+;                         ; IDC_SIZENWSE := 32642
+;                         ; IDC_SIZENESW := 32643
+;                         ; IDC_SIZEWE := 32644
+;                         ; IDC_SIZENS := 32645
+;                         ; IDC_SIZEALL := 32646
+;                         ; IDC_NO := 32648
+;                         ; IDC_HAND := 32649
+;                         ; IDC_APPSTARTING := 32650
+;                         ; IDC_HELP := 32651
+;                         ;
+;                         ; DllCall("SetSystemCursor", "UInt", DllCall("CopyIcon", "UInt", Cursor), "Int", SubStr(A_LoopField, 6, p))
+;                         ToolTip, Original cursor: %Cursor% " Replacement: " SubStr(A_LoopField, 6, p))
+;                     }
+;                     
+;                 }
+;         Return
+;     }
 ; Return
+
+; $*MButton::
+;     MouseGetPos, CursorX, CursorY, Window, ClassNN
+;     WinGetTitle, Title, ahk_id %Window%
+;     WinGetClass, ahk_class, ahk_id %Window%
+;     WinGet ahk_exe, ProcessName, ahk_id %Window%
+;     WinGet ahk_PID, PID, ahk_id %Window%
+;     WinGetText, VisibleText, ahk_id %Window%
+;     MouseGetPos, CursorX_ended, CursorY_ended, Window_ended, ClassNN_ended
+;     WinGetClass, ahk_class_ended, ahk_id %Window_ended%
+;     WinGet ahk_exe_ended, ProcessName, ahk_id %Window_ended%
+;     ; MouseGetPos, vMouseX, vMouseY,, hCtl, 3
+;     ;; OR:
+;     ; WinGet ahk_class, ProcessName, ahk_class %Window%
+;     ; WinGetClass, vCtlClass, % "ahk_id " hCtl
+;     ; WinGetClass, CursorHwnd, ahk_pid %ahk_PID% 
+;     ; WinGet, CursorHwnd, IDLast, ahk_id %Window%
+;     ; CursorHwnd += CursorHwnd
+;     ; CursorHwnd := DllCall("WindowFromPoint", "int64", CursorX | (CursorY << 32), "Ptr")
+;     ; ControlFocus, , ahk_title, WinText, ExcludeTitle, ExcludeText]
+;     ; ControlFocus, %ClassNN%
+;     ; ControlClick, %ClassNN%
+;     ; ControlGetFocus, %ClassNN%
+;     ; ControlGetFocus, ControlWithFocus, %ClassNN%
+;     ; ToolTip, %ControlWithFocus%
+;     ;IfWinExist, [ WinTitle, WinText, ExcludeTitle, ExcludeText]
+;     ; WinActivate, %Window%
+;     WinActivate, %Title%
+;     ; CursorHwnd := DllCall("WindowFromPoint", "int64", CursorX | (CursorY << 32), "Ptr")
+;     ; ControlClick, %ClassNN%, %Title% ; , WinText, WhichButton, ClickCount, Options, ExcludeTitle, ExcludeText]
+;     ;; TODO:
+;     ; AllowedApp := InStr(ahk_exe, "explorer.exe", "explorer.exe" . "sublime_text.exe" . "mmc.exe" . "RegWorkshopX64.exe")
+;     ; AllowedApp := ahk_exe.HasKey(AllowedApps)
+;     ; AllowedApp := "explorer.exe" . "sublime_text.exe" . "mmc.exe" . "RegWorkshopX64.exe" . "systempropertiesadvanced.exe" . "7zFM.exe"
+;     ; AllowedApp := InStr("explorer.exe", AllowedApp)
+;     AllowedApp := ahk_exe = "explorer.exe" or ahk_exe = "mmc.exe" or ahk_exe = "systempropertiesadvanced.exe" ahk_exe = "RegWorkshopX64.exe" or ahk_exe = "7zFM.exe"
+;     AllowedText := InStr(VisibleText, "Tree View") or InStr(VisibleText, "FolderView")
+;     LimitedApp := ahk_exe = "cmd.exe"
+;     DisabledApp := ahk_class_ended = "Shell_TrayWnd" or ahk_class_ended = "WorkerW"
+;     AllowedKeys := GetKeyState("LWin", "D")
+;     AllowedKeys ? "MButton Up" : "MButton Down"
+;     Sublime := ahk_exe = "sublime_text.exe"
+;     SublimeModifiers := GetKeyState("Alt", "D") or (GetKeyState("LWin", "D")) or (GetKeyState("Ctrl", "D")) or (GetKeyState("Shift", "D"))
+;     ; TrayTipText = % "AllowedApp: " AllowedApp
+;     ;     . "`nAllowedKeys: " AllowedKeys
+;     ;     . "`nSublime: " Sublime
+;     ;     . "`nModifiers: " SublimeModifiers
+;     ;     . "`n"
+;     ;     . "`n" Title
+;     ;     . "`nahk_exe: " ahk_exe
+;     ;     . "`nahk_class: " ahk_class
+;     ;     . "`nClassNN:" ClassNN
+;     ;     ; . "`nCursorHwnd: " CursorHwnd
+;     if (AllowedText >= 1)
+;         AllowedText = 1
+;     If (DisabledApp) {
+;         SendInput, {MButton Down}
+;         Return
+;     }
+;     Else If (!AllowedKeys and !AllowedApp and !LimitedApp and !AllowedText) { ; and !(Sublime and SublimeModifiers)
+;         ; TrayTip, % "Not scrolling with middle button", %TrayTipText%
+;         SendInput, {MButton Down}
+;         Return
+;     }
+;     Else {
+;         If (AllowedApp) {
+;             SendInput, {MButton}
+;             ; ControlFocus, %ClassNN%
+;             ; ControlClick, %ClassNN%
+;             ; MouseGetPos, ClickX, ClickY, , ctrlUnderMouse
+;             ; ;ToolTip, % ctrlUnderMouse
+;             ; IfInString, ctrlUnderMouse, %ClassNN%
+;             ;     ControlGetPos, ctrlUnderMouseX, ctrlUnderMouseY, , , %ctrlUnderMouse%, ahk_class CabinetWClass
+;             ; ;Sleep, 250
+;             ; ControlGetFocus, ClassNN
+;             ;     ToolTip, % ClassNN
+;         }
+;         ; Process, Exist, %Window%
+;         ; ToolTip, % DllCall("WindowFromPoint", "int64", CursorX | (CursorY << 32), "Ptr")
+;         ; ControlFocus, CursorHw, WinTitle, WinText, ExcludeTitle, ExcludeText]
+;         ; TrayTip, % "Scrolling with middle button", %TrayTipText%
+;         MiddleScroll := 1
+;         SetSystemCursor("SIZEALL")
+;         Sensitivity = 10 ; How far the middle mouse wheel has to be dragged before scrolling is triggered
+;         MouseGetPos, X1, Y1, , c, 2
+;         OrigTimer := 40 ; How quickly the file list scrolls
+;         SetTimer, MBScroll, %OrigTimer%
+;         MBScroll:
+;             MouseGetPos, X2, Y2
+;             Distance := Abs(Y2-Y1)
+;             If (Distance >= Sensitivity) {
+;                 Rounded := % Round((Distance / 200)**1.25+1)
+;                 ;; TODO: Try
+;                 ; %OrigTimer%/40
+;                 DllCall("SystemParametersInfo", UInt, 0x69, UInt, Round(Ln(Rounded)+1), UInt, 0, UInt, 0) ; Vary lines scrolled by distance of drag 
+;                 Timer := Round(OrigTimer - (OrigTimer/2*Percent/100))
+;                 SetTimer, MBScroll, %Timer%
+;                 Percent := (A_ScreenHeight - (Max(Y1, Abs(Y1-A_ScreenHeight)) - Distance)) / A_ScreenHeight * 100
+;                 SendInput, % "{Blind}{Wheel" (Y2 > Y1 ? "Down" : "Up") " " Rounded "}"
+;             }
+;         Return ; MBScroll
+;         $*MButton Up::
+;             ; Set back to original 3 lines per scroll event when dragging stops
+;             DllCall("SystemParametersInfo", UInt, 0x69, UInt, 3, UInt, 0, UInt, 0)
+;             SetTimer, MBScroll, off
+;             SetSystemCursor()
+;             MiddleScroll := 0
+;             SendInput {MButton Up}
+;             SetSystemCursor(Cursor="") {
+;                 SystemCursors := "32512IDC_ARROW|32513IDC_IBEAM|32514IDC_WAIT|32515IDC_CROSS|32516IDC_UPARROW|32642IDC_SIZENWSE|32643IDC_SIZENESW|32644IDC_SIZEWE|32645IDC_SIZENS|32646IDC_SIZEALL|32648IDC_NO|32649IDC_HAND|32650IDC_APPSTARTING|32651IDC_HELP"
+;                 If (Cursor = "")
+;                     Return DllCall("SystemParametersInfo", "UInt", 0x57, "UInt", 0, "UInt", 0, "UInt", 0) 
+;                 If (StrLen(SystemCursors) = 221)
+;                     Loop, Parse, SystemCursors, |
+;                         StringReplace, SystemCursors, SystemCursors, %A_LoopField%, % DllCall("LoadCursor", "UInt", 0, "Int", SubStr(A_LoopField, 1, 5)) A_LoopField
+;                 If !(Cursor := SubStr(SystemCursors, InStr(SystemCursors "|", "IDC_" Cursor "|") - 5 - p := (StrLen(SystemCursors) - 221) / 14, 5))
+;                     MsgBox, 262160, %A_ScriptName% - %A_ThisFunc%(): Error, Invalid cursor name!
+;                 Else
+;                     Loop, Parse, SystemCursors, |
+;                         DllCall("SetSystemCursor", "UInt", DllCall("CopyIcon", "UInt", Cursor), "Int", SubStr(A_LoopField, 6, p))
+;                 }
+;         Return
+;     }
+; Return
+
+; ;
+; ; Drag mouse middle button to scroll 
+; ; Tags, drag explorer, scroll right, scroll down,
+; ; https://autohotkey.com/board/topic/42020-using-right-click-and-mouse-movement-as-a-scroll-wheel/?p=270247
+; ;
+; wheelingSensitivity := 10 ; sensitivity to mouse movement (higher is more sensitive)
+; wheelingPeriod := 100 ; timer period
+
+
+; ; https://autohotkey.com/board/topic/42020-using-right-click-and-mouse-movement-as-a-scroll-wheel/?p=269308
+; ; $*MButton::
+; RButton & LButton:: GoSub StartWheeling
+; ~*LButton Up::      GoSub StopWheeling
+; ~*RButton Up::      GoSub StopWheeling
+; WatchCursor:
+;     MouseGetPos, wheelingNewMouseX, wheelingNewMouseY
+;     taps := Round((wheelingNewMouseX - wheelingMouseX)/wheelingSensitivity)
+;     clicks := Round((wheelingNewMouseY - wheelingMouseY)/wheelingSensitivity)
+;     MouseMove wheelingMouseX, wheelingMouseY
+;     if clicks > 0
+;         MouseClick WheelDown,,,abs(clicks)
+;     else if clicks < 0
+;         MouseClick WheelUp,,,abs(clicks)
+;     if taps > 0
+;         SendInput % "{Right "abs(taps)"}"
+;     else if taps < 0
+;         SendInput % "{Left "abs(taps)"}"
+; return
+; StartWheeling:
+;     SystemCursor("OFF")
+;     MouseGetPos, wheelingMouseX, wheelingMouseY
+;     SetTimer WatchCursor, %wheelingPeriod%
+; return
+; StopWheeling:
+;     SetTimer WatchCursor, Off
+;     SystemCursor("ON")
+; return
+; ;===============================================================================================================================================================
+; ; from the AHK documentation...
+; SystemCursor(OnOff=1)   ; INIT = "I","Init"; OFF = 0,"Off"; TOGGLE = -1,"T","Toggle"; ON = others
+; {
+;     static AndMask, XorMask, $, h_cursor
+;         ,c0,c1,c2,c3,c4,c5,c6,c7,c8,c9,c10,c11,c12,c13 ; system cursors
+;         , b1,b2,b3,b4,b5,b6,b7,b8,b9,b10,b11,b12,b13   ; blank cursors
+;         , h1,h2,h3,h4,h5,h6,h7,h8,h9,h10,h11,h12,h13   ; handles of default cursors
+;     if (OnOff = "Init" or OnOff = "I" or $ = "")       ; init when requested or at first call
+;     {
+;         $ = h                                          ; active default cursors
+;         VarSetCapacity( h_cursor,4444, 1 )
+;         VarSetCapacity( AndMask, 32*4, 0xFF )
+;         VarSetCapacity( XorMask, 32*4, 0 )
+;         system_cursors = 32512,32513,32514,32515,32516,32642,32643,32644,32645,32646,32648,32649,32650
+;         StringSplit c, system_cursors, `,
+;         Loop %c0%
+;         {
+;             h_cursor   := DllCall( "LoadCursor", "uint",0, "uint",c%A_Index% )
+;             h%A_Index% := DllCall( "CopyImage",  "uint",h_cursor, "uint",2, "int",0, "int",0, "uint",0 )
+;             b%A_Index% := DllCall("CreateCursor","uint",0, "int",0, "int",0
+;                 , "int",32, "int",32, "uint",&AndMask, "uint",&XorMask )
+;         }
+;     }
+;     if (OnOff = 0 or OnOff = "Off" or $ = "h" and (OnOff < 0 or OnOff = "Toggle" or OnOff = "T"))
+;         $ = b  ; use blank cursors
+;     else
+;         $ = h  ; use the saved cursors
+
+;     Loop %c0%
+;     {
+;         h_cursor := DllCall( "CopyImage", "uint",%$%%A_Index%, "uint",2, "int",0, "int",0, "uint",0 )
+;         DllCall( "SetSystemCursor", "uint",h_cursor, "uint",c%A_Index% )
+;     }
+; }
+; ;===============================================================================================================================================================
+
+
+; Find word in string
+; https://stackoverflow.com/questions/9348326/regex-find-word-in-the-string
+; ^(.*?(\bGoogle Chrome\b)[^$]*)$
+; RegEx line break
+; https://stackoverflow.com/questions/15161892/regular-expression-select-up-to-line-break
+; /.*\s*:\s*.*/g
