@@ -45,7 +45,7 @@ if (WinActive("ahk_class TscShellContainerClass"))
 ;  ToolTip, You double Left clicked on something 
 ; Return
 
-
+ 
 ; #Include WindowDraggingResizing.ahk
 ; #Include TaskbarNavigation-NumPadMapped.ahk
 ; #Include TaskbarNavigation-AltTabMapped.ahk
@@ -457,13 +457,14 @@ DetectHiddenWindows, On
 Return
 DetectHiddenWindows, Off
 
+#IfWinActive ahk_class EVERYTHING
 Esc::
 !F4::
-    If WinActive("ahk_class EVERYTHING")
-        If WinExist("ahk_class EVERYTHING_DROPDOWNLIST")
-            WinClose
+    If WinExist("ahk_class EVERYTHING_DROPDOWNLIST")
+        WinClose
     WinHide
 Return
+#IfWinActive
 
 ; #s::
 ; SetTitleMatchMode, RegEx
