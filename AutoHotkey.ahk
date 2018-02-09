@@ -581,30 +581,28 @@ Return
 #IfWinExist
 DetectHiddenWindows, Off
 
-;;
-;; Accelerated scrolling
-;; OR:
-;; Accelerated Scrolling v2
-;; https://autohotkey.com/board/topic/48426-accelerated-scrolling-script/?p=333222
-;;
-;;; #If (WinActive("ahk_exe explorer.exe") or WinActive("ahk_class PROCMON_WINDOW_CLASS") or 
+; ;
+; ; Accelerated scrolling
+; ; https://autohotkey.com/board/topic/48426-accelerated-scrolling-script/?p=333222
+; ;
+; ; #If (WinActive("ahk_exe explorer.exe") or WinActive("ahk_class PROCMON_WINDOW_CLASS") or 
 ; #IfWinNotActive, abcd
-;; #If (WinActive("ahk_exe explorer.exe") or WinActive("ahk_class MPC-BE") or WinActive("ahk_class MediaPlayerClassicW"))
-;; The length of a scrolling session. Keep scrolling within this time to accumulate boost. ; Default: 500. Recommended between 400 and 1000.
+; ; #If (WinActive("ahk_exe explorer.exe") or WinActive("ahk_class MPC-BE") or WinActive("ahk_class MediaPlayerClassicW"))
+; ; The length of a scrolling session. Keep scrolling within this time to accumulate boost. ; Default: 500. Recommended between 400 and 1000.
 ; WheelUp::
 ; WheelDown::
 ; timeout := 500
-;; If you scroll a long distance in one session, apply additional boost factor. The higher the ; value, the longer it takes to activate, and the slower it accumulates. ; Set to zero to disable ; completely. Default: 30.
+; ; If you scroll a long distance in one session, apply additional boost factor. The higher the ; value, the longer it takes to activate, and the slower it accumulates. ; Set to zero to disable ; completely. Default: 30.
 ; boost := 3
-;; Spamming applications with hundreds of individual scroll events can slow them down. This sets ; the maximum number of scrolls sent per click, i.e. max velocity. ; Default: 60.
+; ; Spamming applications with hundreds of individual scroll events can slow them down. This sets ; the maximum number of scrolls sent per click, i.e. max velocity. ; Default: 60.
 ; limit := 30
 ; distance := 0
 ; vmax := 1
 ; t := A_TimeSincePriorHotkey
-;; ToolTip, t %t% timeout 500
-;; ToolTip, timeout: %timeout%
+; ; ToolTip, t %t% timeout 500
+; ; ToolTip, timeout: %timeout%
 ; if (A_PriorHotkey = A_ThisHotkey && t < timeout) {
-;; if (A_PriorHotkey = A_ThisHotkey) {
+; ; if (A_PriorHotkey = A_ThisHotkey) {
 ;    ; ToolTip, t: %t% timeout: 500
 ;    ; t := A_TimeSincePriorHotkey
 ;        distance++
@@ -620,13 +618,11 @@ DetectHiddenWindows, Off
 ;        ; QuickToolTip(v, 500)
 ;        v := (v > 1) ? ((v > limit) ? limit : Floor(v)) : 1
 ;        MouseClick, %A_ThisHotkey%, , , v
-;
 ;    QuickToolTip(text, delay)
 ;    {
 ;        ToolTip, ScrollAccel: %text%
 ;        SetTimer ToolTipOff, %delay%
 ;        Return
-;
 ;        ToolTipOff:
 ;        SetTimer ToolTipOff, Off
 ;        ToolTip
@@ -637,10 +633,9 @@ DetectHiddenWindows, Off
 ;        ; QuickToolTip("normal", 500)
 ;        MouseClick, %A_ThisHotkey%
 ; }
-;
-;; #If
+; ; #If
 ; Return
-;; #If
+; ; #If
 ; #IfWinNotActive
 
 
@@ -648,9 +643,8 @@ DetectHiddenWindows, Off
 ; Scroll window under mouse cursor
 ; Tags: combined, scroll under cursor, scroll window under cursor
 ; https://autohotkey.com/board/topic/78284-boldly-scroll-where-no-one-has-scrolled-before/page-2
-; https://autohotkey.com/board/topic/48426-accelerated-scrolling-script/?p=333222
-;
 ; #UseHook
+#IfWinNotActive ahk_class #32770
 WheelUp::
 WheelDown::
     ; Critical
@@ -676,7 +670,7 @@ WheelDown::
     }
     ; Critical Off
 Return
-
+#IfWinActive
 
 ;; Get info from Window Under Mouse without clicking on it
 ;; https://autohotkey.com/board/topic/80855-get-info-from-window-under-mouse-without-clicking-on-it/?p=513888
@@ -1094,135 +1088,135 @@ Return
 ; return
 
 
-; ; Description: Scroll Explorer on middle mouse button drag
-; ; Permalink: https://autohotkey.com/boards/viewtopic.php?t=43715
-; ; Tags: Drag Explorer
-; ; Author: aph
-; ; Version: 0.2
-; ; Hotkey: Middle mouse button down
-; $*MButton::
-;     MouseGetPos, CursorX, CursorY, Window, ClassNN
-;     WinGetTitle, Title, ahk_id %Window%
-;     WinGetClass, ahk_class, ahk_id %Window%
-;     WinGet ahk_exe, ProcessName, ahk_id %Window%
-;     WinGet ahk_PID, PID, ahk_id %Window%
-;     WinGetText, VisibleText, ahk_id %Window%
-;     MouseGetPos, CursorX_ended, CursorY_ended, Window_ended, ClassNN_ended
-;     WinGetClass, ahk_class_ended, ahk_id %Window_ended%
-;     WinGet ahk_exe_ended, ProcessName, ahk_id %Window_ended%
-;     AllowedApp := ahk_exe = "explorer.exe" or ahk_exe = "mmc.exe" or ahk_exe = "systempropertiesadvanced.exe" or ahk_exe = "filezilla.exe" or ahk_exe = "7zFM.exe" ; or ahk_exe = ; "RegWorkshopX64.exe"
-;     AllowedText := InStr(VisibleText, "Tree View") or InStr(VisibleText, "FolderView")
-;     LimitedApp := ahk_exe = "cmd.exe"
-;     DisabledApp := ahk_class_ended = "Shell_TrayWnd" or ahk_class_ended = "WorkerW"
-;     ; Toolbars := ClassNN = "ToolbarWindow32" or ClassNN = "ReBarWindow32" or ClassNN = "Edit" ; or ClassNN="SysListView32"
-;     ; IsToolbar := InStr(Toolars, "Tree View") or InStr(Toolbars, "FolderView")
-;     ;ToolTip, ClassNN %ClassNN% | isToolbar %IsToolbar%
-;     ; AllowedKeys := GetKeyState("LWin", "D")
-;     ; AllowedKeys ? "MButton Up" : "MButton Down"
-;     ; Sublime := ahk_exe = "sublime_text.exe"
-;     ; SublimeModifiers := GetKeyState("Alt", "D") or (GetKeyState("LWin", "D")) or (GetKeyState("Ctrl", "D")) or (GetKeyState("Shift", "D"))
-;     ; TrayTipText = % "AllowedApp: " AllowedApp
-;     ;     . "`nAllowedKeys: " AllowedKeys
-;     ;     . "`nSublime: " Sublime
-;     ;     . "`nModifiers: " SublimeModifiers
-;     ;     . "`n"
-;     ;     . "`n" Title
-;     ;     . "`nahk_exe: " ahk_exe
-;     ;     . "`nahk_class: " ahk_class
-;     ;     . "`nClassNN:" ClassNN
-;     ;     ; . "`nCursorHwnd: " CursorHwnd
-;     if (AllowedText >= 1)
-;         AllowedText = 1
-;     If (DisabledApp) {
-;         SendInput, {MButton Down}
-;         Return
-;     }
-;     Else If (!AllowedApp and !LimitedApp and !AllowedText) { ; !AllowedKeys
-;         ; TrayTip, % "Not scrolling with middle button", %TrayTipText%
-;         SendInput, {MButton Down}
-;         Return
-;     }
-;     ; Else {
-;     ;     ; #IfWinActive, ahk_exe explorer.exe
-;     ;     ;      ControlGet renamestatus,Visible,,Edit1,A
-;     ;     ;      ControlGetFocus focussed, A
-;     ;     ;      if(renamestatus!=1&&(focussed=”DirectUIHWND3″||focussed=SysTreeView321))
-;     ;     ;      {
-;     ;     ;      ToolTip, %focussed%
-;     ;     ;     }
-;     ;     ; #IfWinActive
-;     ;     }
-;     Else {
-;         If (AllowedApp) {
-;             SendInput, {MButton}
-;             ; ToolTip, %ClassNN% ToolbarFound %Toolbars%
-;         }
-;         ; Process, Exist, %Window%
-;         ; ToolTip, % DllCall("WindowFromPoint", "int64", CursorX | (CursorY << 32), "Ptr")
-;         ; ControlFocus, CursorHw, WinTitle, WinText, ExcludeTitle, ExcludeText]
-;         ; TrayTip, % "Scrolling with middle button", %TrayTipText%
-;         MiddleScroll := 1
-;         SetSystemCursor("SIZEALL")
-;         Sensitivity = 10 ; How far the middle mouse wheel has to be dragged before scrolling is triggered
-;         MouseGetPos, X1, Y1, , c, 2
-;         OrigTimer := 50 ; How quickly the file list scrolls
-;         SetTimer, MBScroll, %OrigTimer%
-;         MBScroll:
-;             MouseGetPos, X2, Y2
-;             Distance := Abs(Y2-Y1)
-;             If (Distance >= Sensitivity) {
-;                 Rounded := % Round((Distance / 200)**1.25+1)
-;                 DllCall("SystemParametersInfo", UInt, 0x69, UInt, Round(Ln(Rounded)+1), UInt, 0, UInt, 0) ; Vary lines scrolled by distance of drag 
-;                 Timer := Round(OrigTimer - (OrigTimer/2*Percent/100))
-;                 SetTimer, MBScroll, %Timer%
-;                 Percent := (A_ScreenHeight - (Max(Y1, Abs(Y1-A_ScreenHeight)) - Distance)) / A_ScreenHeight * 100
-;                 SendInput, % "{Blind}{Wheel" (Y2 > Y1 ? "Down" : "Up") " " Rounded "}"
-;             }
-;         Return
-;         $*MButton Up::
-;             DllCall("SystemParametersInfo", UInt, 0x69, UInt, 3, UInt, 0, UInt, 0) ; Set back to 3 lines scrolled
-;             SetTimer, MBScroll, off
-;             SetSystemCursor()
-;             MiddleScroll := 0
-;             SendInput {MButton Up}
-;             SetSystemCursor(Cursor="") {
-;                 SystemCursors := "32512IDC_ARROW|32513IDC_IBEAM|32514IDC_WAIT|32515IDC_CROSS|32516IDC_UPARROW|32642IDC_SIZENWSE|32643IDC_SIZENESW|32644IDC_SIZEWE|32645IDC_SIZENS|32 646IDC_SIZEALL|32648IDC_NO|32649IDC_HAND|32650IDC_APPSTARTING|32651IDC_HELP"
-;                 If (Cursor = "")
-;                     Return DllCall("SystemParametersInfo", "UInt", 0x57, "UInt", 0, "UInt", 0, "UInt", 0) 
-;                 If (StrLen(SystemCursors) = 221)
-;                     Loop, Parse, SystemCursors, |
-;                         StringReplace, SystemCursors, SystemCursors, %A_LoopField%, % DllCall("LoadCursor", "UInt", 0, "Int", SubStr(A_LoopField, 1, 5)) A_LoopField
-;                 If !(Cursor := SubStr(SystemCursors, InStr(SystemCursors "|", "IDC_" Cursor "|") - 5 - p := (StrLen(SystemCursors) - 221) / 14, 5))
-;                     MsgBox, 262160, %A_ScriptName% - %A_ThisFunc%(): Error, Invalid cursor name!
-;                 Else
-;                     Loop, Parse, SystemCursors, |
-;                     {
-;                         ; 
-;                         ; IDC_ARROW := 32512
-;                         ; IDC_IBEAM := 32513
-;                         ; IDC_WAIT := 32514
-;                         ; IDC_CROSS := 32515
-;                         ; IDC_UPARROW := 32516
-;                         ; IDC_SIZE := 32640
-;                         ; IDC_ICON := 32641
-;                         ; IDC_SIZENWSE := 32642
-;                         ; IDC_SIZENESW := 32643
-;                         ; IDC_SIZEWE := 32644
-;                         ; IDC_SIZENS := 32645
-;                         ; IDC_SIZEALL := 32646
-;                         ; IDC_NO := 32648
-;                         ; IDC_HAND := 32649
-;                         ; IDC_APPSTARTING := 32650
-;                         ; IDC_HELP := 32651
-;                         ;
-;                         ; DllCall("SetSystemCursor", "UInt", DllCall("CopyIcon", "UInt", Cursor), "Int", SubStr(A_LoopField, 6, p))
-;                         ToolTip, Original cursor: %Cursor% " Replacement: " SubStr(A_LoopField, 6, p))
-;                     }
-;                     
-;                 }
-;         Return
-;     }
-; Return
+; Description: Scroll Explorer on middle mouse button drag
+; Permalink: https://autohotkey.com/boards/viewtopic.php?t=43715
+; Tags: Drag Explorer
+; Author: aph
+; Version: 0.2
+; Hotkey: Middle mouse button down
+$*MButton::
+    MouseGetPos, CursorX, CursorY, Window, ClassNN
+    WinGetTitle, Title, ahk_id %Window%
+    WinGetClass, ahk_class, ahk_id %Window%
+    WinGet ahk_exe, ProcessName, ahk_id %Window%
+    WinGet ahk_PID, PID, ahk_id %Window%
+    WinGetText, VisibleText, ahk_id %Window%
+    MouseGetPos, CursorX_ended, CursorY_ended, Window_ended, ClassNN_ended
+    WinGetClass, ahk_class_ended, ahk_id %Window_ended%
+    WinGet ahk_exe_ended, ProcessName, ahk_id %Window_ended%
+    AllowedApp := ahk_exe = "explorer.exe" or ahk_exe = "mmc.exe" or ahk_exe = "systempropertiesadvanced.exe" or ahk_exe = "filezilla.exe" or ahk_exe = "7zFM.exe" ; or ahk_exe = ; "RegWorkshopX64.exe"
+    AllowedText := InStr(VisibleText, "Tree View") or InStr(VisibleText, "FolderView")
+    LimitedApp := ahk_exe = "cmd.exe"
+    DisabledApp := ahk_class_ended = "Shell_TrayWnd" or ahk_class_ended = "WorkerW"
+    ; Toolbars := ClassNN = "ToolbarWindow32" or ClassNN = "ReBarWindow32" or ClassNN = "Edit" ; or ClassNN="SysListView32"
+    ; IsToolbar := InStr(Toolars, "Tree View") or InStr(Toolbars, "FolderView")
+    ;ToolTip, ClassNN %ClassNN% | isToolbar %IsToolbar%
+    ; AllowedKeys := GetKeyState("LWin", "D")
+    ; AllowedKeys ? "MButton Up" : "MButton Down"
+    ; Sublime := ahk_exe = "sublime_text.exe"
+    ; SublimeModifiers := GetKeyState("Alt", "D") or (GetKeyState("LWin", "D")) or (GetKeyState("Ctrl", "D")) or (GetKeyState("Shift", "D"))
+    ; TrayTipText = % "AllowedApp: " AllowedApp
+    ;     . "`nAllowedKeys: " AllowedKeys
+    ;     . "`nSublime: " Sublime
+    ;     . "`nModifiers: " SublimeModifiers
+    ;     . "`n"
+    ;     . "`n" Title
+    ;     . "`nahk_exe: " ahk_exe
+    ;     . "`nahk_class: " ahk_class
+    ;     . "`nClassNN:" ClassNN
+    ;     ; . "`nCursorHwnd: " CursorHwnd
+    if (AllowedText >= 1)
+        AllowedText = 1
+    If (DisabledApp) {
+        SendInput, {MButton Down}
+        Return
+    }
+    Else If (!AllowedApp and !LimitedApp and !AllowedText) { ; !AllowedKeys
+        ; TrayTip, % "Not scrolling with middle button", %TrayTipText%
+        SendInput, {MButton Down}
+        Return
+    }
+    ; Else {
+    ;     ; #IfWinActive, ahk_exe explorer.exe
+    ;     ;      ControlGet renamestatus,Visible,,Edit1,A
+    ;     ;      ControlGetFocus focussed, A
+    ;     ;      if(renamestatus!=1&&(focussed=”DirectUIHWND3″||focussed=SysTreeView321))
+    ;     ;      {
+    ;     ;      ToolTip, %focussed%
+    ;     ;     }
+    ;     ; #IfWinActive
+    ;     }
+    Else {
+        If (AllowedApp) {
+            SendInput, {MButton}
+            ; ToolTip, %ClassNN% ToolbarFound %Toolbars%
+        }
+        ; Process, Exist, %Window%
+        ; ToolTip, % DllCall("WindowFromPoint", "int64", CursorX | (CursorY << 32), "Ptr")
+        ; ControlFocus, CursorHw, WinTitle, WinText, ExcludeTitle, ExcludeText]
+        ; TrayTip, % "Scrolling with middle button", %TrayTipText%
+        MiddleScroll := 1
+        ; SetSystemCursor("SIZEALL")
+        Sensitivity = 10 ; How far the middle mouse wheel has to be dragged before scrolling is triggered
+        MouseGetPos, X1, Y1, , c, 2
+        OrigTimer := 50 ; How quickly the file list scrolls
+        SetTimer, MBScroll, %OrigTimer%
+        MBScroll:
+            MouseGetPos, X2, Y2
+            Distance := Abs(Y2-Y1)
+            If (Distance >= Sensitivity) {
+                Rounded := % Round((Distance / 200)**1.25+1)
+                DllCall("SystemParametersInfo", UInt, 0x69, UInt, Round(Ln(Rounded)+1), UInt, 0, UInt, 0) ; Vary lines scrolled by distance of drag 
+                Timer := Round(OrigTimer - (OrigTimer/2*Percent/100))
+                SetTimer, MBScroll, %Timer%
+                Percent := (A_ScreenHeight - (Max(Y1, Abs(Y1-A_ScreenHeight)) - Distance)) / A_ScreenHeight * 100
+                SendInput, % "{Blind}{Wheel" (Y2 > Y1 ? "Down" : "Up") " " Rounded "}"
+            }
+        Return
+        $*MButton Up::
+            DllCall("SystemParametersInfo", UInt, 0x69, UInt, 3, UInt, 0, UInt, 0) ; Set back to 3 lines scrolled
+            SetTimer, MBScroll, off
+            ; SetSystemCursor()
+            MiddleScroll := 0
+            SendInput {MButton Up}
+            ; SetSystemCursor(Cursor="") {
+            ;     SystemCursors := "32512IDC_ARROW|32513IDC_IBEAM|32514IDC_WAIT|32515IDC_CROSS|32516IDC_UPARROW|32642IDC_SIZENWSE|32643IDC_SIZENESW|32644IDC_SIZEWE|32645IDC_SIZENS|32 646IDC_SIZEALL|32648IDC_NO|32649IDC_HAND|32650IDC_APPSTARTING|32651IDC_HELP"
+            ;     If (Cursor = "")
+            ;         Return DllCall("SystemParametersInfo", "UInt", 0x57, "UInt", 0, "UInt", 0, "UInt", 0) 
+            ;     If (StrLen(SystemCursors) = 221)
+            ;         Loop, Parse, SystemCursors, |
+            ;             StringReplace, SystemCursors, SystemCursors, %A_LoopField%, % DllCall("LoadCursor", "UInt", 0, "Int", SubStr(A_LoopField, 1, 5)) A_LoopField
+            ;     If !(Cursor := SubStr(SystemCursors, InStr(SystemCursors "|", "IDC_" Cursor "|") - 5 - p := (StrLen(SystemCursors) - 221) / 14, 5))
+            ;         MsgBox, 262160, %A_ScriptName% - %A_ThisFunc%(): Error, Invalid cursor name!
+            ;     Else
+            ;         Loop, Parse, SystemCursors, |
+            ;         {
+            ;             ; 
+            ;             ; IDC_ARROW := 32512
+            ;             ; IDC_IBEAM := 32513
+            ;             ; IDC_WAIT := 32514
+            ;             ; IDC_CROSS := 32515
+            ;             ; IDC_UPARROW := 32516
+            ;             ; IDC_SIZE := 32640
+            ;             ; IDC_ICON := 32641
+            ;             ; IDC_SIZENWSE := 32642
+            ;             ; IDC_SIZENESW := 32643
+            ;             ; IDC_SIZEWE := 32644
+            ;             ; IDC_SIZENS := 32645
+            ;             ; IDC_SIZEALL := 32646
+            ;             ; IDC_NO := 32648
+            ;             ; IDC_HAND := 32649
+            ;             ; IDC_APPSTARTING := 32650
+            ;             ; IDC_HELP := 32651
+            ;             ;
+            ;             ; DllCall("SetSystemCursor", "UInt", DllCall("CopyIcon", "UInt", Cursor), "Int", SubStr(A_LoopField, 6, p))
+            ;             ToolTip, Original cursor: %Cursor% " Replacement: " SubStr(A_LoopField, 6, p))
+            ;         }
+                    
+            ;     }
+        Return
+    }
+Return
 
 ; $*MButton::
 ;     MouseGetPos, CursorX, CursorY, Window, ClassNN
@@ -1305,7 +1299,7 @@ Return
 ;         ; ControlFocus, CursorHw, WinTitle, WinText, ExcludeTitle, ExcludeText]
 ;         ; TrayTip, % "Scrolling with middle button", %TrayTipText%
 ;         MiddleScroll := 1
-;         SetSystemCursor("SIZEALL")
+;         ; SetSystemCursor("SIZEALL")
 ;         Sensitivity = 10 ; How far the middle mouse wheel has to be dragged before scrolling is triggered
 ;         MouseGetPos, X1, Y1, , c, 2
 ;         OrigTimer := 40 ; How quickly the file list scrolls
@@ -1328,22 +1322,22 @@ Return
 ;             ; Set back to original 3 lines per scroll event when dragging stops
 ;             DllCall("SystemParametersInfo", UInt, 0x69, UInt, 3, UInt, 0, UInt, 0)
 ;             SetTimer, MBScroll, off
-;             SetSystemCursor()
+;             ; SetSystemCursor()
 ;             MiddleScroll := 0
 ;             SendInput {MButton Up}
-;             SetSystemCursor(Cursor="") {
-;                 SystemCursors := "32512IDC_ARROW|32513IDC_IBEAM|32514IDC_WAIT|32515IDC_CROSS|32516IDC_UPARROW|32642IDC_SIZENWSE|32643IDC_SIZENESW|32644IDC_SIZEWE|32645IDC_SIZENS|32646IDC_SIZEALL|32648IDC_NO|32649IDC_HAND|32650IDC_APPSTARTING|32651IDC_HELP"
-;                 If (Cursor = "")
-;                     Return DllCall("SystemParametersInfo", "UInt", 0x57, "UInt", 0, "UInt", 0, "UInt", 0) 
-;                 If (StrLen(SystemCursors) = 221)
-;                     Loop, Parse, SystemCursors, |
-;                         StringReplace, SystemCursors, SystemCursors, %A_LoopField%, % DllCall("LoadCursor", "UInt", 0, "Int", SubStr(A_LoopField, 1, 5)) A_LoopField
-;                 If !(Cursor := SubStr(SystemCursors, InStr(SystemCursors "|", "IDC_" Cursor "|") - 5 - p := (StrLen(SystemCursors) - 221) / 14, 5))
-;                     MsgBox, 262160, %A_ScriptName% - %A_ThisFunc%(): Error, Invalid cursor name!
-;                 Else
-;                     Loop, Parse, SystemCursors, |
-;                         DllCall("SetSystemCursor", "UInt", DllCall("CopyIcon", "UInt", Cursor), "Int", SubStr(A_LoopField, 6, p))
-;                 }
+;             ; SetSystemCursor(Cursor="") {
+;             ;     SystemCursors := "32512IDC_ARROW|32513IDC_IBEAM|32514IDC_WAIT|32515IDC_CROSS|32516IDC_UPARROW|32642IDC_SIZENWSE|32643IDC_SIZENESW|32644IDC_SIZEWE|32645IDC_SIZENS|32646IDC_SIZEALL|32648IDC_NO|32649IDC_HAND|32650IDC_APPSTARTING|32651IDC_HELP"
+;             ;     If (Cursor = "")
+;             ;         Return DllCall("SystemParametersInfo", "UInt", 0x57, "UInt", 0, "UInt", 0, "UInt", 0) 
+;             ;     If (StrLen(SystemCursors) = 221)
+;             ;         Loop, Parse, SystemCursors, |
+;             ;             StringReplace, SystemCursors, SystemCursors, %A_LoopField%, % DllCall("LoadCursor", "UInt", 0, "Int", SubStr(A_LoopField, 1, 5)) A_LoopField
+;             ;     If !(Cursor := SubStr(SystemCursors, InStr(SystemCursors "|", "IDC_" Cursor "|") - 5 - p := (StrLen(SystemCursors) - 221) / 14, 5))
+;             ;         MsgBox, 262160, %A_ScriptName% - %A_ThisFunc%(): Error, Invalid cursor name!
+;             ;     Else
+;             ;         Loop, Parse, SystemCursors, |
+;             ;             DllCall("SetSystemCursor", "UInt", DllCall("CopyIcon", "UInt", Cursor), "Int", SubStr(A_LoopField, 6, p))
+;             ;     }
 ;         Return
 ;     }
 ; Return
