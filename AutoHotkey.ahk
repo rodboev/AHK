@@ -26,13 +26,16 @@ SetWorkingDir, %A_ScriptDir%
     Pause,,1
 Return
 
+; Common RegEx patterns
+; https://github.com/dmikalova/sublime-cheat-sheets/blob/master/cheat-sheets/Regular Expressions.cheatsheet
+
 ; Sublime Text bindings
 #IfWinActive ahk_exe sublime_text.exe
     !F4::Send {Alt Down}f{AltUp}x
     ^Tab::Send {Ctrl Down}{PgDn}{Ctrl Up}
     +^Tab::Send {Ctrl Down}{PgUp}{Ctrl Up}
     +!d::Send {Alt Down}f{AltUp}e{Ctrl Down}
-    ^w::Send {Alt Down}v{AltUp}w
+    ^w::Send {Alt Down}v{AltUp}w ; {Left}{Right}
     ~^s::
         SetTitleMatchMode, RegEx
         #IfWinActive "^AutoHotKey.ahk .*? - Sublime Text"
@@ -53,10 +56,50 @@ Return
 #IfWinActive
 
 
-; Edit current script as normal user
+; Edit files with normal privileges under existing Explorer process
 ; Depends on RunFromProcess: https://www.nirsoft.net/utils/run_from_process.html
-+!e::Run RunFromProcess-x64 explorer.exe notepad %A_ScriptFullPath%
-+!t::Run RunFromProcess-x64 explorer.exe notepad "C:Users\Rod\Desktop\Pip's Island\timesheet.txt"
+EditApp = notepad.exe
++!e::
+    ; if (A_IsAdmin)
+    ;     ToolTip, Is admin
+    EnvGet, WindowsFolder, SystemRoot
+    Run *RunAs notepad.exe "%A_ScriptFullPath%"
+
+    SetTitleMatchMode, 2
+    Processname = sublime_text.exe
+    Process, Exist, %Processname%
+
+    IfWinExist, Sublime Text
+    {
+        ToolTip, WinExists
+        WinActivate ; use the window found above
+        ;WinActivate, Sublime Text
+    }
+    Else {
+        ToolTip, !WinExists Running "%EditApp%" "%A_ScriptFullPath%"
+        Run *RunAs "%EditApp%" "%A_ScriptFullPath%"
+        ; Process, Exist, %EditApp%
+        ; ahk_pid := ErrorLevel
+        ; #IfWinNotActive, EditApp
+        ;     ; WinWaitActive, %EditApp%
+        ;     ; WinWait, %EditApp%
+        ;     ToolTip, Activating %EditApp%
+        ;     WinActivate, %EditApp%
+        ; #IfWinNotActive
+    }
+Return
++!t::
+    EnvGet, UserPath, USERPROFILE
+    Run, RunFromProcess-x64 explorer notepad "%UserPath%\Desktop\Pip's Island\timesheet.txt"
+    Process, Exist, %EditApp%
+    ahk_pid := ErrorLevel
+    WinActivate, ahk_pid %ahk_pid%
+Return
+
+
+; Run Process Hacker as NT AUTHORITY\SYSTEM on Ctrl+Shift+`
+; Depends on NirCmd: http://www.nirsoft.net/utils/nircmd.html
+^+`::Run nircmd runassystem "C:\Program Files\Process Hacker 2\ProcessHacker.exe"
 
 
 ; Scroll window under mouse cursor (below Windows 10 where it's already implemented)
@@ -77,7 +120,7 @@ WheelDown::
     WinGet, WindowPID, PID, ahk_id %Window%
     WinGet, ControlText, ControlList, ahk_id %Window%
     CursorHwnd := DllCall("WindowFromPoint", "int64", CursorX | (CursorY << 32), "Ptr")
-    If not(ahk_class = "ApplicationFrameWindow" or ahk_class = "Button") { ; DllCall doesn't work on these
+    If !(ahk_class = "ApplicationFrameWindow" or ahk_class = "Button") { ; CursorHwnd may not work on these
         WheelSteps := A_EventInfo
         DllCall("SendMessage", "Ptr", CursorHwnd, "UInt", 0x20A, "Ptr", WheelSteps * (A_ThisHotkey == "WheelUp" ? 1 : -1) * 120 << 16, "Ptr", ( CursorY << 16 )|CursorX)
     }
@@ -175,11 +218,10 @@ Return
     WinGet, WindowPID, PID, ahk_id %Window%
     WinGet, ControlText, ControlList, ahk_id %Window%
     CursorHwnd := DllCall("WindowFromPoint", "int64", CursorX | (CursorY << 32), "Ptr")
-    WinGet, ControlText, ControlList, ahk_id %Window%
     StringReplace, ControlText, ControlText, `n, %A_SPACE%, All
     StringReplace, WindowText, WindowText, `n,  , All
     StringReplace, WindowText, WindowText, %A_SPACE%%A_SPACE%, , All
-    If not (WindowText = "")
+    If !(WindowText = "")
         WindowText = `n%WindowText%
     WinGetText, Text, ahk_id %Window%
     WinGet, ahk_exe, ProcessName, ahk_id %Window%
@@ -195,7 +237,7 @@ ahk_class = %ahk_class%
 Path: %Path%
 Process ID: %WindowPID%
 Control ClassNN: %ClassNN%
-CursorHwnd: %CursorHwnd%
+hWnd under cursor: %CursorHwnd%
 
 Window Text:%WindowText%
 
@@ -269,15 +311,15 @@ return
 ; Tags: Drag Explorer
 ; Author: aph
 ; Version: 0.3
-; #If !(WinActive("ahk_class EVERYTHING") || WinActive("Chrome_WidgetWin_1"))
-; #IfWinNotActive ahk_class EVERYTHING || ahk_class Chrome_WidgetWin_1
 ; TODO:
-; Make smoother
+; - Make smoother
 ; https://autohotkey.com/board/topic/119433-how-to-send-a-smooth-scroll-signal/
 ; https://autohotkey.com/board/topic/55289-dragtoscroll-universal-drag-flingflick-scrolling/
-; Hide cursor?
+; - Hide cursor?
 ; https//autohotkey.com/board/topic/5727-hiding-the-mouse-cursor/?p=35221
-; Add ControlText includes "SysListView32", doesn't include "
+; - Block MButton on MPC / VLC?
+; #If !(WinActive("ahk_class EVERYTHING") || WinActive("Chrome_WidgetWin_1"))
+; #IfWinNotActive ahk_class EVERYTHING || ahk_class Chrome_WidgetWin_1
 $*MButton::
     MouseGetPos, CursorX, CursorY, Window, ClassNN
     WinGetTitle, Title, ahk_id %Window%
@@ -285,29 +327,35 @@ $*MButton::
     WinGet ahk_exe, ProcessName, ahk_id %Window%
     WinGet ahk_PID, PID, ahk_id %Window%
     WinGetText, VisibleText, ahk_id %Window%
+    WinGet, ControlText, ControlList, ahk_id %Window%
     MouseGetPos, CursorX_ended, CursorY_ended, Window_ended, ClassNN_ended
     ; WinGetClass, ahk_class_ended, ahk_id %Window_ended%
     ; WinGet ahk_exe_ended, ProcessName, ahk_id %Window_ended%
     AllowedApp := ahk_exe = "mmc.exe" or ahk_exe = "systempropertiesadvanced.exe" or ahk_exe = "filezilla.exe" or ahk_exe = "7zFM.exe" or ahk_exe = "uTorrent.exe" or InStr(ClassNN, "SysTreeView32")
-    AllowedText := InStr(VisibleText, "Tree View") or InStr(VisibleText, "FolderView")
-    IsToolbar := InStr(ClassNN, "ToolbarWindow") or InStr(ClassNN, "ReBarWindow") or InStr(ClassNN, "Edit") or InStr(ClassNN, "AddressBandRoot") or InStr(ClassNN, "statusbar") or InStr(ClassNN, "SysHeader") or not (ClassNN) and not (ahk_class = "Shell_TrayWnd" or ahk_class = "WorkerW" or ahk_exe = "mpc-hc64.exe")
+    AllowedText := InStr(VisibleText, "Tree View") or InStr(VisibleText, "FolderView") or InStr(ControlText, "ScrollBar") or InStr(ControlText, "SysListView32")
+    IsToolbar := InStr(ClassNN, "ToolbarWindow") or InStr(ClassNN, "ReBarWindow") or InStr(ClassNN, "Edit") or InStr(ClassNN, "AddressBandRoot") or InStr(ClassNN, "statusbar") or InStr(ClassNN, "SysHeader") or not (ClassNN) and not (ahk_class = "Shell_TrayWnd" or ahk_class = "WorkerW") ; or ahk_exe = "mpc-hc64.exe") ?
+    ; TODO: PassThroughToApp = ahk_exe = "mpc-hc64.exe")
+    ; IsToolbar := InStr(ClassNN, "ToolbarWindow") or InStr(ClassNN, "ReBarWindow") or InStr(ClassNN, "Edit") or InStr(ClassNN, "AddressBandRoot") or InStr(ClassNN, "statusbar") or InStr(ClassNN, "SysHeader") and !(ClassNN) or !(ahk_class = "Shell_TrayWnd") or !(ahk_class = "WorkerW") ; or ahk_exe = "mpc-hc64.exe") ?
     ; AllowedKeys := GetKeyState("LWin", "D")
     ; AllowedKeys ? "MButton Up" : "MButton Down"
     ; Sublime := ahk_exe = "sublime_text.exe"
     ; SublimeModifiers := GetKeyState("Alt", "D") or (GetKeyState("LWin", "D")) or (GetKeyState("Ctrl", "D")) or (GetKeyState("Shift", "D"))
-    ; TrayTipText = % "AllowedApp: " AllowedApp
-    ;     ; . "`nAllowedKeys: " AllowedKeys
-    ;     ; . "`nSublime: " Sublime
-    ;     ;. "`nModifiers: " SublimeModifiers
-    ;     ; . "`n"
-    ;     . "`nTitle: " Title
-    ;     . "`nahk_exe: " ahk_exe
-    ;     . "`nahk_class: " ahk_class
-    ;     ; . "`nCursorHwnd: " CursorHwnd
-    if (AllowedText >= 1)
+; /*
+    TrayTipText = % ""
+        . "AllowedApp: " AllowedApp
+        ; . "`nAllowedKeys: " AllowedKeys
+        ; . "`nSublime: " Sublime
+        ;. "`nModifiers: " SublimeModifiers
+        ; . "`n"
+        . "`nTitle: " Title
+        . "`nahk_exe: " ahk_exe
+        . "`nahk_class: " ahk_class
+        . "`nCursorHwnd: " CursorHwnd
+; */
+    if (AllowedText >= 1) ; TODO: Make ternary
         AllowedText = 1
     If (DisabledApp) {
-        ; TrayTip, % "Disabled app", %TrayTipText%
+        TrayTip, % "Disabled app", %TrayTipText%
         SendInput, {MButton Down}
         Return
     }
@@ -318,26 +366,15 @@ $*MButton::
         Return
     }
 */
-    Else If (!AllowedApp and !AllowedText) { ; !AllowedKeys
-        ; TrayTip, % "Not allowed app", %TrayTipText%
+    Else If !(AllowedText or AllowedApp) { ; AllowedApp and AllowedKeys
+        TrayTip, % "Not allowed app", %TrayTipText%
         SendInput, {MButton Down}
         Return
     }
-/*
-    Else {
-        ; #IfWinActive, ahk_exe explorer.exe
-        ;      ControlGet renamestatus,Visible,,Edit1,A
-        ;      ControlGetFocus focussed, A
-        ;      if(renamestatus!=1&&(focussed=”DirectUIHWND3″||focussed=SysTreeView321))
-        ;      {
-        ;      ToolTip, %focussed%
-        ;     }
-        ; #IfWinActive
-        }
-*/
     Else If (IsToolbar) {
         ; WinActivate, ahk_class ahk_class
-        ; TrayTip, % "Toolbar found ", %TrayTipText%
+        TrayTipText = % TrayTipText . "`nClassNN: " ClassNN
+        TrayTip, % "Toolbar found ", %TrayTipText%
         SendInput, {MButton} ; Activate control
         ; SendInput, {MButton Down}
         Return
@@ -352,6 +389,7 @@ $*MButton::
         }
 */
         SendInput, {MButton} ; Activate control
+        TrayTip, % "Scrolling activated", %TrayTipText%
         ; Process, Exist, %Window%
         ; ToolTip, % DllCall("WindowFromPoint", "int64", CursorX | (CursorY << 32), "Ptr")
         ; ControlFocus, CursorHw, WinTitle, WinText, ExcludeTitle, ExcludeText]
@@ -523,22 +561,21 @@ TODO:
 */
 
 /*
-; Description: Get a tray tooltip whenever your script is reloaded
+; Description: Get a TrayTip whenever your script is reloaded
 ; Permalink: https://autohotkey.com/boards/viewtopic.php?t=43865
 ; Author: aph
-; Version: 0.3
-Permalink: https://autohotkey.com/boards/viewtopic.php?f=6&t=43865
+; Version: 0.1
 FileGetAttrib, attribs, %A_ScriptFullPath%
 if (attribs="A") {
-       FileSetAttrib, -A, %A_ScriptFullPath%
-       TrayTip, Reloaded script, %A_ScriptFullPath%,, 1
+   FileSetAttrib, -A, %A_ScriptFullPath%
+   TrayTip, Reloaded script, %A_ScriptFullPath%,, 1
 }
 OnExit, ExitSub
 Return
 ExitSub:
-       if (A_ExitReason="Reload") {
-               FileSetAttrib, +A, %A_ScriptFullPath%
-       }
+   if (A_ExitReason="Reload") {
+       FileSetAttrib, +A, %A_ScriptFullPath%
+   }
 ExitApp
 */
 
@@ -644,6 +681,21 @@ $RButton::
 ; http://www.autohotkey.com/board/topic/95834-using-winwait-effectively-or-how-else-should-i-execute-an-action-when-a-pop-up-window-appears/#entry603588
 ; https://autohotkey.com/board/topic/121689-virustotal-uploader-script-to-auto-close-its-dialog-windows/
 
+; Not working. Check https://autohotkey.com/boards/viewtopic.php?t=13199 (Simple script won't seem to loop WinWaitActive):
+;
+; SetTitleMatchMode, RegEx
+; Loop 
+; {
+;     IfWinActive,AutoHotkey Help ; Wait for user to navigate to DBA, and select to Print a Traveler
+;         {
+;             Gui, Show,, Auto Traveler
+;             WinWaitClose, Auto Traveler
+;         }
+;     Sleep, 100
+; }
+; return
+; SetTitleMatchMode, 1
+
 Loop 
 {
     WinWait, VirusTotal Uploader
@@ -672,8 +724,8 @@ Text: &Yes
 Dropbox Notification
 ahk_class Qt5QWindowToolSaveBits
 ahk_exe Dropbox.exe
-
 */
+
 
 
 ; VLC binding to go to next file on mouse middle button press
@@ -872,10 +924,6 @@ SetTitleMatchMode, 1
 */
 
 
-; Run Process Hacker as NT AUTHORITY\SYSTEM
-; Depends on NirCmd: http://www.nirsoft.net/utils/nircmd.html
-^+`::Run nircmd runassystem "C:\Program Files\Process Hacker 2\ProcessHacker.exe"
-
 ; From http://www.howtogeek.com/howto/8955/make-backspace-in-windows-7-or-vista-explorer-go-up-like-xp-did/
 ; Fixed quotes
 #IfWinActive, ahk_class CabinetWClass
@@ -1050,10 +1098,3 @@ MsgBox, , Press Ctrl+C to copy to clipboard, %Info%
 ; Gui, Add, Button, default xm, Copy Tab1
 return
 */
-
-
-; RegEx patterns:
-; Select word in string: https://stackoverflow.com/questions/9348326/regex-find-word-in-the-string
-; ^(.*?(\bGoogle Chrome\b)[^$]*)$
-; Select up to line break: https://stackoverflow.com/questions/15161892/regular-expression-select-up-to-line-break
-; /.*\s*:\s*.g
