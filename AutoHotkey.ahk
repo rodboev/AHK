@@ -94,7 +94,7 @@ Return
 #IfWinActive
 ; Alt+Shift+E = Edit current script as normal user
 +!e::Run RunFromProcess-x64 explorer.exe notepad %A_ScriptFullPath%
-+!t::Run RunFromProcess-x64 explorer.exe notepad "C:\Users\Rod\Desktop\Pip's Island\todo.txt"
++!t::Run RunFromProcess-x64 explorer.exe notepad "C:\Users\Rod\Desktop\Pip's Island\timesheet.txt"
 
 ; Google Chrome
 #IfWinActive ahk_exe chrome.exe
@@ -1093,8 +1093,7 @@ Return
 ; Permalink: https://autohotkey.com/boards/viewtopic.php?t=43715
 ; Tags: Drag Explorer
 ; Author: aph
-; Version: 0.2
-; Hotkey: Middle mouse button down
+; Version: 0.3
 $*MButton::
     MouseGetPos, CursorX, CursorY, Window, ClassNN
     WinGetTitle, Title, ahk_id %Window%
@@ -1103,37 +1102,42 @@ $*MButton::
     WinGet ahk_PID, PID, ahk_id %Window%
     WinGetText, VisibleText, ahk_id %Window%
     MouseGetPos, CursorX_ended, CursorY_ended, Window_ended, ClassNN_ended
-    WinGetClass, ahk_class_ended, ahk_id %Window_ended%
-    WinGet ahk_exe_ended, ProcessName, ahk_id %Window_ended%
-    AllowedApp := ahk_exe = "explorer.exe" or ahk_exe = "mmc.exe" or ahk_exe = "systempropertiesadvanced.exe" or ahk_exe = "filezilla.exe" or ahk_exe = "7zFM.exe" ; or ahk_exe = ; "RegWorkshopX64.exe"
+    ; WinGetClass, ahk_class_ended, ahk_id %Window_ended%
+    ; WinGet ahk_exe_ended, ProcessName, ahk_id %Window_ended%
+    AllowedApp := ahk_exe = "mmc.exe" or ahk_exe = "systempropertiesadvanced.exe" or ahk_exe = "filezilla.exe" or ahk_exe = "7zFM.exe" or InStr(ClassNN, "SysTreeView32")
     AllowedText := InStr(VisibleText, "Tree View") or InStr(VisibleText, "FolderView")
-    LimitedApp := ahk_exe = "cmd.exe"
-    DisabledApp := ahk_class_ended = "Shell_TrayWnd" or ahk_class_ended = "WorkerW"
-    ; Toolbars := ClassNN = "ToolbarWindow32" or ClassNN = "ReBarWindow32" or ClassNN = "Edit" ; or ClassNN="SysListView32"
-    ; IsToolbar := InStr(Toolars, "Tree View") or InStr(Toolbars, "FolderView")
+    ; LimitedApp := ahk_exe = "cmd.exe"
+    ; DisabledApp :=
+    ; Toolbars := ClassNN = "ToolbarWindow32" or ClassNN = "ReBarWindow32" or ClassNN = "Edit"
+    IsToolbar := InStr(ClassNN, "ToolbarWindow") or InStr(ClassNN, "ReBarWindow") or InStr(ClassNN, "Edit") or InStr(ClassNN, "DirectUIHWND2") or InStr(ClassNN, "AddressBandRoot") or InStr(ClassNN, "statusbar") or InStr(ClassNN, "SysHeader") or not (ClassNN) and not (ahk_class = "Shell_TrayWnd" or ahk_class = "WorkerW" or ahk_exe = "mpc-hc64.exe")
     ;ToolTip, ClassNN %ClassNN% | isToolbar %IsToolbar%
     ; AllowedKeys := GetKeyState("LWin", "D")
     ; AllowedKeys ? "MButton Up" : "MButton Down"
     ; Sublime := ahk_exe = "sublime_text.exe"
     ; SublimeModifiers := GetKeyState("Alt", "D") or (GetKeyState("LWin", "D")) or (GetKeyState("Ctrl", "D")) or (GetKeyState("Shift", "D"))
     ; TrayTipText = % "AllowedApp: " AllowedApp
-    ;     . "`nAllowedKeys: " AllowedKeys
-    ;     . "`nSublime: " Sublime
-    ;     . "`nModifiers: " SublimeModifiers
-    ;     . "`n"
-    ;     . "`n" Title
+    ;     ; . "`nAllowedKeys: " AllowedKeys
+    ;     ; . "`nSublime: " Sublime
+    ;     ;. "`nModifiers: " SublimeModifiers
+    ;     ; . "`n"
+    ;     . "`nTitle: " Title
     ;     . "`nahk_exe: " ahk_exe
     ;     . "`nahk_class: " ahk_class
-    ;     . "`nClassNN:" ClassNN
     ;     ; . "`nCursorHwnd: " CursorHwnd
     if (AllowedText >= 1)
         AllowedText = 1
     If (DisabledApp) {
+        ; TrayTip, % "Disabled app", %TrayTipText%
         SendInput, {MButton Down}
         Return
     }
-    Else If (!AllowedApp and !LimitedApp and !AllowedText) { ; !AllowedKeys
-        ; TrayTip, % "Not scrolling with middle button", %TrayTipText%
+    ; Else if (LimitedApp) {
+    ;     TrayTip, % "Limited app", %TrayTipText%
+    ;     SendInput, {MButton Down}{MButton Up}
+    ;     Return
+    ; }
+    Else If (!AllowedApp and !AllowedText) { ; !AllowedKeys
+        ; TrayTip, % "Not allowed app", %TrayTipText%
         SendInput, {MButton Down}
         Return
     }
@@ -1148,14 +1152,23 @@ $*MButton::
     ;     ; #IfWinActive
     ;     }
     Else {
-        If (AllowedApp) {
-            SendInput, {MButton}
-            ; ToolTip, %ClassNN% ToolbarFound %Toolbars%
+        ; TrayTipText = % TrayTipText
+        ;     . "`nClassNN: " ClassNN
+        ;     . " `nIs toolbar: "  IsToolbar
+        If (IsToolbar) {
+            WinActivate, ahk_class ahk_class
+            ; TrayTip, % "Toolbar found ", %TrayTipText%
+            SendInput, {MButton} ; Activate control
+            ; SendInput, {MButton Down}
+            Return
         }
+        ; Else {
+        ;     TrayTip, % "Scrolling activated", %TrayTipText%
+        ; }
+        SendInput, {MButton} ; Activate control
         ; Process, Exist, %Window%
         ; ToolTip, % DllCall("WindowFromPoint", "int64", CursorX | (CursorY << 32), "Ptr")
         ; ControlFocus, CursorHw, WinTitle, WinText, ExcludeTitle, ExcludeText]
-        ; TrayTip, % "Scrolling with middle button", %TrayTipText%
         MiddleScroll := 1
         ; SetSystemCursor("SIZEALL")
         Sensitivity = 10 ; How far the middle mouse wheel has to be dragged before scrolling is triggered
