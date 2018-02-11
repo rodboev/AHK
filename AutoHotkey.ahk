@@ -85,13 +85,20 @@ Return
     ~^s::
         SetTitleMatchMode, RegEx
         #IfWinActive "^AutoHotKey.ahk .*? - Sublime Text"
-        SetTitleMatchMode, 1
-            Reload
+            SetTitleMatchMode, 1
+                Reload
         #IfWinActive
     Return
-    ^;::Send ^/
+    ^;::
+    #;::
+    !;::
+        SetTitleMatchMode, RegEx
+        #IfWinActive "^AutoHotKey.ahk .*? - Sublime Text"
+            Send ^/
+        #IfWinActive
     Return
 #IfWinActive
+
 ; Alt+Shift+E = Edit current script as normal user
 +!e::Run RunFromProcess-x64 explorer.exe notepad %A_ScriptFullPath%
 +!t::Run RunFromProcess-x64 explorer.exe notepad "C:\Users\Rod\Desktop\Pip's Island\timesheet.txt"
@@ -587,7 +594,7 @@ DetectHiddenWindows, Off
 ; ; https://autohotkey.com/board/topic/48426-accelerated-scrolling-script/?p=333222
 ; ;
 ; ; #If (WinActive("ahk_exe explorer.exe") or WinActive("ahk_class PROCMON_WINDOW_CLASS") or 
-; #IfWinNotActive, abcd
+; #IfWinActive ahk_class MediaPlayerClassicW
 ; ; #If (WinActive("ahk_exe explorer.exe") or WinActive("ahk_class MPC-BE") or WinActive("ahk_class MediaPlayerClassicW"))
 ; ; The length of a scrolling session. Keep scrolling within this time to accumulate boost. ; Default: 500. Recommended between 400 and 1000.
 ; WheelUp::
@@ -616,7 +623,7 @@ DetectHiddenWindows, Off
 ;                v := vmax
 ;            v *= distance / boost
 ;        }
-;        ; QuickToolTip(v, 500)
+;        QuickToolTip(v, 500)
 ;        v := (v > 1) ? ((v > limit) ? limit : Floor(v)) : 1
 ;        MouseClick, %A_ThisHotkey%, , , v
 ;    QuickToolTip(text, delay)
@@ -637,7 +644,7 @@ DetectHiddenWindows, Off
 ; ; #If
 ; Return
 ; ; #If
-; #IfWinNotActive
+; #IfWinActive
 
 
 ; 
