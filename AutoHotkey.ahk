@@ -10,6 +10,8 @@
 #Persistent
 #UseHook
 #MaxHotkeysPerInterval 300
+#InstallKeybdHook
+#InstallMouseHook
 
 SendMode, Input
 SetWorkingDir, %A_ScriptDir%
@@ -19,128 +21,463 @@ SetWorkingDir, %A_ScriptDir%
     Return
 #IfWinActive
 
+
 ; AHK bindings
 +!r::Reload
 +!p::
     Suspend
     Pause,,1
 Return
++!e::UserRun("C:\Users\Rod\AppData\Local\Programs\Microsoft VS Code\Code.exe", A_ScriptFullPath)
 
-; Common RegEx patterns
-; https://github.com/dmikalova/sublime-cheat-sheets/blob/master/cheat-sheets/Regular Expressions.cheatsheet
-
+; -------------------------------------------------------------- ;
 ; Sublime Text bindings
+
 #IfWinActive ahk_exe sublime_text.exe
-    !F4::Send {Alt Down}f{AltUp}x
     ^Tab::Send {Ctrl Down}{PgDn}{Ctrl Up}
     +^Tab::Send {Ctrl Down}{PgUp}{Ctrl Up}
     +!d::Send {Alt Down}f{AltUp}e{Ctrl Down}
-    ^w::Send {Alt Down}v{AltUp}w ; {Left}{Right}
-    ~^s::
-        SetTitleMatchMode, RegEx
-        #IfWinActive "^AutoHotKey.ahk .*? - Sublime Text"
-            SetTitleMatchMode, 1
-                Reload
-        #IfWinActive
-    Return
-    ; Line comment toggle
-    ; Also can use Ctrl+Shift+/ to toggle block comments
+    ^w::Send {Alt Down}f{AltUp}{Left}{Alt Down}v{AltUp}w
     ^;::
     #;::
     !;::
-        SetTitleMatchMode, RegEx
-        #IfWinActive "^AutoHotKey.ahk .*? - Sublime Text"
+        IfWinActive,  - .ahk
+        {
             Send ^/
-        #IfWinActive
+        }
     Return
 #IfWinActive
 
-
-; Edit files with normal privileges under existing Explorer process
-; Depends on RunFromProcess: https://www.nirsoft.net/utils/run_from_process.html
-+!e::Run RunFromProcess-x64 explorer.exe notepad %A_ScriptFullPath%
-+!t::Run RunFromProcess-x64 explorer.exe notepad "C:\Users\Rod\Desktop\todo.txt"
-; EditApp = notepad.exe
-; +!e::
-;     ; if (A_IsAdmin)
-;     ;     ToolTip, Is admin
-;     EnvGet, WindowsFolder, SystemRoot
-;     Run *RunAs notepad.exe "%A_ScriptFullPath%"
-
-;     SetTitleMatchMode, 2
-;     Processname = sublime_text.exe
-;     Process, Exist, %Processname%
-
-;     IfWinExist, Sublime Text
-;     {
-;         ToolTip, WinExists
-;         WinActivate ; use the window found above
-;         ;WinActivate, Sublime Text
-;     }
-;     Else {
-;         ToolTip, !WinExists Running "%EditApp%" "%A_ScriptFullPath%"
-;         Run *RunAs "%EditApp%" "%A_ScriptFullPath%"
-;         ; Process, Exist, %EditApp%
-;         ; ahk_pid := ErrorLevel
-;         ; #IfWinNotActive, EditApp
-;         ;     ; WinWaitActive, %EditApp%
-;         ;     ; WinWait, %EditApp%
-;         ;     ToolTip, Activating %EditApp%
-;         ;     WinActivate, %EditApp%
-;         ; #IfWinNotActive
-;     }
-; Return
-; +!t::
-;     EnvGet, UserPath, USERPROFILE
-;     Run, RunFromProcess-x64 explorer notepad "%UserPath%\Desktop\todo.txt"
-;     Process, Exist, %EditApp%
-;     ahk_pid := ErrorLevel
-;     WinActivate, ahk_pid %ahk_pid%
-; Return
-
-
-; Run Process Hacker as NT AUTHORITY\SYSTEM on Ctrl+Shift+`
-; Depends on NirCmd: http://www.nirsoft.net/utils/nircmd.html
-^+`::Run nircmd runassystem "C:\Program Files\Process Hacker 2\ProcessHacker.exe"
-
-
-; Scroll window under mouse cursor (below Windows 10 where it's already implemented)
-; Tags: combined, scroll under cursor, scroll window under cursor
-; https://autohotkey.com/board/topic/78284-boldly-scroll-where-no-one-has-scrolled-before/page-2
-; #UseHook
-#IfWinNotActive ahk_class #32770
-WheelUp::
-WheelDown::
-    ; Critical
-    CoordMode, Mouse, Screen
-    ; #MaxThreadsPerHotkey 5
-    MouseGetPos, CursorX, CursorY, Window ; , ClassNN
-    WinGetClass, ahk_class, ahk_id %Window%
-    ; -- Window under mouse cursor --
-    WinGetTitle, Title, ahk_id %Window%
-    WinGetText, VisibleText, ahk_id %Window%
-    WinGet, WindowPID, PID, ahk_id %Window%
-    WinGet, ControlText, ControlList, ahk_id %Window%
-    CursorHwnd := DllCall("WindowFromPoint", "int64", CursorX | (CursorY << 32), "Ptr")
-    If !(ahk_class = "ApplicationFrameWindow" or ahk_class = "Button") { ; CursorHwnd may not work on these
-        WheelSteps := A_EventInfo
-        DllCall("SendMessage", "Ptr", CursorHwnd, "UInt", 0x20A, "Ptr", WheelSteps * (A_ThisHotkey == "WheelUp" ? 1 : -1) * 120 << 16, "Ptr", ( CursorY << 16 )|CursorX)
-    }
-    Else {
-        If (A_ThisHotkey == "WheelUp")
-            MouseClick WheelUp
-        Else
-            MouseClick WheelDown
-    }
-    ; Critical Off
-Return
+; Reload on save
+#IfWinActive AutoHotkey.ahk
+    ~^s::Reload
 #IfWinActive
+
+; em dash
++^-::Send {ASC 0151}
+; bullet
++^0::Send {ASC 0149}
+
+
+; -------------------------------------------------------------- ;
+; Explorer bindings - dealing with processes
+; -------------------------------------------------------------- ;
+; Terminal and arbitrary command bindings that support limited user mode,
+; elevation, SYSTEM and above privileges, process injection, you name it.
+
+; Run as user (optionally elevated)
+
+; BuildPSArgsString and BuildPSArgsArray convert AHK function arguments into PowerShell arrays
+; They handle proper escaping of spaces, environment variables, and special characters
+; 
+; BuildPSArgsString: Creates a simple comma-separated string array format
+; BuildPSArgsArray: More complex processing for special argument formats like Windows Terminal's "-d path"
+;
+; Examples:
+; BuildPSArgsString("cmd", "/c", "dir", "%UserProfile%")
+;   Returns: @('cmd', '/c', 'dir', '$env:UserProfile')
+;
+; BuildPSArgsArray("wt", "-d %UserProfile%\Documents", "cmd")
+;   Returns: @('-d', '$env:UserProfile\Documents', 'cmd')
+;
+; Practical uses:
+; 1. For UserRun: UserRun("elevate", "wt", "-d %UserProfile%\Desktop")
+; 2. Process elevation: UserRun("elevate", exePath, fileArguments)
+; 3. Command injection: UserRun("RunFromProcess", "explorer", "powershell", "-Command", "Get-Process")
+
+BuildPSArgsString(Args*) {
+    list := ""
+    Loop % Args.Length() {
+        raw := Args[A_Index]
+        if RegExMatch(raw, "(?i)\bcmd\b") {
+            elem := "'" raw "'"
+        }
+        else {
+            arg := RegExReplace(raw, "(?i)%(.*?)%", "$env:$1")
+            if InStr(arg, " ")
+                elem := "'" arg "'"
+            else
+                elem := "'" arg "'"
+        }
+        list .= (list ? ", " : "") . elem
+    }
+    return "@(" list ")"
+}
+
+BuildPSArgsArray(Args*) {
+    list := ""
+    Loop % Args.Length() {
+        raw := Args[A_Index]
+
+        ; Split WT's "-d <path>"
+        if RegExMatch(raw, "(?i)^\s*-d\s+(.+)$", m) {
+            path := RegExReplace(m1, "(?i)%(.*?)%", "$env:$1")
+            ; Expand $env: via double'-quotes, literal paths via single'-quotes
+            elem := "'-d', " (InStr(path, "$env:") ? """" path """" : "'" path "'")
+        }
+        else if RegExMatch(raw, "(?i)\bcmd\b") {
+            elem := "'" raw "'"  ; literal cmd chains
+        }
+        else {
+            arg := RegExReplace(raw, "(?i)%(.*?)%", "$env:$1")
+            elem := InStr(arg, "$env:") ? """" arg """" : "'" arg "'"
+        }
+
+        list .= (list ? ", " : "") . elem
+    }
+    return "@(" . list . ")"
+}
+
+UserRun(Executable, Args*) {
+    elevate := (Executable = "elevate")
+    if (elevate) {
+        Executable := Args[1]
+        Args.RemoveAt(1)
+    }
+
+    ; Check if any arg needs PowerShell for env var expansion or special handling
+    needsPowerShell := false
+    Loop % Args.Length() {
+        arg := Args[A_Index]
+        if (RegExMatch(arg, "%(.*?)%") || InStr(arg, "$env:") || RegExMatch(arg, "(?i)^\s*-d\s")) {
+            needsPowerShell := true
+            break
+        }
+    }
+
+    ; Always run from explorer.exe for cleaner process trees
+    if (needsPowerShell) {
+        quotedExe := InStr(Executable, " ") ? "'" Executable "'" : Executable
+        psCmd := "& " quotedExe
+        Loop % Args.Length() {
+            arg := Args[A_Index]
+            ; Handle "-d <path>" specially (for Windows Terminal)
+            if RegExMatch(arg, "(?i)^\s*-d\s+(.+)$", m) {
+                rawPath := m1
+                expanded := RegExReplace(rawPath, "(?i)%(.*?)%", "$env:$1")
+                path := (InStr(expanded, " ") ? "'" expanded "'" : expanded)
+                psCmd .= " -d " path
+            } else {
+                expanded := RegExReplace(arg, "(?i)%(.*?)%", "$env:$1")
+                quotedArg := (InStr(expanded, " ") ? "'" expanded "'" : expanded)
+                psCmd .= " " quotedArg
+            }
+        }
+        if (elevate) {
+            full := "RunFromProcess-x64 explorer.exe conhost.exe --headless powershell -NoProfile -Command ""Start-Process powershell -ArgumentList '-NoProfile -Command " psCmd "' -Verb RunAs -WindowStyle Hidden"""
+        } else {
+            full := "RunFromProcess-x64 explorer.exe conhost.exe --headless powershell -NoProfile -Command """ psCmd """"
+        }
+    } else {
+        ; Direct execution - no env vars to expand
+        argStr := ""
+        Loop % Args.Length() {
+            arg := Args[A_Index]
+            if (InStr(arg, " "))
+                argStr .= " """ arg """"
+            else
+                argStr .= " " arg
+        }
+        if (elevate) {
+            full := "RunFromProcess-x64 explorer.exe conhost.exe --headless powershell -NoProfile -Command ""Start-Process '" Executable "' -ArgumentList '" argStr "' -Verb RunAs -WindowStyle Hidden"""
+        } else {
+            full := "RunFromProcess-x64 explorer.exe " Executable argStr
+        }
+    }
+
+    Run, %full%, , Hide
+    return !ErrorLevel
+}
+
+; +F3::UserRun("nircmd", "execmd start cmd /k pushd %UserProfile% && cmd /c")
+
+isPath(str) {
+    if RegExMatch(str, "^[A-Za-z]:\\.*")
+        return true
+    else
+        return false
+}
+
+GetExplorerPath() {
+    static shell := ComObjCreate("Shell.Application")
+    WinGet, hwnd, ID, A
+    for window in shell.Windows {
+        if (window.hwnd = hwnd) {
+            try {
+                return window.Document.Folder.Self.Path
+            } catch {
+                return ""  ; not a filesystem view
+            }
+        }
+    }
+    return ""
+}
+
+; Open Windows Terminal in the current directory
+F10::
+    WinGetClass, winClass, A
+    path := GetExplorerPath()
+
+    if (winClass = "Progman") {
+        UserRun("wt", "-d $env:UserProfile\Desktop")
+    }
+    else if (winClass = "CabinetWClass" && path != "") {
+        UserRun("wt", "-d " . path)
+    }
+    else {
+        UserRun("wt", "-d $env:UserProfile")
+    }
+Return
+
+; Elevation
++F10::
+    WinGetClass, winClass, A
+    path := GetExplorerPath()
+
+    if (winClass = "Progman") {
+       UserRun("elevate", "wt", "-d $env:UserProfile\Desktop")
+    }
+    else if (winClass = "CabinetWClass" && path != "") {
+        UserRun("elevate", "wt", "-d " . path)
+    }
+    else {
+        UserRun("elevate", "wt", "-d $env:UserProfile")
+    }
+Return
+
+
+
+; SYSTEM elevation
+^!+F10::
+    WinGetClass, winClass, A
+    path := GetExplorerPath()
+    if (winClass = "Progman") {
+        Run, psexec -d -i -s wt -d "%UserProfile%\Desktop", , Hide
+    }
+    else if (winClass = "CabinetWClass" && path != "") {
+        Run, psexec -d -i -s wt -d "%path%", , Hide
+    }
+    else {
+        Run, psexec -d -i -s wt -d "%UserProfile%", , Hide
+    }
+Return
+
+#e::
+    WinGetClass, winClass, A
+    path := GetExplorerPath()
+    if (winClass = "Progman" || winClass = "CabinetWClass") {
+        Run, e++ "%path%"
+    }
+    else {
+        Run, e++ "%path%"
+    }
+    Run, "C:\Dropbox\Tools\exe\e++.exe"
+    WinWait ahk_exe e++.exe
+    WinActivate
+Return
+
+; Similar elevation for System Informer
+^+`::Run, ti "c:\Program Files\SystemInformer\SystemInformer.exe"
+
+; -------------------------------------------------------------- ;
+; Elevate any active window
+
+; getPath() {
+;     WinGet, pid, PID, A
+;     WinGetClass, winClass, A
+
+;     if (winClass = "Progman" || winClass = "CabinetWClass") {
+;         ; For Explorer windows, get the current directory
+;         firstLine := getFirstLine()
+;         if (firstLine && firstLine != "") {
+;             ; If it's already a path, return it directly
+;             if (isPath(firstLine))
+;                 return firstLine
+                
+;             ; Otherwise, try to construct a path with the user profile
+;             EnvGet, UserProfile, UserProfile
+;             possiblePath := UserProfile . "\" . firstLine
+;             if (FileExist(possiblePath))
+;                 return possiblePath
+;         }
+;     }
+    
+;     if (pid) {
+;         ; For other windows, get the process path
+;         WinGet, exePath, ProcessPath, A
+;         if (exePath && exePath != "") {
+;             return exePath
+;         }
+;     }
+
+;     ; Default fallback
+;     return "."
+; }
+
+GetActiveWindowCommandLine() {
+    WinGet, pid, PID, A
+    WinGet, activeExe, ProcessName, A
+    
+    if (pid) {
+        ; Get command line using WMI
+        cmdLine := ""
+        for process in ComObjGet("winmgmts:").ExecQuery("Select CommandLine from Win32_Process where ProcessId=" . pid)
+            cmdLine := process.CommandLine
+        
+        if (cmdLine) {
+            return cmdLine
+        } else {
+            ; Fallback to process path if command line not available
+            WinGet, exePath, ProcessPath, A
+            if (exePath) {
+                return exePath
+            }
+        }
+    }
+    return "."
+}
+
+#c::
+    path := GetExplorerPath()
+    if (path && path != "") {
+        ; Make sure to clear the clipboard first
+        Clipboard := ""
+        ; Copy the path to the clipboard
+        Clipboard := path
+        ; Wait for the clipboard to contain data
+        ClipWait, 1
+        if (ErrorLevel) {
+            ToolTip, Failed to copy path to clipboard
+        } else {
+            ToolTip, >> "%path%"`nCopied to clipboard
+        }
+        SetTimer, RemoveToolTip, -3000
+    } else {
+        ToolTip, Could not get path
+        SetTimer, RemoveToolTip, -2000
+    }
+Return
+
+; Function to check if a process with specific command line exists
+ProcessExistsByCommandLine(cmdLine) {
+    for process in ComObjGet("winmgmts:").ExecQuery("Select ProcessId, CommandLine from Win32_Process")
+        if (InStr(process.CommandLine, cmdLine))
+            return process.ProcessId
+    return 0
+}
+
+; Shift+Win+C: Copy command line of active window to clipboard
++#c::
+    cmdLine := GetActiveWindowCommandLine()
+    if (cmdLine && cmdLine != "") {
+        ; Make sure to clear the clipboard first
+        Clipboard := ""
+        ; Copy the command line to the clipboard
+        Clipboard := cmdLine
+        ; Wait for the clipboard to contain data
+        ClipWait, 1
+        if (ErrorLevel) {
+            ToolTip, Failed to copy command line to clipboard
+        } else {
+            ToolTip, >> %cmdLine%
+        }
+        SetTimer, RemoveToolTip, -3000
+    } else {
+        ToolTip, Could not get command line
+        SetTimer, RemoveToolTip, -2000
+    }
+Return
+
+; Ctrl+Shift+Plus: Get current window exe path and run ti.exe with it
+^+=::
+    WinGet, activePid, PID, A
+    WinGet, activeExe, ProcessName, A
+    WinGet, exePath, ProcessPath, A
+    
+    if (exePath) {
+        fullCmd := "ti.exe """ . exePath . """"
+        MsgBox, 4, Command to run, %fullCmd%`n`nClick Yes to run, No to cancel
+        IfMsgBox Yes
+        {
+            ; Store the original path for comparison
+            originalPath := exePath
+            
+            ; Run the elevated command
+            Run, %fullCmd%
+            
+            ; Wait for the new process to appear (up to 250ms)
+            startTime := A_TickCount
+            newProcessFound := false
+            
+            Loop {
+                ; Check if a new process with this path exists
+                for process in ComObjGet("winmgmts:").ExecQuery("Select ProcessId, ExecutablePath from Win32_Process")
+                    if (process.ExecutablePath = originalPath && process.ProcessId != activePid) {
+                        newProcessFound := true
+                        break
+                    }
+                
+                if (newProcessFound)
+                    break
+                
+                ; Check if we've waited long enough
+                if (A_TickCount - startTime > 250)
+                    break
+                
+                Sleep, 50
+            }
+            
+            ; If no new process appeared, close the original app and try again
+            if (!newProcessFound) {
+                ; Try to close the original application gracefully
+                WinClose, ahk_pid %activePid%
+                
+                ; Wait for the app to close (up to 500ms)
+                startCloseTime := A_TickCount
+                appClosed := false
+                
+                Loop {
+                    if (!WinExist("ahk_pid " . activePid)) {
+                        appClosed := true
+                        break
+                    }
+                    
+                    if (A_TickCount - startCloseTime > 500) {
+                        ; Force kill if it didn't close gracefully
+                        Process, Close, %activePid%
+                        Sleep, 100
+                        break
+                    }
+                    
+                    Sleep, 50
+                }
+                
+                ; Try running the command again
+                Run, %fullCmd%
+            }
+        }
+    }
+Return
+
+RemoveToolTip:
+    ToolTip
+Return
+
+; -------------------------------------------------------------- ;
+; Mouse and key re-bindings
+
+; Context menu key
+; Used for fluent search
+~RWin::Send {AppsKey}
+
+; ; Task View
+~#t::Run explorer shell:::{3080F90E-D7AD-11D9-BD98-0000947B0257}
 
 
 ; Get info from Window Under Mouse without clicking on it
 ; https://autohotkey.com/board/topic/80855-get-info-from-window-under-mouse-without-clicking-on-it/?p=513888
 ; https://autohotkey.com/board/topic/80855-get-info-from-window-under-mouse-without-clicking-on-it/?p=514092
-Pause::
+F12::
     UnderCursorToggle := !UnderCursorToggle
     If (UnderCursorToggle) {
         SetTimer ToolTipUnderCursor, 250
@@ -271,42 +608,6 @@ Control Text:
     Return
 Return
 
-/*
-; WinGet, IsOldOpenSaveDialog, ID, %Window%
-IsOldOpenSaveDialog := active_hwnd
-If (IsDialog(PID))
-   IsOldOpenSaveDialog = Yes
-Info = WinGetTitle %Title%`nahk_class %ahk_class%`nahk_exe %ahk_exe%`n`nProcess Path: %Path%`nProcess ID: %PID%`nOld open/save dialog active? %IsOldOpenSaveDialog%`n`nVisible text:`n%VisibleText%
-; Info := "Window title " Title "`nWindow ahk_class " ahk_class "`nWindow ahk_exe %ahk_exe%" "`nFull path: %Path% `nVisible Text:`n"VisibleText
-; MsgBox, , Press Ctrl+C to copy to clipboard, %Info%
-Gui, Destroy
-Gui, Add, Edit, ReadOnly, %Info%
-Gui, Add, Text, , Ctrl+C to copy selected text to clipboard.`nRepeat hotkey over another window to update.
-Gui, +AlwaysOnTop
-Gui, Show
-; Gui, Add, Button, CopyInfo, Copy to clipboard
-; CopyInfo:
-;        Clipboard := Info
-; Return
-;
-; Gui, Destroy
-; Gui, +Resize
-; Gui, Add, Text, w2000 h500 center, Text
-; Gui, Add, Edit, vVar, Info
-; Gui, Show
-; Loop {
-;    GuiControl, Move, Var, w2000 h1000
-;    GuiControl,,Var, %Info%
-;    Sleep 500
-; }
-;
-; Gui, Add, Tab2,, Window under cursor info
-; Gui, Add, Edit, ReadOnly,%Info%
-; GuiControl,,%Info%,abc
-; Gui, Add, Button, default xm, Copy Tab1
-return
-*/
-
 
 ; Description: Scroll Explorer on middle mouse button drag
 ; Permalink: https://autohotkey.com/boards/viewtopic.php?t=43715
@@ -334,7 +635,7 @@ $*MButton::
     MouseGetPos, CursorX_ended, CursorY_ended, Window_ended, ClassNN_ended
     ; WinGetClass, ahk_class_ended, ahk_id %Window_ended%
     ; WinGet ahk_exe_ended, ProcessName, ahk_id %Window_ended%
-    AllowedApp := ahk_exe = "mmc.exe" or ahk_exe = "systempropertiesadvanced.exe" or ahk_exe = "filezilla.exe" or ahk_exe = "7zFM.exe" or ahk_exe = "uTorrent.exe" or InStr(ClassNN, "SysTreeView32")
+    AllowedApp := ahk_exe = "mmc.exe" or ahk_exe = "7zFM.exe" or ahk_exe = "code.exe" or InStr(ClassNN, "SysTreeView32")
     DisabledApp := ahk_exe = "sublime_text.exe" or ahk_exe = "everything.exe"
     AllowedText := InStr(VisibleText, "Tree View") or InStr(VisibleText, "FolderView") or InStr(ControlText, "ScrollBar") or InStr(ControlText, "SysListView32")
     IsToolbar := InStr(ClassNN, "ToolbarWindow") or InStr(ClassNN, "ReBarWindow") or InStr(ClassNN, "Edit") or InStr(ClassNN, "AddressBandRoot") or InStr(ClassNN, "statusbar") or InStr(ClassNN, "SysHeader") or not (ClassNN) and not (ahk_class = "Shell_TrayWnd" or ahk_class = "WorkerW") ; or ahk_exe = "mpc-hc64.exe") ?
@@ -356,45 +657,21 @@ $*MButton::
         . "`nCursorHwnd: " CursorHwnd
     if (AllowedText >= 1) ; TODO: Make ternary
         AllowedText = 1
+
     If (DisabledApp) {
-        ; TrayTip, % "Disabled app", %TrayTipText%
         SendInput, {MButton Down}
         Return
     }
-/*
-    Else if (LimitedApp) {
-        TrayTip, % "Limited app", %TrayTipText%
-        SendInput, {MButton Down}{MButton Up}
-        Return
-    }
-*/
-    Else If !(AllowedText or AllowedApp) { ; AllowedApp and AllowedKeys
-        ; TrayTip, % "Not allowed app", %TrayTipText%
+    Else If !(AllowedText or AllowedApp) {
         SendInput, {MButton Down}
         Return
     }
     Else If (IsToolbar) {
-        ; WinActivate, ahk_class ahk_class
-        TrayTipText = % TrayTipText . "`nClassNN: " ClassNN
-        ; TrayTip, % "Toolbar found ", %TrayTipText%
-        SendInput, {MButton} ; Activate control
-        ; SendInput, {MButton Down}
+        SendInput, {MButton}
         Return
     }
     Else {
-/*
-        TrayTipText = % TrayTipText
-            . "`nClassNN: " ClassNN
-            . " `nIs toolbar: "  IsToolbar
-        Else {
-            TrayTip, % "Scrolling activated", %TrayTipText%
-        }
-*/
-        SendInput, {MButton} ; Activate control
-        ; TrayTip, % "Scrolling activated", %TrayTipText%
-        ; Process, Exist, %Window%
-        ; ToolTip, % DllCall("WindowFromPoint", "int64", CursorX | (CursorY << 32), "Ptr")
-        ; ControlFocus, CursorHw, WinTitle, WinText, ExcludeTitle, ExcludeText]
+        ; SendInput, {MButton} ; Disabled - triggers Explorer's native auto-scroll
         MiddleScroll := 1
         ; SetSystemCursor("SIZEALL")
         Sensitivity = 10 ; How far the middle mouse wheel has to be dragged before scrolling is triggered
@@ -416,448 +693,19 @@ $*MButton::
         $*MButton Up::
             DllCall("SystemParametersInfo", UInt, 0x69, UInt, 3, UInt, 0, UInt, 0) ; Set back to 3 lines scrolled
             SetTimer, MBScroll, off
-            ; SetSystemCursor()
             MiddleScroll := 0
             SendInput {MButton Up}
-            ; SetSystemCursor(Cursor="") {
-            ;     SystemCursors := "32512IDC_ARROW|32513IDC_IBEAM|32514IDC_WAIT|32515IDC_CROSS|32516IDC_UPARROW|32642IDC_SIZENWSE|32643IDC_SIZENESW|32644IDC_SIZEWE|32645IDC_SIZENS|32 646IDC_SIZEALL|32648IDC_NO|32649IDC_HAND|32650IDC_APPSTARTING|32651IDC_HELP"
-            ;     If (Cursor = "")
-            ;         Return DllCall("SystemParametersInfo", "UInt", 0x57, "UInt", 0, "UInt", 0, "UInt", 0) 
-            ;     If (StrLen(SystemCursors) = 221)
-            ;         Loop, Parse, SystemCursors, |
-            ;             StringReplace, SystemCursors, SystemCursors, %A_LoopField%, % DllCall("LoadCursor", "UInt", 0, "Int", SubStr(A_LoopField, 1, 5)) A_LoopField
-            ;     If !(Cursor := SubStr(SystemCursors, InStr(SystemCursors "|", "IDC_" Cursor "|") - 5 - p := (StrLen(SystemCursors) - 221) / 14, 5))
-            ;         MsgBox, 262160, %A_ScriptName% - %A_ThisFunc%(): Error, Invalid cursor name!
-            ;     Else
-            ;         Loop, Parse, SystemCursors, |
-            ;         {
-            ;             ; 
-            ;             ; IDC_ARROW := 32512
-            ;             ; IDC_IBEAM := 32513
-            ;             ; IDC_WAIT := 32514
-            ;             ; IDC_CROSS := 32515
-            ;             ; IDC_UPARROW := 32516
-            ;             ; IDC_SIZE := 32640
-            ;             ; IDC_ICON := 32641
-            ;             ; IDC_SIZENWSE := 32642
-            ;             ; IDC_SIZENESW := 32643
-            ;             ; IDC_SIZEWE := 32644
-            ;             ; IDC_SIZENS := 32645
-            ;             ; IDC_SIZEALL := 32646
-            ;             ; IDC_NO := 32648
-            ;             ; IDC_HAND := 32649
-            ;             ; IDC_APPSTARTING := 32650
-            ;             ; IDC_HELP := 32651
-            ;             ;
-            ;             ; DllCall("SetSystemCursor", "UInt", DllCall("CopyIcon", "UInt", Cursor), "Int", SubStr(A_LoopField, 6, p))
-            ;             ToolTip, Original cursor: %Cursor% " Replacement: " SubStr(A_LoopField, 6, p))
-            ;         }
-                    
-            ;     }
-
         Return
     }
 Return
 #IfWinNotActive
-; #If
 
-/*
-; Drag mouse middle button to scroll 
-; Tags, drag explorer, scroll right, scroll down,
-; https://autohotkey.com/board/topic/42020-using-right-click-and-mouse-movement-as-a-scroll-wheel/?p=269308
-; https://autohotkey.com/board/topic/42020-using-right-click-and-mouse-movement-as-a-scroll-wheel/?p=270247
-; TODO: https://autohotkey.com/board/topic/55289-dragtoscroll-universal-drag-flingflick-scrolling/
-
-; $*MButton::
-RButton & LButton:: GoSub StartWheeling
-~*LButton Up::      GoSub StopWheeling
-~*RButton Up::      GoSub StopWheeling
-wheelingSensitivity := 10 ; sensitivity to mouse movement (higher is more sensitive)
-wheelingPeriod := 100 ; timer period
-WatchCursor:
-    MouseGetPos, wheelingNewMouseX, wheelingNewMouseY
-    taps := Round((wheelingNewMouseX - wheelingMouseX)/wheelingSensitivity)
-    clicks := Round((wheelingNewMouseY - wheelingMouseY)/wheelingSensitivity)
-    MouseMove wheelingMouseX, wheelingMouseY
-    if clicks > 0
-        MouseClick WheelDown,,,abs(clicks)
-    else if clicks < 0
-        MouseClick WheelUp,,,abs(clicks)
-    if taps > 0
-        SendInput % "{Right "abs(taps)"}"
-    else if taps < 0
-        SendInput % "{Left "abs(taps)"}"
-return
-StartWheeling:
-    SystemCursor("OFF")
-    MouseGetPos, wheelingMouseX, wheelingMouseY
-    SetTimer WatchCursor, %wheelingPeriod%
-return
-StopWheeling:
-    SetTimer WatchCursor, Off
-    SystemCursor("ON")
-return
-;===============================================================================================================================================================
-; from the AHK documentation...
-; https://www.autohotkey.com/docs/commands/DllCall.htm
-SystemCursor(OnOff=1)   ; INIT = "I","Init"; OFF = 0,"Off"; TOGGLE = -1,"T","Toggle"; ON = others
-{
-    static AndMask, XorMask, $, h_cursor
-        ,c0,c1,c2,c3,c4,c5,c6,c7,c8,c9,c10,c11,c12,c13 ; system cursors
-        , b1,b2,b3,b4,b5,b6,b7,b8,b9,b10,b11,b12,b13   ; blank cursors
-        , h1,h2,h3,h4,h5,h6,h7,h8,h9,h10,h11,h12,h13   ; handles of default cursors
-    if (OnOff = "Init" or OnOff = "I" or $ = "")       ; init when requested or at first call
-    {
-        $ = h                                          ; active default cursors
-        VarSetCapacity( h_cursor,4444, 1 )
-        VarSetCapacity( AndMask, 32*4, 0xFF )
-        VarSetCapacity( XorMask, 32*4, 0 )
-        system_cursors = 32512,32513,32514,32515,32516,32642,32643,32644,32645,32646,32648,32649,32650
-        StringSplit c, system_cursors, `,
-        Loop %c0%
-        {
-            h_cursor   := DllCall( "LoadCursor", "uint",0, "uint",c%A_Index% )
-            h%A_Index% := DllCall( "CopyImage",  "uint",h_cursor, "uint",2, "int",0, "int",0, "uint",0 )
-            b%A_Index% := DllCall("CreateCursor","uint",0, "int",0, "int",0
-                , "int",32, "int",32, "uint",&AndMask, "uint",&XorMask )
-        }
-    }
-    if (OnOff = 0 or OnOff = "Off" or $ = "h" and (OnOff < 0 or OnOff = "Toggle" or OnOff = "T"))
-        $ = b  ; use blank cursors
-    else
-        $ = h  ; use the saved cursors
-
-    Loop %c0%
-    {
-        h_cursor := DllCall( "CopyImage", "uint",%$%%A_Index%, "uint",2, "int",0, "int",0, "uint",0 )
-        DllCall( "SetSystemCursor", "uint",h_cursor, "uint",c%A_Index% )
-    }
-}
-;===============================================================================================================================================================
-*/
-
-
-/*
-; Add item to AHK tray
-; https://autohotkey.com/docs/commands/Menu.htm
-Menu Default Menu, Standard
-Menu, tray, add    ; Creates a separator line.
-Menu, tray, add, Item1, MenuHandler    ; Creates a new menu item.
-return
-MenuHandler:
-MsgBox You selected %A_ThisMenuItem% from menu %A_ThisMenu%.
-return
-*/
-
-/*
-TODO: 
-- Scroll Explorer more smoothly when middle button dragging
-- Create Explorer shortcuts to symlinks using mklink %1
-- Close VirusTotal window when it finishes checking/uploading hash
-- Close uTorrent window when activated from Chrome
-- MPC Delete key should delete file
-- Kiwi should minimize window when closed
-- Double click in Everything and uTorrent should launch from Explorer process (/s or /e on folder)
-    - ClassNN: Everything = SysListView321, uTorrent: = SysListView322
-    - ahk_class: Everything = EVERYTHING, uTorrent = µTorrent*
-    - Control text in common: SysListView321, SysHeader321
-*/
-
-/*
-; Description: Get a TrayTip whenever your script is reloaded
-; Permalink: https://autohotkey.com/boards/viewtopic.php?t=43865
-; Author: aph
-; Version: 0.1
-FileGetAttrib, attribs, %A_ScriptFullPath%
-if (attribs="A") {
-   FileSetAttrib, -A, %A_ScriptFullPath%
-   TrayTip, Reloaded script, %A_ScriptFullPath%,, 1
-}
-OnExit, ExitSub
-Return
-ExitSub:
-   if (A_ExitReason="Reload") {
-       FileSetAttrib, +A, %A_ScriptFullPath%
-   }
-ExitApp
-*/
-
-/*
-;
-; Detect Open/Save dialog
-; https://autohotkey.com/board/topic/9362-detect-opensave-dialog/
-; 
-#n::
-   If (DialogWindowActive())
-       MsgBox, Open/Save dialog detected
-   Else
-       MsgBox, Open/Save not detected
-Return
-
-DialogWindowActive()
-{ 
-   WinGet, active_hwnd, ID, A
-   {
-       if ( IsDialog( active_hwnd ) )
-           return 1
-       else 
-           return 0
-   } 
-
-   return 0
-}
-
-; ------------------------------------------------------------------------------------------------
-
-IsDialog(dlg)
-{
-
-   local toolbar, edit, combo, button
-
-   toolbar := FindWindowExID(dlg, "ToolbarWindow32", "0x440")        ; windows XP
-   if (toolbar = "0")
-       toolbar := FindWindowExID(dlg, "ToolbarWindow32", "0x001")    ; windows 2k
-
-   edit     := FindWindowExID(dlg, "Edit", "0x480")            ; edit field
-   combo    := FindWindowExID(dlg, "ComboBoxEx32", "0x47C")    ; comboboxex field
-   button := FindWindowExID(dlg, "Button", "0x001")        ; second button
-
-
-   if (toolbar && (combo || edit) && button) 
-       return 1
-   else
-       return 0
-}
-
-
-; ------------------------------------------------------------------------------------------------
-; Iterate through controls with the same class, find the one with ctrlID and return its handle
-; Used for finding a specific control on a dialog
-
-FindWindowExID(dlg, className, ctrlId)
-{
-   local ctrl, id
-
-   ctrl = 0
-   Loop
-   {
-       ctrl := DllCall("FindWindowEx", "uint", dlg, "uint", ctrl, "str", className, "uint", 0 )
-       if (ctrlId = "0")
-       {
-           return ctrl
-       }
-
-       if (ctrl != "0")
-       {
-           id := DllCall( "GetDlgCtrlID", "uint", ctrl )
-           if (id = ctrlId) 
-               return ctrl             
-       }
-       else 
-           return 0
-   }
-}
-*/
-
-
-; Save on Firefox right click
-; SetTitleMatchMode, 2
-; #IfWinActive Mozilla Firefox
-; #IfWinActive, ahk_class MozillaWindowClass
-#IfWinActive, ahk_exe firefox.exe
-$RButton::
-   Sleep 150
-   SendInput {RButton}
-   #IfWinActive, ahk_exe firefox.exe
-       Sleep 50
-       Send v
-       Sleep 150
-       #IfWinActive, Save
-       ; WinWaitActive, Save
-       ; {
-           Sleep 100
-           SendInput {Enter}
-           Sleep 100
-           SendInput {Enter}
-           Sleep 50
-           SendInput {Enter}
-           Sleep 50
-           #IfWinActive, Save
-                SendInput n
-                SendInput {Esc}
-           #IfWinActive
-           ; Sleep 50
-           ; SendInput {Esc}
-       ; }
-   #IfWinActive
-Return
-; #IfWinActive
-; SetTitleMatchMode, 1
-
-
-/*
-; Close VirusTotal window when it comes up
-; http://www.autohotkey.com/board/topic/95834-using-winwait-effectively-or-how-else-should-i-execute-an-action-when-a-pop-up-window-appears/#entry603588
-; https://autohotkey.com/board/topic/121689-virustotal-uploader-script-to-auto-close-its-dialog-windows/
-
-; Not working. Check https://autohotkey.com/boards/viewtopic.php?t=13199 (Simple script won't seem to loop WinWaitActive):
-;
-; SetTitleMatchMode, RegEx
-; Loop 
-; {
-;     IfWinActive,AutoHotkey Help ; Wait for user to navigate to DBA, and select to Print a Traveler
-;         {
-;             Gui, Show,, Auto Traveler
-;             WinWaitClose, Auto Traveler
-;         }
-;     Sleep, 100
-; }
-; return
-; SetTitleMatchMode, 1
-
-Loop 
-{
-    WinWait, VirusTotal Uploader
-    IfWinExist, VirusTotal Uploader
-        {
-        ControlGetText, Status, Static1
-        IfInString, Status, Checking, WinHide
-        IfInString, Status, Hash found
-            {
-                Sleep, 100
-                WinClose
-            }
-        }
-    Sleep, 500
-}
-Return
-
-TODO:
-μTorrent
-ahk_class #32770
-ahk_exe uTorrent.exe
-Focused control:
-ClassNN: Button1
-Text: &Yes
-
-Dropbox Notification
-ahk_class Qt5QWindowToolSaveBits
-ahk_exe Dropbox.exe
-*/
-
-
+; ==============================================================================================================
 
 ; VLC binding to go to next file on mouse middle button press
 #IfWinActive ahk_class QWidget
 $*MButton::Send n
 #IfWinActive
-
-
-/*
-;
-; Snap windows to edges of screen
-; https://autohotkey.com/board/topic/44474-make-windows-snap-to-the-edges-of-the-screen/
-;
-#if (WinActive("ahk_class QWidget") and (MouseIsOver "ahk_class QWidget"))
-~LButton::
-CoordMode, Mouse    ; Switch to screen/absolute coordinates.
-MouseGetPos, EWD_MouseStartX, EWD_MouseStartY, EWD_MouseWin
-WinGetPos, EWD_OriginalPosX, EWD_OriginalPosY,,, ahk_id %EWD_MouseWin%
-WinGet, EWD_WinState, MinMax, ahk_id %EWD_MouseWin% 
-if EWD_WinState = 0    ; Only if the window isn't maximized 
-       SetTimer, EWD_WatchMouse, 10 ; Track the mouse as the user drags it.
-Return
-#IfWinActive
-
-EWD_WatchMouse:
-GetKeyState, EWD_LButtonState, LButton, P
-if EWD_LButtonState = U    ; Button has been released, so drag is complete.
-{
-       SetTimer, EWD_WatchMouse, off
-       Return
-}
-GetKeyState, EWD_EscapeState, Escape, P
-if EWD_EscapeState = D    ; Escape has been pressed, so drag is cancelled.
-{
-       SetTimer, EWD_WatchMouse, off
-       WinMove, ahk_id %EWD_MouseWin%,, %EWD_OriginalPosX%, %EWD_OriginalPosY%
-       Return
-}
-; Otherwise, reposition the window to match the change in mouse coordinates
-; caused by the user having dragged the mouse:
-CoordMode, Mouse
-MouseGetPos, EWD_MouseX, EWD_MouseY
-WinGetPos, EWD_WinX, EWD_WinY,,, ahk_id %EWD_MouseWin%
-SetWinDelay, -1     ; Makes the below move faster/smoother.
-WinMove, ahk_id %EWD_MouseWin%,, EWD_WinX + EWD_MouseX - EWD_MouseStartX, EWD_WinY + EWD_MouseY - EWD_MouseStartY
-EWD_MouseStartX := EWD_MouseX    ; Update for the next timer-call to this subroutine.
-EWD_MouseStartY := EWD_MouseY
-Return
-
-snap_prox = 20
-KeyWait, LButton
-SysGet, screen, MonitorWorkArea
-WinGetActiveStats, title_act, w_act, h_act, x_act, y_act ; active window title and dimensions
-If (w_act < screenright-snap_prox) {
-       If (x_act > screenleft-snap_prox AND x_act < screenleft OR x_act < screenleft+snap_prox AND x_act > screenleft)
-               WinMove, %title_act%,, screenLeft
-                       If (x_act + w_act > screenright-snap_prox AND x_act + w_act < screenright OR x_act + w_act < screenright+snap_prox AND x_act + w_act > screenright)
-                               WinMove, %title_act%,, (screenright-w_act)
-}
-If (h_act < screenbottom-snap_prox) {
-       If (y_act > screentop-snap_prox AND y_act < screentop OR y_act < screentop+snap_prox AND y_act > screentop)
-               WinMove, %title_act%,,, screentop
-       If (y_act + h_act > screenbottom-snap_prox AND y_act + h_act    < screenbottom OR y_act + h_act < screenbottom+snap_prox AND y_act + h_act > screenbottom)
-               WinMove, %title_act%,,, (screenbottom-h_act)
-}
-Return
-*/
-
-; ;
-; ; Multiply mouse wheel speed in Eclipse main edit control window
-; ;
-; #IfWinActive ahk_class SWT_Window0
-; WheelUp::
-; WheelDown::
-; ControlGetFocus, active
-; StringGetPos, pos, active, SWT_Window
-; ; MsgBox, pos
-; Critical
-; if (pos = 0) {
-;        WheelSteps := A_EventInfo*2
-;        SendInput, {%A_ThisHotkey% %WheelSteps%}
-; }
-; else {
-;        WheelSteps := A_EventInfo
-;        SendInput, {%A_ThisHotkey%}
-; }
-; Return
-; #IfWinActive
-
-
-; Restore Win+X key functionality disabled via Group Policy on CORE
-if (A_ComputerName = "CORE") {
-    #r::
-        SetTitleMatchMode, 3
-        IfWinExist, Run
-            WinActivate
-        else
-            Run, shell:::{2559a1f3-21d7-11d4-bdaf-00c04f60b9f0}
-        IfWinNotActive
-            WinWait, Run
-        WinActivate
-    Return
-
-
-    ; Win+D = Show desktop
-    toggle = 0
-    #d::
-        if toggle := !toggle
-            WinMinimizeAll
-        else
-            WinMinimizeAllUndo
-    Return
-}
 
 ; Win+L: Turn off monitor
 ; TODO: Limit to local network. https://autohotkey.com/board/topic/25456-which-string-use-workgroup/?p=165074
@@ -873,35 +721,69 @@ if (A_ComputerName = "CORE") {
         SendMessage, 0x112, 0xF170, 2,, Program Manager ; Shut off monitor
 Return
 
+#IfWinActive, Open
+    !d::Send {Alt Down}n{Alt Up}
+#IfWinActive
 
-/*
-; Win+E = Open Explorer window
-#e::
-   IfWinExist Run
-           WinActivate
-   Else
-           Run ::{20D04FE0-3AEA-1069-A2D8-08002B30309D}
-           IfWinNotActive
-                   WinWait, Computer
-                   WinActivate
+#IfWinActive ahk_class CabinetWClass ; Only apply to Windows Explorer
+    MButton::WinActivate, A
+#IfWinActive
+
+; ; ; Win+L: Turn off monitor
+; ; ; TODO: Limit to local network. https://autohotkey.com/board/topic/25456-which-string-use-workgroup/?p=165074
+
+^!l::
+    Run, psexec -l nircmd cmdwait 200 monitor off
+    SendMessage, 0x112, 0xF140, 0,, Program Manager
+    Sleep 5000
+    VarSetCapacity(screen_saver_active,4,0)
+    SPI_GETSCREENSAVERRUNNING = 0x0072
+    result := DllCall( "user32.dll\SystemParametersInfo", "uint", SPI_GETSCREENSAVERRUNNING, "uint", 0, "uint*", screen_saver_active, "uint", 0 )
+    WinGetActiveTitle, Title
+    if (Title = "")
+        SendMessage, 0x112, 0xF170, 2,, Program Manager ; Shut off monitor
 Return
-*/
 
+; Edit the currently selected file
+#IfWinActive ahk_class CabinetWClass ; Only run if Explorer window is active
+^e:: ; Ctrl+E hotkey
+    ; Get the path of the selected file
+    for window in ComObjCreate("Shell.Application").Windows
+    {
+        if (window.hwnd == WinActive("A"))
+        {
+            selected := window.Document.SelectedItems.Item(0).Path
+            break
+        }
+    }
+    ; Open the selected file with Notepad
+    Run, deelevate64 "C:\Program Files\Sublime Text\subl.exe" "\"%selected%\""
+return
+#IfWinActive
 
-; Win+S = Run or activate Everything
+#IfWinActive ahk_class #32770 ; Only run if a file dialog is active
+^e:: ; Ctrl+E hotkey
+    ; Get the path of the selected file
+    ControlGetText, selected, Edit1, A
+    ; Open the selected file with Notepad
+    Run, "C:\Program Files\Sublime Text\subl.exe" "%selected%"
+return
+#IfWinActive
+
+; Alt+Shift+S = Run or activate Everything
 ; to send original key:
 ; SendInput {RWin Down}s{RwinUp}
 DetectHiddenWindows, On
-#s::
-;     If WinActive("ahk_class EVERYTHING")
-;         Send !d
-;     Else If WinExist("ahk_class EVERYTHING")
++!s::
     If WinExist("ahk_class EVERYTHING") {
         WinShow
         WinActivate
     }
-    Else
-        Run RunFromProcess-x64 explorer.exe C:\Program Files\Everything\Everything.exe
+    Else {
+        Run, DeElevate "C:\Program Files\Everything 1.5a\Everything64.exe"
+        WinWait ahk_exe Everything64.exe
+        WinActivate
+    }
 Return
 DetectHiddenWindows, Off
 
@@ -913,34 +795,6 @@ Esc::
     WinHide
 Return
 #IfWinActive
-
-/*
-#s::
-SetTitleMatchMode, RegEx
-IfWinActive ^(.* - )?Everything$
-        Return 
-IfWinExist ^(.* - )?Everything$
-        WinActivate
-Else
-        Run RunFromProcess-x64 explorer.exe C:\Program Files\Everything\Everything.exe
-        IfWinNotActive
-                WinWait, ^(.* - )?Everything
-                WinActivate
-Return
-
-; Doesn't work
-SetTitleMatchMode, RegEx
-#IfWinActive ^(.* - )?Everything$
-    WinClose
-#IfWinActive
-
-DetectHiddenWindows, On
-#IfWinNotExist ^(.* - )?Everything$
-    Run RunFromProcess-x64 explorer.exe C:\Program Files\Everything\Everything.exe
-#IfWinExist
-DetectHiddenWindows, Off
-SetTitleMatchMode, 1
-*/
 
 
 ; From http://www.howtogeek.com/howto/8955/make-backspace-in-windows-7-or-vista-explorer-go-up-like-xp-did/
@@ -970,50 +824,6 @@ $XButton2::
     Sleep 100
 }
 Return
-
-
-; Spotify binding to go to next song
-; http://www.stackoverflow.com/questions/28957636/hotkey-for-next-song-in-spotify
-DetectHiddenWindows, On 
-#IfWinExist ahk_class SpotifyMainWindow
-+!Left::
-    Send {Media_Prev}
-    ; https://www.autohotkey.com/board/topic/36239-spotify-global-hotkeys/
-    ; ControlSend, ahk_parent, ^{Left}, ahk_class SpotifyMainWindow 
-    ; TrayTip, , Previous track
-return 
-; https://autohotkey.com/board/topic/94263-problem-with-using-multiple-mouse-buttons-as-hotkey/
-~XButton1 & XButton2::
-~XButton2 & XButton1::
-+!Right::
-    ; DetectHiddenWindows, On 
-    Send {Media_Next}
-    ; ControlSend, ahk_parent, ^{Right}, ahk_class SpotifyMainWindow 
-    ; DetectHiddenWindows, Off
-    ; TrayTip, , Next track
-Return
-
-/*
-; WIP: Spotify toast on song change
-; https://github.com/nachmore/toastify
-; https://github.com/Anthonyrules144/Spotify-Toast
-SetTimer, Toast, 1000
-   ToolTip,
-Return
-Toast:
-   DetectHiddenWindows, On
-   WinGetTitle, text, ahk_class SpotifyMainWindow
-   ToolTip, %text%
-   StringTrimLeft, text2, text, 10
-   IfNotInString, Title, %text2%
-   {
-       Title = %text2%
-       TrayTip, % Title
-   }
-Return
-*/
-#IfWinExist
-DetectHiddenWindows, Off
 
 
 ; Accelerated scrolling in MPC
@@ -1077,43 +887,3 @@ Return
 +WheelDown::Send {Click WheelDown 10}
     ; ToolTip, WheelDown MPC
 #IfWinActive
-
-
-/*
-; https://autohotkey.com/board/topic/60697-copying-all-entered-text-to-clipboard-resolved/
-
-#e::
-MouseGetPos, CursorX, CursorY, Window, Control
-WinGetTitle, Title, ahk_id %Window%
-WinGetClass, ahk_class, ahk_id %Window%
-WinGetText, VisibleText, ahk_id %Window%
-WinGet ahk_exe, ProcessName, ahk_id %Window%
-WinGet, Path, ProcessPath, ahk_id %Window%
-Info = Title %Title% `nahk_class %ahk_class% `nahk_exe %ahk_exe% `nPath: %Path% `nVisible Text:`n%VisibleText%
-Gui, Add, Tab2,, Window under cursor info
-Gui, Add, Edit, ReadOnly,%Info%
-Gui, Add, Button, default xm, Copy Tab1
-Gui, Show
-return
-ButtonCopyTab1:
-gui,submit,nohide
-clipboard = Name:%Info%
-return
-
-#w::
-MouseGetPos, CursorX, CursorY, Window, Control
-WinGetTitle, Title, ahk_id %Window%
-WinGetClass, ahk_class, ahk_id %Window%
-WinGetText, VisibleText, ahk_id %Window%
-WinGet ahk_exe, ProcessName, ahk_id %Window%
-WinGet, Path, ProcessPath, ahk_id %Window%
-Info = Title %Title% `nahk_class %ahk_class% `nahk_exe %ahk_exe% `nPath: %Path% `nVisible Text:`n%VisibleText%
-; Info := "Window title " Title "`nWindow ahk_class " ahk_class "`nWindow ahk_exe %ahk_exe%" "`nFull path: %Path% `nVisible Text:`n"VisibleText
-MsgBox, , Press Ctrl+C to copy to clipboard, %Info%
-; Gui, Add, Edit, ReadOnly,%Info%
-; Gui, Show
-; Gui, Add, Tab2,, Window under cursor info
-; Gui, Add, Edit, ReadOnly,%Info%
-; Gui, Add, Button, default xm, Copy Tab1
-return
-*/
