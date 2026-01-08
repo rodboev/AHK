@@ -624,7 +624,7 @@ Return
 ; #If !(WinActive("ahk_class EVERYTHING") || WinActive("Chrome_WidgetWin_1"))
 ; #IfWinNotActive ahk_class EVERYTHING || ahk_class Chrome_WidgetWin_1
 #IfWinNotActive ahk_exe vmware.exe
-$*MButton::
+$MButton::
     MouseGetPos, CursorX, CursorY, Window, ClassNN
     WinGetTitle, Title, ahk_id %Window%
     WinGetClass, ahk_class, ahk_id %Window%
@@ -637,6 +637,7 @@ $*MButton::
     ; WinGet ahk_exe_ended, ProcessName, ahk_id %Window_ended%
     AllowedApp := ahk_exe = "mmc.exe" or ahk_exe = "7zFM.exe" or ahk_exe = "code.exe" or InStr(ClassNN, "SysTreeView32")
     DisabledApp := ahk_exe = "sublime_text.exe" or ahk_exe = "everything.exe"
+    PassThroughApp := ahk_class != "CabinetWClass"
     AllowedText := InStr(VisibleText, "Tree View") or InStr(VisibleText, "FolderView") or InStr(ControlText, "ScrollBar") or InStr(ControlText, "SysListView32")
     IsToolbar := InStr(ClassNN, "ToolbarWindow") or InStr(ClassNN, "ReBarWindow") or InStr(ClassNN, "Edit") or InStr(ClassNN, "AddressBandRoot") or InStr(ClassNN, "statusbar") or InStr(ClassNN, "SysHeader") or not (ClassNN) and not (ahk_class = "Shell_TrayWnd" or ahk_class = "WorkerW") ; or ahk_exe = "mpc-hc64.exe") ?
     ; TODO: PassThroughToApp = ahk_exe = "mpc-hc64.exe")
@@ -673,6 +674,7 @@ $*MButton::
     Else {
         ; SendInput, {MButton} ; Disabled - triggers Explorer's native auto-scroll
         MiddleScroll := 1
+        ScrollTriggered := 0
         ; SetSystemCursor("SIZEALL")
         Sensitivity = 10 ; How far the middle mouse wheel has to be dragged before scrolling is triggered
         MouseGetPos, X1, Y1, , c, 2
@@ -682,6 +684,7 @@ $*MButton::
             MouseGetPos, X2, Y2
             Distance := Abs(Y2-Y1)
             If (Distance >= Sensitivity) {
+                ScrollTriggered := 1
                 Rounded := % Round((Distance / 200)**1.25+1)
                 DllCall("SystemParametersInfo", UInt, 0x69, UInt, Round(Ln(Rounded)+1), UInt, 0, UInt, 0) ; Vary lines scrolled by distance of drag 
                 Timer := Round(OrigTimer - (OrigTimer/2*Percent/100))
@@ -690,11 +693,13 @@ $*MButton::
                 SendInput, % "{Blind}{Wheel" (Y2 > Y1 ? "Down" : "Up") " " Rounded "}"
             }
         Return
-        $*MButton Up::
+        $MButton Up::
             DllCall("SystemParametersInfo", UInt, 0x69, UInt, 3, UInt, 0, UInt, 0) ; Set back to 3 lines scrolled
             SetTimer, MBScroll, off
             MiddleScroll := 0
-            SendInput {MButton Up}
+            If (!ScrollTriggered and PassThroughApp)
+                Click Middle
+            ScrollTriggered := 0
         Return
     }
 Return
