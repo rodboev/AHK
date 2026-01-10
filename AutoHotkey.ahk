@@ -608,103 +608,6 @@ Control Text:
     Return
 Return
 
-
-; Description: Scroll Explorer on middle mouse button drag
-; Permalink: https://autohotkey.com/boards/viewtopic.php?t=43715
-; Tags: Drag Explorer
-; Author: aph
-; Version: 0.3
-; TODO:
-; - Make smoother
-; https://autohotkey.com/board/topic/119433-how-to-send-a-smooth-scroll-signal/
-; https://autohotkey.com/board/topic/55289-dragtoscroll-universal-drag-flingflick-scrolling/
-; - Hide cursor?
-; https//autohotkey.com/board/topic/5727-hiding-the-mouse-cursor/?p=35221
-; - Block MButton on MPC / VLC?
-; #If !(WinActive("ahk_class EVERYTHING") || WinActive("Chrome_WidgetWin_1"))
-; #IfWinNotActive ahk_class EVERYTHING || ahk_class Chrome_WidgetWin_1
-#IfWinNotActive ahk_exe vmware.exe
-$MButton::
-    MouseGetPos, CursorX, CursorY, Window, ClassNN
-    WinGetTitle, Title, ahk_id %Window%
-    WinGetClass, ahk_class, ahk_id %Window%
-    WinGet ahk_exe, ProcessName, ahk_id %Window%
-    WinGet ahk_PID, PID, ahk_id %Window%
-    WinGetText, VisibleText, ahk_id %Window%
-    WinGet, ControlText, ControlList, ahk_id %Window%
-    MouseGetPos, CursorX_ended, CursorY_ended, Window_ended, ClassNN_ended
-    ; WinGetClass, ahk_class_ended, ahk_id %Window_ended%
-    ; WinGet ahk_exe_ended, ProcessName, ahk_id %Window_ended%
-    AllowedApp := ahk_exe = "mmc.exe" or ahk_exe = "7zFM.exe" or ahk_exe = "code.exe" or InStr(ClassNN, "SysTreeView32")
-    DisabledApp := ahk_exe = "sublime_text.exe" or ahk_exe = "everything.exe"
-    PassThroughApp := ahk_class != "CabinetWClass"
-    AllowedText := InStr(VisibleText, "Tree View") or InStr(VisibleText, "FolderView") or InStr(ControlText, "ScrollBar") or InStr(ControlText, "SysListView32")
-    IsToolbar := InStr(ClassNN, "ToolbarWindow") or InStr(ClassNN, "ReBarWindow") or InStr(ClassNN, "Edit") or InStr(ClassNN, "AddressBandRoot") or InStr(ClassNN, "statusbar") or InStr(ClassNN, "SysHeader") or not (ClassNN) and not (ahk_class = "Shell_TrayWnd" or ahk_class = "WorkerW") ; or ahk_exe = "mpc-hc64.exe") ?
-    ; TODO: PassThroughToApp = ahk_exe = "mpc-hc64.exe")
-    ; IsToolbar := InStr(ClassNN, "ToolbarWindow") or InStr(ClassNN, "ReBarWindow") or InStr(ClassNN, "Edit") or InStr(ClassNN, "AddressBandRoot") or InStr(ClassNN, "statusbar") or InStr(ClassNN, "SysHeader") and !(ClassNN) or !(ahk_class = "Shell_TrayWnd") or !(ahk_class = "WorkerW") ; or ahk_exe = "mpc-hc64.exe") ?
-    ; AllowedKeys := GetKeyState("LWin", "D")
-    ; AllowedKeys ? "MButton Up" : "MButton Down"
-    ; Sublime := ahk_exe = "sublime_text.exe"
-    ; SublimeModifiers := GetKeyState("Alt", "D") or (GetKeyState("LWin", "D")) or (GetKeyState("Ctrl", "D")) or (GetKeyState("Shift", "D"))
-    TrayTipText = % ""
-        . "AllowedApp: " AllowedApp
-        ; . "`nAllowedKeys: " AllowedKeys
-        ; . "`nSublime: " Sublime
-        ;. "`nModifiers: " SublimeModifiers
-        ; . "`n"
-        . "`nTitle: " Title
-        . "`nahk_exe: " ahk_exe
-        . "`nahk_class: " ahk_class
-        . "`nCursorHwnd: " CursorHwnd
-    if (AllowedText >= 1) ; TODO: Make ternary
-        AllowedText = 1
-
-    If (DisabledApp) {
-        SendInput, {MButton Down}
-        Return
-    }
-    Else If !(AllowedText or AllowedApp) {
-        SendInput, {MButton Down}
-        Return
-    }
-    Else If (IsToolbar) {
-        SendInput, {MButton}
-        Return
-    }
-    Else {
-        ; SendInput, {MButton} ; Disabled - triggers Explorer's native auto-scroll
-        MiddleScroll := 1
-        ScrollTriggered := 0
-        ; SetSystemCursor("SIZEALL")
-        Sensitivity = 10 ; How far the middle mouse wheel has to be dragged before scrolling is triggered
-        MouseGetPos, X1, Y1, , c, 2
-        OrigTimer := 50 ; How quickly the file list scrolls
-        SetTimer, MBScroll, %OrigTimer%
-        MBScroll:
-            MouseGetPos, X2, Y2
-            Distance := Abs(Y2-Y1)
-            If (Distance >= Sensitivity) {
-                ScrollTriggered := 1
-                Rounded := % Round((Distance / 200)**1.25+1)
-                DllCall("SystemParametersInfo", UInt, 0x69, UInt, Round(Ln(Rounded)+1), UInt, 0, UInt, 0) ; Vary lines scrolled by distance of drag 
-                Timer := Round(OrigTimer - (OrigTimer/2*Percent/100))
-                SetTimer, MBScroll, %Timer%
-                Percent := (A_ScreenHeight - (Max(Y1, Abs(Y1-A_ScreenHeight)) - Distance)) / A_ScreenHeight * 100
-                SendInput, % "{Blind}{Wheel" (Y2 > Y1 ? "Down" : "Up") " " Rounded "}"
-            }
-        Return
-        $MButton Up::
-            DllCall("SystemParametersInfo", UInt, 0x69, UInt, 3, UInt, 0, UInt, 0) ; Set back to 3 lines scrolled
-            SetTimer, MBScroll, off
-            MiddleScroll := 0
-            If (!ScrollTriggered and PassThroughApp)
-                Click Middle
-            ScrollTriggered := 0
-        Return
-    }
-Return
-#IfWinNotActive
-
 ; ==============================================================================================================
 
 ; VLC binding to go to next file on mouse middle button press
@@ -728,10 +631,6 @@ Return
 
 #IfWinActive, Open
     !d::Send {Alt Down}n{Alt Up}
-#IfWinActive
-
-#IfWinActive ahk_class CabinetWClass ; Only apply to Windows Explorer
-    MButton::WinActivate, A
 #IfWinActive
 
 ; ; ; Win+L: Turn off monitor
