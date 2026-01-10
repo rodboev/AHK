@@ -557,6 +557,48 @@ Return
     WinGet, WindowPID, PID, ahk_id %Window%
     WinGet, ControlText, ControlList, ahk_id %Window%
     CursorHwnd := DllCall("WindowFromPoint", "int64", CursorX | (CursorY << 32), "Ptr")
+
+    ; UIA Element Info - with persistent global and error tracking
+    UIA_Info := ""
+    try {
+        global G_UIA
+        If (!G_UIA)
+            G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
+        UIA_Info := "`nG_UIA: " G_UIA " (persistent)"
+
+        ; ElementFromPoint (vtable index 7)
+        uiaElement := 0
+        hr := DllCall(NumGet(NumGet(G_UIA+0)+7*A_PtrSize), "Ptr", G_UIA, "Int64", CursorX | (CursorY << 32), "Ptr*", uiaElement)
+        UIA_Info .= "`n  ElementFromPoint: hr=" hr " element=" uiaElement
+
+        if (uiaElement) {
+            ; CurrentControlType (vtable index 23)
+            ctrlType := 0
+            hr := DllCall(NumGet(NumGet(uiaElement+0)+23*A_PtrSize), "Ptr", uiaElement, "Int*", ctrlType)
+            UIA_Info .= "`n  ControlType: " ctrlType " (hr=" hr ")"
+
+            ; CurrentName (vtable index 24)
+            pName := 0
+            hr := DllCall(NumGet(NumGet(uiaElement+0)+24*A_PtrSize), "Ptr", uiaElement, "Ptr*", pName)
+            elName := pName ? StrGet(pName, "UTF-16") : ""
+            UIA_Info .= "`n  Name: " elName " (hr=" hr ")"
+
+            ; GetCurrentPattern for ScrollPattern (ID 10004, vtable index 16)
+            scrollPat := 0
+            hr := DllCall(NumGet(NumGet(uiaElement+0)+16*A_PtrSize), "Ptr", uiaElement, "Int", 10004, "Ptr*", scrollPat)
+            UIA_Info .= "`n  ScrollPattern: " (scrollPat ? "YES (" scrollPat ")" : "NO") " (hr=" hr ")"
+
+            if (scrollPat) {
+                ; CurrentVerticalScrollPercent (vtable index 6)
+                vPct := 0.0
+                hr := DllCall(NumGet(NumGet(scrollPat+0)+6*A_PtrSize), "Ptr", scrollPat, "Double*", vPct)
+                UIA_Info .= "`n  VerticalScroll%%: " Round(vPct, 1) " (hr=" hr ")"
+            }
+        }
+    } catch e {
+        UIA_Info := "`nUIA: EXCEPTION - " e.Message
+    }
+
     StringReplace, ControlText, ControlText, `n, %A_SPACE%, All
     StringReplace, WindowText, WindowText, `n,  , All
     StringReplace, WindowText, WindowText, %A_SPACE%%A_SPACE%, , All
@@ -577,7 +619,7 @@ Path: %Path%
 Process ID: %WindowPID%
 Control ClassNN: %ClassNN%
 hWnd under cursor: %CursorHwnd%
-
+%UIA_Info%
 Window Text:%WindowText%
 
 Control Text:
