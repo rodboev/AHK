@@ -833,3 +833,273 @@ Return
 +WheelDown::Send {Click WheelDown 10}
     ; ToolTip, WheelDown MPC
 #IfWinActive
+
+; === EXPLORER SMOOTH SCROLL ===
+; Description: Fractional scrolling in Explorer (and AllowedApps) on MButton drag, similar to Chrome
+; Permalink: https://autohotkey.com/boards/viewtopic.php?t=43715
+; Author: @rodboev
+; Version: 2.0
+
+MB_Debug := 0  ; Set to 1 to show debug tooltips
+
+$*MButton::
+    global MBScroll_X1, MBScroll_Y1, MBScroll_Win, MBScroll_CtrlClassNN, MBScroll_Triggered
+    global G_UIA, MB_ScrollPattern, MB_Element, MBScroll_Ctrl
+    global MB_Disabled, MB_Method, MB_ViewSize, MB_ScrollbarHwnd, MB_ScrollMax
+
+    MouseGetPos,,, MBScroll_Win, MBScroll_CtrlClassNN
+    WinGetClass, ahk_class, ahk_id %MBScroll_Win%
+    WinGet, ahk_exe, ProcessName, ahk_id %MBScroll_Win%
+    WinGetText, VisibleText, ahk_id %MBScroll_Win%
+    WinGet, ControlText, ControlList, ahk_id %MBScroll_Win%
+
+    ; ===========================================
+    ; SCROLL PREFERENCES (edit these lists)
+    ; ===========================================
+    ; Passthrough: Apps with native smooth scroll - don't interfere
+    HasNativeScroll := (ahk_exe = "chrome.exe") or (ahk_exe = "everything64.exe") or (ahk_exe = "VmConnect.exe")
+
+    ; Allowed: Apps/content we add smooth scroll to
+    IsAllowedApp := (ahk_exe = "mmc.exe") or (ahk_exe = "7zFM.exe") or (ahk_exe = "code.exe") or (ahk_exe = "SystemInformer.exe")
+    IsAllowedContent := InStr(VisibleText, "Tree View") or InStr(VisibleText, "FolderView") or InStr(ControlText, "ScrollBar")
+
+    ; Excluded: Non-scrollable regions within allowed apps
+    IsExcludedRegion := InStr(MBScroll_CtrlClassNN, "ToolbarWindow") or InStr(MBScroll_CtrlClassNN, "ReBarWindow") or InStr(MBScroll_CtrlClassNN, "Edit") or InStr(MBScroll_CtrlClassNN, "AddressBandRoot") or InStr(MBScroll_CtrlClassNN, "statusbar") or InStr(MBScroll_CtrlClassNN, "SysHeader") or (not MBScroll_CtrlClassNN and not (ahk_class = "Shell_TrayWnd" or ahk_class = "WorkerW"))
+
+    ; ===========================================
+    ; SCROLL METHOD SELECTION
+    ; ===========================================
+    ; UIA: Smooth fractional % scrolling via SetScrollPercent (control focused)
+    ; WHEEL: WM_MOUSEWHEEL with sub-120 to WINDOW (VS Code - routes internally)
+    ; WHEEL_CTRL: WM_MOUSEWHEEL with sub-120 to CONTROL (SI - better acceleration)
+    ; VSCROLL: WM_VSCROLL line-by-line, slower timer (Explorer nav - most compatible)
+    ForceUIA := ((ahk_exe = "mmc.exe") or (ahk_class = "CabinetWClass")) and !InStr(MBScroll_CtrlClassNN, "SysTreeView32")
+    UseWheel := (ahk_exe = "code.exe")
+    UseWheelCtrl := (ahk_exe = "SystemInformer.exe")
+    UseVScroll := InStr(MBScroll_CtrlClassNN, "SysTreeView32")
+
+    ; ===========================================
+    ; PASSTHROUGH OR SCROLL?
+    ; ===========================================
+    ShouldScroll := !HasNativeScroll and (IsAllowedApp or IsAllowedContent) and !IsExcludedRegion
+    If (!ShouldScroll) {
+        MB_Disabled := 1
+        SendInput, {Blind}{MButton Down}
+        Return
+    }
+    MB_Disabled := 0
+
+    ; ===========================================
+    ; EXPLORER WINDOW ACTIVATION
+    ; ===========================================
+    ; Activate Explorer window if clicking on inactive one
+    If (ahk_class = "CabinetWClass") {
+        WinGet, activeWin, ID, A
+        If (MBScroll_Win != activeWin) {
+            WinActivate, ahk_id %MBScroll_Win%
+        }
+    }
+
+    ; ===========================================
+    ; COORDINATE CAPTURE
+    ; ===========================================
+    CoordMode, Mouse, Screen
+    MouseGetPos, MBScroll_X1, MBScroll_Y1
+
+    ; Get control hwnd
+    ControlGet, MBScroll_Ctrl, Hwnd,, %MBScroll_CtrlClassNN%, ahk_id %MBScroll_Win%
+    MBScroll_Triggered := 0
+
+    ; ===========================================
+    ; DETERMINE SCROLL METHOD
+    ; ===========================================
+    MB_Element := 0
+    MB_ScrollPattern := 0
+    MB_AccumPct := -1
+    MB_ViewSize := 10.0
+    MB_ScrollbarHwnd := 0
+    MB_ScrollMax := 0
+    MB_Method := "WHEEL"  ; Default fallback
+
+    ; UIA for mmc, Explorer file lists (control focused)
+    If (ForceUIA) {
+        If (!G_UIA) {
+            G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
+        }
+        ; Always use control if available, fallback to window
+        targetForUIA := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
+        DllCall(NumGet(NumGet(G_UIA+0)+6*A_PtrSize), "Ptr", G_UIA, "Ptr", targetForUIA, "Ptr*", MB_Element)
+        If (MB_Element) {
+            ; Get ScrollPattern (10004)
+            DllCall(NumGet(NumGet(MB_Element+0)+16*A_PtrSize), "Ptr", MB_Element, "Int", 10004, "Ptr*", MB_ScrollPattern)
+            ; Get ViewSize for normalization
+            DllCall(NumGet(NumGet(MB_ScrollPattern+0)+8*A_PtrSize), "Ptr", MB_ScrollPattern, "Double*", MB_ViewSize)
+            If (MB_ViewSize < 1)
+                MB_ViewSize := 10.0
+        }
+        MB_Method := "UIA"
+    }
+    ; WHEEL_CTRL for SI (with fallback detection)
+    Else If (UseWheelCtrl) {
+        MB_Method := "WHEEL_CTRL"
+        MB_LineAccum := 0.0      ; Accumulate fractional lines for fallback detection
+        MB_LinesScrolled := 0    ; Track actual lines scrolled to detect >1 line jumps
+    }
+    ; VSCROLL for Explorer nav bar (dynamic timer based on distance)
+    Else If (UseVScroll) {
+        MB_Method := "VSCROLL"
+    }
+    ; WHEEL to window for VS Code
+    Else If (UseWheel) {
+        MB_Method := "WHEEL"
+    }
+
+    ; Start timer (VSCROLL starts slow, adjusts dynamically in timer)
+    timerInterval := (MB_Method = "VSCROLL") ? 150 : 10
+    SetTimer, MBScrollTimer, %timerInterval%
+Return
+
+MBScrollTimer:
+    global MB_AccumPct, MB_Method, MB_ViewSize, MBScroll_Ctrl, MB_LineAccum, MB_LinesScrolled
+    ; Safety check: if MButton released, stop immediately
+    If !GetKeyState("MButton", "P") {
+        SetTimer, MBScrollTimer, Off
+        If (MB_Debug)
+            ToolTip
+        Return
+    }
+
+    CoordMode, Mouse, Screen
+    MouseGetPos,, Y2
+    SignedDist := Y2 - MBScroll_Y1
+    AbsDist := Abs(SignedDist)
+
+    If (AbsDist >= 8) {
+        MBScroll_Triggered := 1
+        signDir := (SignedDist > 0) ? 1 : -1
+        absEffective := AbsDist
+
+        ; Double curve: responsive up to 100px, soft cap beyond
+        if (absEffective <= 100) {
+            curveValue := absEffective ** 0.8
+        } else {
+            curveValue := (100 ** 0.8) + ((absEffective - 100) ** 0.6)
+        }
+
+        If (MB_Method = "UIA") {
+            ; ===========================================
+            ; UIA SCROLLING (mmc, Explorer file lists)
+            ; ===========================================
+            If (MB_AccumPct < 0) {
+                DllCall(NumGet(NumGet(MB_ScrollPattern+0)+6*A_PtrSize), "Ptr", MB_ScrollPattern, "Double*", MB_AccumPct)
+            }
+            ; Normalize scroll speed based on ViewSize:
+            ; - ViewSize = 100%: only 1 item visible (small list), scroll FAST
+            ; - ViewSize = 1%: 100 items visible (huge list), scroll SLOW
+            ; Formula: mult = ViewSize / 3 (5x amplified from /15)
+            ; Examples: ViewSize=50% → mult=16.7, ViewSize=15% → mult=5, ViewSize=3% → mult=1
+            viewMultiplier := MB_ViewSize / 3.0
+            viewMultiplier := Max(0.25, Min(viewMultiplier, 50.0))  ; Clamp 0.25x to 50x
+            deltaPct := signDir * curveValue * 0.006 * viewMultiplier
+            MB_AccumPct := MB_AccumPct + deltaPct
+            MB_AccumPct := (MB_AccumPct < 0) ? 0 : (MB_AccumPct > 100) ? 100 : MB_AccumPct
+            If (MB_Debug)
+                ToolTip, % "UIA: " Round(MB_AccumPct, 1) "%% (view=" Round(MB_ViewSize,1) "%% mult=" Round(viewMultiplier,2) ")"
+            DllCall(NumGet(NumGet(MB_ScrollPattern+0)+4*A_PtrSize), "Ptr", MB_ScrollPattern, "Double", -1.0, "Double", MB_AccumPct)
+
+        ; SCROLLBAR method commented out - didn't work for mmc or SI
+        ; } Else If (MB_Method = "SCROLLBAR") {
+        ;     ...
+        ; }
+
+        } Else If (MB_Method = "WHEEL_CTRL") {
+            ; ===========================================
+            ; WM_MOUSEWHEEL to CONTROL with fallback detection
+            ; ===========================================
+            lParam := ((MBScroll_Y1 & 0xFFFF) << 16) | (MBScroll_X1 & 0xFFFF)
+            magnitude := Max(1, Min(119, Floor(curveValue / 2)))
+            Delta := (SignedDist > 0) ? -magnitude : magnitude
+            wParam := Delta << 16
+            target := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
+
+            ; Count fractional lines: sub-120 delta / 120 = fraction of a line
+            ; If app scrolls more than we expect, it's ignoring sub-120
+            MB_LineAccum := MB_LineAccum + (Abs(magnitude) / 120.0)
+            expectedLines := Floor(MB_LineAccum)
+            MB_LinesScrolled := MB_LinesScrolled + 1  ; Each message = 1 scroll event
+
+            ; After 5 scroll events, check if we're getting too many lines
+            ; If linesScrolled (events) < expectedLines * 0.5, control is ignoring sub-120
+            ; This means it's scrolling 3 lines per event instead of fractional
+            If (MB_LinesScrolled >= 5 and expectedLines < MB_LinesScrolled * 0.3) {
+                ; Fallback to VSCROLL - control doesn't do sub-120
+                MB_Method := "VSCROLL"
+                SetTimer, MBScrollTimer, 150
+                If (MB_Debug)
+                    ToolTip, % "WHEEL_CTRL→VSCROLL fallback (not sub-120)"
+            } Else {
+                If (MB_Debug)
+                    ToolTip, % "WHEEL_CTRL: d=" Delta " accum=" Round(MB_LineAccum, 2)
+                PostMessage, 0x20A, %wParam%, %lParam%,, ahk_id %target%
+            }
+
+        } Else If (MB_Method = "VSCROLL") {
+            ; ===========================================
+            ; WM_VSCROLL LINE - dynamic timer based on drag distance
+            ; ===========================================
+            scrollDir := (SignedDist > 0) ? 1 : 0
+            target := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
+
+            ; Dynamic timer: 300ms at 8px (slow), 20ms at 300px+ (fast)
+            ; Map AbsDist 8-200 to timer 20-300
+            timerMs := 300 - Floor((Min(AbsDist, 300) - 8) * (100 / 192))
+            timerMs := Max(20, Min(300, timerMs / 2))
+            SetTimer, MBScrollTimer, %timerMs%
+
+            If (MB_Debug)
+                ToolTip, % "VSCROLL: dir=" scrollDir " timer=" timerMs "ms"
+            PostMessage, 0x115, %scrollDir%, 0,, ahk_id %target%
+
+        } Else {
+            ; ===========================================
+            ; WM_MOUSEWHEEL with sub-120 to WINDOW (VS Code, default)
+            ; ===========================================
+            lParam := ((MBScroll_Y1 & 0xFFFF) << 16) | (MBScroll_X1 & 0xFFFF)
+            ; MUST cap below 120 for smooth scrolling (120 = 1 notch = 3 lines)
+            magnitude := Max(1, Min(119, Floor(curveValue / 2)))
+            Delta := (SignedDist > 0) ? -magnitude : magnitude
+            wParam := Delta << 16
+            If (MB_Debug)
+                ToolTip, % "WHEEL: d=" Delta " win=" MBScroll_Win
+            PostMessage, 0x20A, %wParam%, %lParam%,, ahk_id %MBScroll_Win%
+        }
+    }
+Return
+
+$*MButton Up::
+    global MB_Disabled, MBScroll_Triggered, MBScroll_Win, MB_ScrollPattern, MB_Element
+    SetTimer, MBScrollTimer, Off
+    If (MB_Debug)
+        ToolTip
+
+    ; If we passed through MButton Down, also pass through MButton Up
+    If (MB_Disabled) {
+        SendInput, {Blind}{MButton Up}
+        Return
+    }
+
+    ; Release UIA objects
+    If (MB_ScrollPattern) {
+        ObjRelease(MB_ScrollPattern)
+        MB_ScrollPattern := 0
+    }
+    If (MB_Element) {
+        ObjRelease(MB_Element)
+        MB_Element := 0
+    }
+
+    ; If no drag occurred in non-Explorer, send click
+    WinGetClass, ahk_class, ahk_id %MBScroll_Win%
+    If (!MBScroll_Triggered and ahk_class != "CabinetWClass")
+        SendInput, {Blind}{MButton}
+Return
