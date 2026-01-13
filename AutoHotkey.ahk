@@ -838,9 +838,28 @@ Return
 ; Description: Fractional scrolling in Explorer (and AllowedApps) on MButton drag, similar to Chrome
 ; Permalink: https://autohotkey.com/boards/viewtopic.php?t=43715
 ; Author: @rodboev
-; Version: 2.0
+; Version: 2.1
+
+; === SCROLL CONFIG ===
+MB_PassthroughApps := ["chrome.exe", "everything64.exe", "VmConnect.exe"]
+MB_EnabledApps := ["mmc.exe", "7zFM.exe", "code.exe", "SystemInformer.exe"]
+MB_ExcludedControls := ["ToolbarWindow", "ReBarWindow", "Edit", "AddressBandRoot", "statusbar", "SysHeader"]
 
 MB_Debug := 0  ; Set to 1 to show debug tooltips
+
+; Get vertical scroll position for a control (cross-process safe)
+GetScrollPos(hwnd) {
+    SB_VERT := 1
+    return DllCall("GetScrollPos", "Ptr", hwnd, "Int", SB_VERT, "Int")
+}
+
+; Check if array contains a value (partial match)
+HasVal(arr, val) {
+    for i, v in arr
+        if (InStr(val, v))
+            return true
+    return false
+}
 
 $*MButton::
     global MBScroll_X1, MBScroll_Y1, MBScroll_Win, MBScroll_CtrlClassNN, MBScroll_Triggered
@@ -854,17 +873,12 @@ $*MButton::
     WinGet, ControlText, ControlList, ahk_id %MBScroll_Win%
 
     ; ===========================================
-    ; SCROLL PREFERENCES (edit these lists)
+    ; SCROLL PREFERENCES (uses config arrays at top)
     ; ===========================================
-    ; Passthrough: Apps with native smooth scroll - don't interfere
-    HasNativeScroll := (ahk_exe = "chrome.exe") or (ahk_exe = "everything64.exe") or (ahk_exe = "VmConnect.exe")
-
-    ; Allowed: Apps/content we add smooth scroll to
-    IsAllowedApp := (ahk_exe = "mmc.exe") or (ahk_exe = "7zFM.exe") or (ahk_exe = "code.exe") or (ahk_exe = "SystemInformer.exe")
+    HasNativeScroll := HasVal(MB_PassthroughApps, ahk_exe)
+    IsAllowedApp := HasVal(MB_EnabledApps, ahk_exe)
     IsAllowedContent := InStr(VisibleText, "Tree View") or InStr(VisibleText, "FolderView") or InStr(ControlText, "ScrollBar")
-
-    ; Excluded: Non-scrollable regions within allowed apps
-    IsExcludedRegion := InStr(MBScroll_CtrlClassNN, "ToolbarWindow") or InStr(MBScroll_CtrlClassNN, "ReBarWindow") or InStr(MBScroll_CtrlClassNN, "Edit") or InStr(MBScroll_CtrlClassNN, "AddressBandRoot") or InStr(MBScroll_CtrlClassNN, "statusbar") or InStr(MBScroll_CtrlClassNN, "SysHeader") or (not MBScroll_CtrlClassNN and not (ahk_class = "Shell_TrayWnd" or ahk_class = "WorkerW"))
+    IsExcludedRegion := HasVal(MB_ExcludedControls, MBScroll_CtrlClassNN) or (not MBScroll_CtrlClassNN and not (ahk_class = "Shell_TrayWnd" or ahk_class = "WorkerW"))
 
     ; ===========================================
     ; SCROLL METHOD SELECTION
@@ -917,8 +931,7 @@ $*MButton::
     MB_ScrollPattern := 0
     MB_AccumPct := -1
     MB_ViewSize := 10.0
-    MB_ScrollbarHwnd := 0
-    MB_ScrollMax := 0
+    MB_FallbackChecked := 0  ; Only check fallback once per drag
     MB_Method := "WHEEL"  ; Default fallback
 
     ; UIA for mmc, Explorer file lists (control focused)
@@ -939,11 +952,9 @@ $*MButton::
         }
         MB_Method := "UIA"
     }
-    ; WHEEL_CTRL for SI (with fallback detection)
+    ; WHEEL_CTRL for SI (with GetScrollPos fallback detection)
     Else If (UseWheelCtrl) {
         MB_Method := "WHEEL_CTRL"
-        MB_LineAccum := 0.0      ; Accumulate fractional lines for fallback detection
-        MB_LinesScrolled := 0    ; Track actual lines scrolled to detect >1 line jumps
     }
     ; VSCROLL for Explorer nav bar (dynamic timer based on distance)
     Else If (UseVScroll) {
@@ -960,7 +971,7 @@ $*MButton::
 Return
 
 MBScrollTimer:
-    global MB_AccumPct, MB_Method, MB_ViewSize, MBScroll_Ctrl, MB_LineAccum, MB_LinesScrolled
+    global MB_AccumPct, MB_Method, MB_ViewSize, MBScroll_Ctrl, MB_FallbackChecked
     ; Safety check: if MButton released, stop immediately
     If !GetKeyState("MButton", "P") {
         SetTimer, MBScrollTimer, Off
@@ -1007,41 +1018,45 @@ MBScrollTimer:
                 ToolTip, % "UIA: " Round(MB_AccumPct, 1) "%% (view=" Round(MB_ViewSize,1) "%% mult=" Round(viewMultiplier,2) ")"
             DllCall(NumGet(NumGet(MB_ScrollPattern+0)+4*A_PtrSize), "Ptr", MB_ScrollPattern, "Double", -1.0, "Double", MB_AccumPct)
 
-        ; SCROLLBAR method commented out - didn't work for mmc or SI
-        ; } Else If (MB_Method = "SCROLLBAR") {
-        ;     ...
-        ; }
-
         } Else If (MB_Method = "WHEEL_CTRL") {
             ; ===========================================
-            ; WM_MOUSEWHEEL to CONTROL with fallback detection
+            ; WM_MOUSEWHEEL to CONTROL with GetScrollPos fallback
             ; ===========================================
+            target := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
+            
+            ; Get position BEFORE scroll (only on first check)
+            If (!MB_FallbackChecked) {
+                posBefore := GetScrollPos(target)
+            }
+            
+            ; Send WHEEL message
             lParam := ((MBScroll_Y1 & 0xFFFF) << 16) | (MBScroll_X1 & 0xFFFF)
             magnitude := Max(1, Min(119, Floor(curveValue / 2)))
             Delta := (SignedDist > 0) ? -magnitude : magnitude
             wParam := Delta << 16
-            target := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
-
-            ; Count fractional lines: sub-120 delta / 120 = fraction of a line
-            ; If app scrolls more than we expect, it's ignoring sub-120
-            MB_LineAccum := MB_LineAccum + (Abs(magnitude) / 120.0)
-            expectedLines := Floor(MB_LineAccum)
-            MB_LinesScrolled := MB_LinesScrolled + 1  ; Each message = 1 scroll event
-
-            ; After 5 scroll events, check if we're getting too many lines
-            ; If linesScrolled (events) < expectedLines * 0.5, control is ignoring sub-120
-            ; This means it's scrolling 3 lines per event instead of fractional
-            If (MB_LinesScrolled >= 5 and expectedLines < MB_LinesScrolled * 0.3) {
-                ; Fallback to VSCROLL - control doesn't do sub-120
-                MB_Method := "VSCROLL"
-                SetTimer, MBScrollTimer, 150
-                If (MB_Debug)
-                    ToolTip, % "WHEEL_CTRL→VSCROLL fallback (not sub-120)"
-            } Else {
-                If (MB_Debug)
-                    ToolTip, % "WHEEL_CTRL: d=" Delta " accum=" Round(MB_LineAccum, 2)
-                PostMessage, 0x20A, %wParam%, %lParam%,, ahk_id %target%
+            PostMessage, 0x20A, %wParam%, %lParam%,, ahk_id %target%
+            
+            ; Check for fallback on first scroll only
+            If (!MB_FallbackChecked) {
+                Sleep, 10  ; Brief pause for scroll to complete
+                posAfter := GetScrollPos(target)
+                scrolledUnits := Abs(posAfter - posBefore)
+                
+                ; If jumped >40 units (typically >1 line), switch to VSCROLL
+                If (scrolledUnits > 40) {
+                    MB_Method := "VSCROLL"
+                    SetTimer, MBScrollTimer, 150
+                    ; Revert the jump by scrolling opposite direction
+                    revertDir := (posAfter > posBefore) ? 0 : 1  ; 0=up, 1=down
+                    PostMessage, 0x115, %revertDir%, 0,, ahk_id %target%
+                    If (MB_Debug)
+                        ToolTip, % "WHEEL_CTRL→VSCROLL (jumped " scrolledUnits " units)"
+                }
+                MB_FallbackChecked := 1
             }
+            
+            If (MB_Debug && MB_Method = "WHEEL_CTRL")
+                ToolTip, % "WHEEL_CTRL: d=" Delta
 
         } Else If (MB_Method = "VSCROLL") {
             ; ===========================================

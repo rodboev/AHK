@@ -78,27 +78,25 @@ MButton Up (1045-1065)
 
 ## Architectural Goals
 
-### 1. Full App-Agnostic Fallback Chain (GOAL - NOT YET IMPLEMENTED)
+### 1. Full App-Agnostic Fallback Chain (PARTIAL - IN PROGRESS)
 
 **Goal**: Auto-detect the best scroll method at runtime via a fallback chain, eliminating hardcoded app lists.
 
-**Current State**: All method selection is hardcoded. No automatic fallback detection is working yet.
+**Current State**: WHEEL_CTRL → VSCROLL fallback detection is now working. Other fallbacks still hardcoded.
 - ❌ UIA → WHEEL fallback (hardcoded via `ForceUIA`)
 - ❌ WHEEL → WHEEL_CTRL fallback (hardcoded via `UseWheel`)
-- ❌ WHEEL_CTRL → VSCROLL fallback (code exists at lines 1021-1038 but logic is flawed)
+- ✅ WHEEL_CTRL → VSCROLL fallback (implemented via `GetScrollPos`)
 
-**Why current WHEEL_CTRL → VSCROLL detection doesn't work**:
-The code at lines 1021-1038 compares `expectedLines` (what we requested) to `MB_LinesScrolled` (messages we sent). Both are OUR counters - we have no way to detect how many lines the control ACTUALLY scrolled. The fallback condition can never trigger.
-
-**How to actually implement fallback detection**:
-Query scroll position before/after sending WHEEL_CTRL using `GetScrollPos` (works cross-process):
+**How WHEEL_CTRL → VSCROLL detection works** (v2.1):
+Uses `GetScrollPos` to query actual scroll position before/after sending WHEEL message:
 1. Get scroll position before sending WHEEL_CTRL message
 2. Send WHEEL_CTRL message
-3. Get scroll position after
-4. If position jumped by more than 1 line (~40 units):
-   - Immediately send message to revert to previous position (invisible to user)
+3. Sleep 10ms for scroll to complete
+4. Get scroll position after
+5. If position jumped by more than 40 units (~1 line):
+   - Send VSCROLL in opposite direction to revert (invisible to user)
    - Switch to VSCROLL method for remainder of drag
-5. If position moved ~1 line, stay with WHEEL_CTRL
+6. Only checked once per drag (first scroll event)
 
 **Important**: Do NOT check for ScrollPattern - it always returns NO even when scrolling works.
 
@@ -143,24 +141,21 @@ timerMs := Max(50, Min(150, timerMs))
 SetTimer, MBScrollTimer, %timerMs%
 ```
 
-### 3. Consolidate Configuration
+### 3. Consolidate Configuration (IMPLEMENTED)
 
-**Current**: Scattered boolean expressions.
-
-**Proposed**: Single configuration block:
+**Implemented**: Single configuration block with `HasVal` helper for lookups:
 ```autohotkey
 ; === SCROLL CONFIG ===
-PassthroughApps := ["chrome.exe", "everything64.exe", "VmConnect.exe"]
-EnabledApps := ["mmc.exe", "7zFM.exe", "code.exe", "SystemInformer.exe"]
-ExcludedControls := ["ToolbarWindow", "ReBarWindow", "Edit", "SysHeader"]
-; Methods auto-detected via fallback chain
+MB_PassthroughApps := ["chrome.exe", "everything64.exe", "VmConnect.exe"]
+MB_EnabledApps := ["mmc.exe", "7zFM.exe", "code.exe", "SystemInformer.exe"]
+MB_ExcludedControls := ["ToolbarWindow", "ReBarWindow", "Edit", "AddressBandRoot", "statusbar", "SysHeader"]
 ```
 
-### 4. Clean Up Dead Code
+### 4. Clean Up Dead Code (IMPLEMENTED)
 
-**Remove**:
-- SCROLLBAR method (commented out, lines ~1000)
-- Unused globals: `MB_ScrollbarHwnd`, `MB_ScrollMin`, `MB_ScrollMax`
+**Removed**:
+- SCROLLBAR method (was commented out)
+- Unused globals: `MB_ScrollbarHwnd`, `MB_ScrollMax`, `MB_LineAccum`, `MB_LinesScrolled`
 
 ---
 
