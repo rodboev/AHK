@@ -15,6 +15,7 @@
 
 SendMode, Input
 SetWorkingDir, %A_ScriptDir%
+SetTitleMatchMode, 2
 
 ; Prevent script proceeding in RDP windows
 #IfWinActive, ahk_class TscShellContainerClass
@@ -864,7 +865,7 @@ HasVal(arr, val) {
 $*MButton::
     global MBScroll_X1, MBScroll_Y1, MBScroll_Win, MBScroll_CtrlClassNN, MBScroll_Triggered
     global G_UIA, MB_ScrollPattern, MB_Element, MBScroll_Ctrl
-    global MB_Disabled, MB_Method, MB_ViewSize, MB_ScrollbarHwnd, MB_ScrollMax
+    global MB_Disabled, MB_Method, MB_ViewSize
 
     MouseGetPos,,, MBScroll_Win, MBScroll_CtrlClassNN
     WinGetClass, ahk_class, ahk_id %MBScroll_Win%

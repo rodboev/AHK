@@ -1,6 +1,6 @@
 # MButton Drag Scroll: Context Transfer Summary
 
-## Current State (January 2025)
+## Current State (January 2026)
 
 ### Method Assignments
 | App/Region | Method | Target | Timer | Status |
@@ -26,12 +26,12 @@
 ## Architecture Overview
 
 ### File Location
-`c:\Dropbox\Projects\AHK\AutoHotkey.ahk` lines 843-1054
+`c:\Dropbox\Projects\AHK\AutoHotkey.ahk` lines 837-1117
 
 ### Execution Flow
 
 ```
-MButton Down (843-956)
+MButton Down (864-974)
     │
     ├─► Gather context (window, control, exe, class)
     │
@@ -51,7 +51,7 @@ MButton Down (843-956)
     │
     └─► Start timer (50ms for VSCROLL, 10ms for others)
 
-Timer Loop (958-1043)
+Timer Loop (976-1091)
     │
     ├─► Safety: Exit if MButton released
     │
@@ -65,7 +65,7 @@ Timer Loop (958-1043)
         ├── WHEEL/WHEEL_CTRL: delta = min(119, curve/2); PostMessage WM_MOUSEWHEEL
         └── VSCROLL: send 1 line per tick (slower timer handles speed)
 
-MButton Up (1045-1065)
+MButton Up (1093-1117)
     │
     ├─► Stop timer, clear tooltip
     │
