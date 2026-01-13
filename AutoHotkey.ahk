@@ -718,23 +718,16 @@ return
 #IfWinActive
 
 ; Alt+Shift+S = Run or activate Everything
-; to send original key:
-; SendInput {RWin Down}s{RwinUp}
-DetectHiddenWindows, On
-+!s::
-    If WinExist("ahk_class EVERYTHING") {
-        WinShow
-        WinActivate
-    }
-    Else {
-        Run, DeElevate "C:\Program Files\Everything 1.5a\Everything64.exe"
-        WinWait ahk_exe Everything64.exe
+~+!s::
+    DetectHiddenWindows, On
+    If (!WinExist("ahk_exe Everything.exe")) {
+        Run, DeElevate "C:\Program Files\Everything 1.5a\Everything.exe"
+        WinWait, ahk_exe Everything.exe
         WinActivate
     }
 Return
-DetectHiddenWindows, Off
 
-#IfWinActive ahk_class EVERYTHING
+#IfWinActive ahk_exe Everything.exe
 Esc::
 !F4::
     If WinExist("ahk_class EVERYTHING_DROPDOWNLIST")
