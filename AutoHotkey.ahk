@@ -919,14 +919,23 @@ Return
 Return
 #IfWinActive
 
-; Alt+ShIft+S = Run or activate Everything
+#IfWinActive ahk_class #32770 ; Only run if a file dialog is active
+^e:: ; Ctrl+E hotkey
+    ; Get the path of the selected file
+    ControlGetText, selected, Edit1, A
+    ; Open the selected file with Notepad
+    Run, "C:\Program Files\Sublime Text\subl.exe" "%selected%"
+return
+#IfWinActive
+
+; Alt+Shift+S = Run or activate Everything
 ~+!s::
-  DetectHiddenWindows, On
-  If (!WinExist("ahk_exe Everything.exe")) {
-    UserRun("C:\Program Files\Everything 1.5a\Everything.exe")
-    WinWait, ahk_exe Everything.exe
-    WinActivate
-  }
+    DetectHiddenWindows, On
+    If (!WinExist("ahk_exe Everything.exe")) {
+        Run, DeElevate "C:\Program Files\Everything 1.5a\Everything.exe"
+        WinWait, ahk_exe Everything.exe
+        WinActivate
+    }
 Return
 
 #IfWinActive ahk_exe Everything.exe
