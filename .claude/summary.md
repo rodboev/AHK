@@ -1,236 +1,188 @@
-# MButton Drag Scroll: Context Transfer Summary
+# AHK Project: Context Transfer Summary
 
-## Current State (January 2026)
+## Current State (1/13/2026)
+
+### === EXTENDED WINDOW SPY ===
+
+**Status**: Stable, usable
+
+**v1.1 Features** (completed):
+- Persistent tooltip showing Active Window + Window Under Cursor info
+- Hover-to-pause: hovering over tooltip pauses updates
+- Press `#w` again to close tooltip
+- 800ms update interval with content-change detection (reduces flicker)
+- Click tooltip to open dialog for copying text
+- Dialog auto-sizes to fit content, positions flush to bottom-right corner
+- Controls sorted alphabetically, items >80 chars filtered out
+- Window Text cleaned (non-ASCII removed, deduped if long, >80 char items filtered)
+- Comprehensive info: title, ahk_id, ahk_class, ahk_exe, dir, cmdline, PID (elevated indicator), monitor, pos, size, style, exstyle, focused control with hWnd, UIA pointer, window text, controls
+- `FilterLongItems()` to remove items >80 chars from Controls/Window Text
+- `SortList()` to sort Controls alphabetically
+- Dialog positioned flush to bottom-right
+
+**Pending: Dialog Width Matching Tooltip** (not yet implemented):
+
+- Tooltip width is captured via `WinGetPos` during updates (line 832) as WindowSpyTooltipW
+- `WindowSpyShowDialog()` needs to use captured width instead of fixed 700px
+- Expand dialog height to fit content (up to screen max)
+
+**Helper Functions**:
+
+- `GetExePath()`, `GetMonitor()`, `IsProcessElevated()`, `WrapList()`, `CleanWindowText()`, `FilterLongItems()`, `SortList()`
+
+---
+
+### Pending Goal: Spawn Windows on Cursor's Monitor
+
+**Goal**: Make new windows spawn on the monitor where the cursor is located, not the primary monitor.
+
+**Foundation**: Already have `GetMonitor()` helper that determines which monitor a window is on.
+
+**Approach**:
+
+1. Create `GetCursorMonitor()` to get monitor number from cursor position
+2. Hook into window creation events (Shell hook or similar)
+3. When new window detected, move it to cursor's monitor
+
+**Implementation plan**:
+
+```autohotkey
+; Get monitor from cursor position
+GetCursorMonitor() {
+  CoordMode, Mouse, Screen
+  MouseGetPos, x, y
+  SysGet, monCount, MonitorCount
+  Loop, %monCount% {
+    SysGet, mon, Monitor, %A_Index%
+    If (x >= monLeft && x <= monRight && y >= monTop && y <= monBottom)
+      Return A_Index
+  }
+  Return 1
+}
+
+; Shell hook to detect new windows
+Gui +LastFound
+hWnd := WinExist()
+DllCall("RegisterShellHookWindow", "Ptr", hWnd)
+MsgNum := DllCall("RegisterWindowMessage", "Str", "SHELLHOOK")
+OnMessage(MsgNum, "ShellEvent")
+
+ShellEvent(wParam, lParam) {
+  If (wParam = 1) {  ; HSHELL_WINDOWCREATED
+    targetMon := GetCursorMonitor()
+    ; Move window lParam to targetMon
+  }
+}
+```
+
+---
+
+## === EXPLORER SMOOTH SCROLL ===
 
 ### Method Assignments
-| App/Region | Method | Target | Timer | Status |
-|------------|--------|--------|-------|--------|
-| mmc.exe | UIA | Control | 10ms | Working |
-| Explorer file lists | UIA | Control | 10ms | Working |
-| Explorer nav bar (SysTreeView32) | VSCROLL | Control | 50ms | Working |
-| SystemInformer | WHEEL_CTRL | Control | 10ms | Working |
-| VS Code | WHEEL | Window | 10ms | Working |
+
+| App/Region                       | Method     | Target  | Timer | Status  |
+| -------------------------------- | ---------- | ------- | ----- | ------- |
+| mmc.exe                          | UIA        | Control | 10ms  | Working |
+| Explorer file lists              | UIA        | Control | 10ms  | Working |
+| Explorer nav bar (SysTreeView32) | VSCROLL    | Control | 50ms  | Working |
+| SystemInformer                   | WHEEL_CTRL | Control | 10ms  | Working |
+| VS Code                          | WHEEL      | Window  | 10ms  | Working |
 
 ### Scroll Methods Explained
-| Method | Mechanism | Granularity | Best For |
-|--------|-----------|-------------|----------|
-| **UIA** | SetScrollPercent via IUIAutomationScrollPattern | Fractional % | Apps exposing ScrollPattern (Explorer lists, mmc) |
-| **WHEEL** | WM_MOUSEWHEEL with sub-120 delta to window | Sub-notch | Apps with internal cursor routing (VS Code, Electron) |
-| **WHEEL_CTRL** | WM_MOUSEWHEEL to control (with fallback detection) | 1 line* | Controls that scroll 1 line per message (SI) |
-| **VSCROLL** | WM_VSCROLL 1 line per tick, dynamic timer | 1 line | Universal fallback (tree views, controls that scroll 3 lines per wheel) |
 
-*Note: WHEEL_CTRL does NOT actually do sub-120 accumulation. SI just happens to scroll 1 line per wheel message instead of the typical 3 lines. The fallback detection identifies controls that scroll >1 line per message and switches to VSCROLL.
-
----
-
-## Architecture Overview
+| Method         | Mechanism                                          | Granularity  | Best For                                                                |
+| -------------- | -------------------------------------------------- | ------------ | ----------------------------------------------------------------------- |
+| **UIA**        | SetScrollPercent via IUIAutomationScrollPattern    | Fractional % | Apps exposing ScrollPattern (Explorer lists, mmc)                       |
+| **WHEEL**      | WM_MOUSEWHEEL with sub-120 delta to window         | Sub-notch    | Apps with internal cursor routing (VS Code, Electron)                   |
+| **WHEEL_CTRL** | WM_MOUSEWHEEL to control (with fallback detection) | 1 line\*     | Controls that scroll 1 line per message (SI)                            |
+| **VSCROLL**    | WM_VSCROLL 1 line per tick, dynamic timer          | 1 line       | Universal fallback (tree views, controls that scroll 3 lines per wheel) |
 
 ### File Location
-`c:\Dropbox\Projects\AHK\AutoHotkey.ahk` lines 837-1117
 
-### Execution Flow
-
-```
-MButton Down (864-974)
-    │
-    ├─► Gather context (window, control, exe, class)
-    │
-    ├─► Evaluate filters:
-    │   ├── HasNativeScroll? → Passthrough (Chrome, Everything)
-    │   ├── IsAllowedApp/Content? → Continue
-    │   └── IsExcludedRegion? → Passthrough (toolbars, headers)
-    │
-    ├─► Select method:
-    │   ├── ForceUIA (mmc, Explorer file lists)
-    │   ├── UseWheelCtrl (SI)
-    │   ├── UseVScroll (SysTreeView32)
-    │   └── UseWheel (VS Code)
-    │
-    ├─► Initialize method-specific state:
-    │   └── UIA: Create COM object, get ScrollPattern, get ViewSize
-    │
-    └─► Start timer (50ms for VSCROLL, 10ms for others)
-
-Timer Loop (976-1091)
-    │
-    ├─► Safety: Exit if MButton released
-    │
-    ├─► Calculate displacement from origin
-    │
-    ├─► Apply acceleration curve:
-    │   └── curveValue = dist^0.8 (≤100px) or 100^0.8 + (dist-100)^0.6 (>100px)
-    │
-    └─► Execute scroll method:
-        ├── UIA: deltaPct = curve * 0.006 * (ViewSize/3); SetScrollPercent
-        ├── WHEEL/WHEEL_CTRL: delta = min(119, curve/2); PostMessage WM_MOUSEWHEEL
-        └── VSCROLL: send 1 line per tick (slower timer handles speed)
-
-MButton Up (1093-1117)
-    │
-    ├─► Stop timer, clear tooltip
-    │
-    ├─► Release UIA COM objects
-    │
-    └─► If not triggered (no drag): send middle-click
-```
+`c:\Dropbox\Projects\AHK\AutoHotkey.ahk` lines 920-1170 (approximately)
 
 ---
 
-## Architectural Goals
+## Helper Functions Reference
 
-### 1. Full App-Agnostic Fallback Chain (PARTIAL - IN PROGRESS)
+### GetExePath(winTitle := "A")
 
-**Goal**: Auto-detect the best scroll method at runtime via a fallback chain, eliminating hardcoded app lists.
+Returns `{path: "C:\...\app.exe", dir: "C:\..."}` for a window's process.
 
-**Current State**: WHEEL_CTRL → VSCROLL fallback detection is now working. Other fallbacks still hardcoded.
-- ❌ UIA → WHEEL fallback (hardcoded via `ForceUIA`)
-- ❌ WHEEL → WHEEL_CTRL fallback (hardcoded via `UseWheel`)
-- ✅ WHEEL_CTRL → VSCROLL fallback (implemented via `GetScrollPos`)
-
-**How WHEEL_CTRL → VSCROLL detection works** (v2.1):
-Uses `GetScrollPos` to query actual scroll position before/after sending WHEEL message:
-1. Get scroll position before sending WHEEL_CTRL message
-2. Send WHEEL_CTRL message
-3. Sleep 10ms for scroll to complete
-4. Get scroll position after
-5. If position jumped by more than 40 units (~1 line):
-   - Send VSCROLL in opposite direction to revert (invisible to user)
-   - Switch to VSCROLL method for remainder of drag
-6. Only checked once per drag (first scroll event)
-
-**Important**: Do NOT check for ScrollPattern - it always returns NO even when scrolling works.
-
-**Target Architecture** (future goal):
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Method Priority Chain                         │
-├─────────────────────────────────────────────────────────────────┤
-│  1. UIA (best: fractional %, knows content size)                │
-│     └── Fallback if: SetScrollPercent fails or no movement      │
-│                                                                  │
-│  2. WHEEL (to window - good for Electron apps)                  │
-│     └── Fallback if: No scroll response detected                │
-│                                                                  │
-│  3. WHEEL_CTRL (to control - 1 line/msg apps like SI)           │
-│     └── Fallback if: GetScrollPos shows >1 line jump (~40 units)│
-│         → Revert position immediately, switch to VSCROLL        │
-│                                                                  │
-│  4. VSCROLL (universal fallback - always works)                 │
-│     └── 1 line per tick, dynamic timer for acceleration         │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-**Key Insight** (for future implementation): Controls don't do sub-120 delta accumulation. SI works with WHEEL_CTRL because it scrolls 1 line per wheel message (regardless of delta), while most controls scroll 3 lines per message.
-
-### 2. Dynamic VSCROLL Timer (IMPLEMENTED)
-
-**Goal**: VSCROLL acceleration via timer speed instead of line count.
-
-**How It Works**:
-```
-Drag Distance → Timer Interval → Scroll Speed
-     8px      →     150ms      →   ~7 lines/sec (slow)
-    100px     →     100ms      →  ~10 lines/sec (moderate)
-    200px+    →      50ms      →  ~20 lines/sec (fast)
-```
-
-**Formula**:
 ```autohotkey
-timerMs := 150 - Floor((Min(AbsDist, 200) - 8) * (100 / 192))
-timerMs := Max(50, Min(150, timerMs))
-SetTimer, MBScrollTimer, %timerMs%
+exe := GetExePath()
+MsgBox % exe.path  ; Full path to executable
+MsgBox % exe.dir   ; Directory containing executable
 ```
 
-### 3. Consolidate Configuration (IMPLEMENTED)
+### GetMonitor(winTitle := "A")
 
-**Implemented**: Single configuration block with `HasVal` helper for lookups:
+Returns 1-based monitor number where window's center is located.
+
 ```autohotkey
-; === SCROLL CONFIG ===
-MB_PassthroughApps := ["chrome.exe", "everything64.exe", "VmConnect.exe"]
-MB_EnabledApps := ["mmc.exe", "7zFM.exe", "code.exe", "SystemInformer.exe"]
-MB_ExcludedControls := ["ToolbarWindow", "ReBarWindow", "Edit", "AddressBandRoot", "statusbar", "SysHeader"]
+mon := GetMonitor()  ; Which monitor is active window on?
 ```
 
-### 4. Clean Up Dead Code (IMPLEMENTED)
+### IsProcessElevated(pid)
 
-**Removed**:
-- SCROLLBAR method (was commented out)
-- Unused globals: `MB_ScrollbarHwnd`, `MB_ScrollMax`, `MB_LineAccum`, `MB_LinesScrolled`
+Returns true if process is running with elevated (admin) privileges.
 
----
-
-## Key Technical Insights
-
-### Why Each Method Exists
-
-| Method | Why It's Needed |
-|--------|-----------------|
-| UIA | Only method that provides true fractional scrolling and knows content size |
-| WHEEL | VS Code/Electron route wheel internally; control targeting breaks it |
-| WHEEL_CTRL | Controls that scroll 1 line per wheel message (SI); includes fallback detection |
-| VSCROLL | Universal fallback for controls that scroll 3+ lines per wheel message |
-
-**Important**: WHEEL_CTRL doesn't actually support sub-120 delta accumulation. SI works well with it simply because SI scrolls 1 line per wheel message (regardless of delta), while most controls scroll 3 lines. The fallback detection auto-switches to VSCROLL for controls that scroll >1 line per message.
-
-### Dynamic Timer for VSCROLL
-- VSCROLL can only send 1 line per message
-- Timer now dynamically adjusts based on drag distance:
-  - 8px drag → 150ms timer → ~7 lines/sec (slow start)
-  - 200px+ drag → 50ms timer → ~20 lines/sec (fast)
-- This provides natural acceleration without needing fractional lines
-
-### Wheel Delta Behavior
-- Standard wheel notch = 120 = 3 lines in most apps
-- **Misconception**: Sub-120 deltas do NOT accumulate in controls
-- **Reality**: Each wheel message scrolls a fixed number of lines (1 or 3) regardless of delta
-- SI happens to scroll 1 line per message → works well with WHEEL_CTRL
-- Most controls scroll 3 lines per message → need VSCROLL for smooth 1-line scrolling
-- The fallback detection compares requested lines (via delta accumulator) to actual scroll events
-
-### ViewSize Normalization (UIA only)
-```
-ViewSize = what % of content is visible
-mult = ViewSize / 3.0
-
-Examples:
-  3 items in 3-item list   → ViewSize=100% → mult=33  → very fast
-  10 items in 100-item list → ViewSize=10%  → mult=3.3 → moderate
-  10 items in 1000-item list → ViewSize=1%  → mult=0.3 → slow
+```autohotkey
+WinGet, pid, PID, A
+If (IsProcessElevated(pid))
+  MsgBox, Running as admin
 ```
 
----
+### ProcessExistsByCommandLine(cmdLine)
 
-## Test Matrix
+Returns PID if a process with matching command line exists, 0 otherwise.
 
-| Scenario | Method | Expected Behavior |
-|----------|--------|-------------------|
-| Explorer file list (few files) | UIA | Fast scroll, mult > 10 |
-| Explorer file list (many files) | UIA | Slower scroll, mult < 5 |
-| Explorer nav bar | VSCROLL | 1 line per 50ms tick |
-| VS Code editor pane | WHEEL | Smooth sub-line scroll |
-| VS Code file tree | WHEEL | Routes to correct pane |
-| SystemInformer process list | WHEEL_CTRL | Smooth acceleration |
-| mmc.exe snap-in list | UIA | Normalized scroll |
-| Chrome (passthrough) | - | Native MButton behavior |
-| Toolbar/header click | - | Native MButton behavior |
+```autohotkey
+pid := ProcessExistsByCommandLine("Code.exe"" """ . A_ScriptFullPath)
+If (pid)
+  WinActivate, ahk_pid %pid%
+```
+
+### WrapList(text, delimiter := ",", maxLen := 100)
+
+Wraps comma-separated text at ~100 chars, preserving whole items.
+
+```autohotkey
+wrapped := WrapList("item1, item2, item3, ...", ",", 100)
+; Returns: "item1, item2, item3, item4
+;           item5, item6, item7"
+```
+
+### FilterLongItems(text, maxItemLen := 80)
+
+Removes items exceeding maxItemLen from comma-separated list.
+
+```autohotkey
+filtered := FilterLongItems("short, verylongitemthatexceeds80chars..., another")
+; Returns: "short, another"
+```
+
+### SortList(text)
+
+Sorts comma-separated items alphabetically.
+
+```autohotkey
+sorted := SortList("Zebra, Apple, Mango")
+; Returns: "Apple, Mango, Zebra"
+```
 
 ---
 
 ## Session History Notes
 
-### Methods Tried and Rejected
-| Method | App | Result |
-|--------|-----|--------|
-| UIA | SystemInformer | No ScrollPattern exposed |
-| UIA | Explorer nav bar | Erratic jumping, position instability |
-| WHEEL | Explorer nav bar | No response |
-| WHEEL_CTRL | Explorer nav bar | Not smooth (ignores sub-120) |
-| SCROLLBAR (SetScrollPos) | mmc, SI | Cross-process pointer issues |
-| SendMessage vs PostMessage | WHEEL_CTRL | No difference |
-| VSCROLL with accumulator | SI, nav bar | Unnecessary complexity |
+### Extended Window Spy Development
 
-### What Works
-- **UIA + ViewSize normalization**: Explorer file lists, mmc (hardcoded via `ForceUIA`)
-- **WHEEL to window**: VS Code (hardcoded via `UseWheel`)
-- **WHEEL_CTRL to control**: SystemInformer (hardcoded via `UseWheelCtrl`)
-- **VSCROLL with dynamic timer**: Explorer nav bar (hardcoded via `UseVScroll` for SysTreeView32)
+1. Started with one-shot GUI from previous commit
+2. Converted to persistent tooltip with 250ms timer
+3. Reduced to 1500ms timer + content-change detection
+4. Added hover-to-pause functionality
+5. Fixed click-to-dialog positioning bug
+6. Added comprehensive info fields
+7. Added UIA info matching Under Cursor format
+8. v1.1: Added filtering/sorting, improved dialog sizing

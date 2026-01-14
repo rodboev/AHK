@@ -1,4 +1,4 @@
-# MButton Drag Scroll Improvements
+# === EXPLORER SMOOTH SCROLL ===
 
 Implementing 4 improvements to the MButton drag scroll system: GetScrollPos-based fallback detection, configuration consolidation, dead code removal, and full fallback chain.
 
@@ -13,6 +13,7 @@ The current WHEEL_CTRL → VSCROLL fallback (lines 1024-1044) doesn't work becau
 #### [MODIFY] [AutoHotkey.ahk](file:///c:/Dropbox/Projects/AHK/AutoHotkey.ahk)
 
 **Add GetScrollPos helper function** (before MButton handler):
+
 ```autohotkey
 ; Get vertical scroll position for a control (cross-process safe)
 GetScrollPos(hwnd) {
@@ -22,6 +23,7 @@ GetScrollPos(hwnd) {
 ```
 
 **Modify WHEEL_CTRL section** (lines 1015-1044) to:
+
 1. Query scroll position **before** sending WHEEL message
 2. Send WHEEL message
 3. Query scroll position **after**
@@ -67,6 +69,7 @@ GetScrollPos(hwnd) {
 ```
 
 **Add initialization** in MButton Down (after line 946):
+
 ```autohotkey
 MB_FallbackChecked := 0  ; Only check fallback once per drag
 ```
@@ -87,6 +90,7 @@ MB_ExcludedControls := ["ToolbarWindow", "ReBarWindow", "Edit", "AddressBandRoot
 ```
 
 Then update checks to use `HasVal()` helper:
+
 ```autohotkey
 HasVal(arr, val) {
     for i, v in arr
@@ -104,7 +108,7 @@ IsExcludedRegion := HasVal(MB_ExcludedControls, MBScroll_CtrlClassNN)
 
 ### Phase 3: Dead Code Removal
 
-#### [MODIFY] [AutoHotkey.ahk](file:///c:/Dropbox/Projects/AHK/AutoHotkey.ahk)
+#### [MODIFY] [AutoHotkey.ahk](file:///C:/Dropbox/Projects/AHK/AutoHotkey.ahk)
 
 1. **Remove commented SCROLLBAR code** (lines 1010-1013)
 2. **Remove unused globals from line 848**:
@@ -118,6 +122,7 @@ IsExcludedRegion := HasVal(MB_ExcludedControls, MBScroll_CtrlClassNN)
 
 > [!NOTE]
 > Phase 4 is more complex and should be done after validating Phases 1-3 work correctly. It requires:
+>
 > - UIA → WHEEL fallback: Detect when SetScrollPercent fails
 > - WHEEL → WHEEL_CTRL fallback: Detect when window doesn't respond to wheel
 > - Remove all hardcoded method selectors
@@ -140,19 +145,17 @@ Since this is an AHK script with UI interaction, manual testing is required:
    - Open Explorer with many folders in navigation pane
    - Middle-click drag on nav tree (SysTreeView32)
    - Should directly use VSCROLL via `UseVScroll`
-   
+   - Check tooltip if `MB_Debug := 1` shows "VSCROLL"
+
 3. **Test control without smooth scroll (fallback trigger)**
    - Find a control that scrolls 3 lines per wheel message
    - Middle-click drag → should briefly show WHEEL_CTRL then switch to VSCROLL
    - The jump should be imperceptible (reverted immediately)
 
-4. **Configuration test**
-   - Modify `MB_PassthroughApps` array
-   - Verify apps in array pass through middle-click
-
 ### Debug Output
 
 Set `MB_Debug := 1` at line 843 to enable tooltips showing:
+
 - Current method being used
 - Scroll position deltas
 - Fallback transitions
