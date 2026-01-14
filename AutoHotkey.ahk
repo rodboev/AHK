@@ -520,471 +520,765 @@ Control Text:
     Return
 Return
 
+; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+; ┃ === EXTENDED WINDOW SPY === ┃
+; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+; Description: Persistent tooltip showing window info (active + under cursor)
+; Click tooltip or press #w again to freeze and show dialog for copying
+; Forum link: https://autohotkey.com/boards/viewtopic.php?f=6&t=43544
+; Author: @rodboev
+; Version: 1.0
+#w::
+  Gui, WindowSpy:Destroy  ; Close dialog if open
+  WindowSpyToggle := !WindowSpyToggle
+  If (WindowSpyToggle) {
+    WindowSpyLastContent := ""  ; Clear cache to force first update
+    SetTimer, WindowSpyUpdate, 800
+    GoSub, WindowSpyUpdate  ; Immediate first update
+  } Else {
+    SetTimer, WindowSpyUpdate, Off
+    ToolTip
+  }
+Return
+
+$Esc::
+  ; Close WindowSpy dialog if open
+  If WinExist("Window Spy (Esc to close)") {
+    Gui, WindowSpy:Destroy
+    Return
+  }
+  ; Close WindowSpy tooltip if active
+  If (WindowSpyToggle) {
+    SetTimer, WindowSpyUpdate, Off
+    ToolTip
+    WindowSpyToggle := false
+    Return
+  }
+  ; Pass Esc through to active window
+  Send {Esc}
+Return
+
+~LButton::
+  If (WindowSpyToggle) {
+    MouseGetPos,,, clickWin
+    WinGetClass, clickClass, ahk_id %clickWin%
+    If (clickClass = "tooltips_class32") {
+      SetTimer, WindowSpyUpdate, Off
+      ToolTip
+      WindowSpyToggle := false
+      WindowSpyShowDialog()
+    }
+  }
+Return
+
+WindowSpyShowDialog() {
+  global WindowSpyRawInfo, WindowSpyEdit
+  If (WindowSpyRawInfo = "")
+    Return
+  ToolTip  ; Destroy tooltip when showing dialog
+  Gui, WindowSpy:Destroy
+  SysGet, Workspace, MonitorWorkArea
+  ; Count lines and calculate max dimensions based on workspace
+  StringReplace, _, WindowSpyRawInfo, `n, `n, UseErrorLevel
+  lineCount := ErrorLevel + 1
+  maxHeight := WorkspaceBottom - WorkspaceTop - 50  ; Leave margin for title bar
+  rowHeight := 22  ; Consolas 9pt + Edit control internal padding
+  maxRows := Floor(maxHeight / rowHeight)
+  rowCount := Min(lineCount, maxRows)
+  editWidth := Min(700, WorkspaceRight - WorkspaceLeft - 100)
+  Gui, WindowSpy:+AlwaysOnTop +Owner
+  Gui, WindowSpy:Font, s9, Consolas
+  Gui, WindowSpy:Add, Edit, vWindowSpyEdit w%editWidth% r%rowCount% +Multi +ReadOnly, %WindowSpyRawInfo%
+  ; Show first to render and get dimensions, then reposition flush to bottom-right
+  Gui, WindowSpy:Show,, Window Spy (Esc to close)
+  WinGetPos,,, GUIWidth, GUIHeight, A
+  xPos := WorkspaceRight - GUIWidth
+  yPos := WorkspaceBottom - GUIHeight
+  WinMove, A,, %xPos%, %yPos%
+}
+
+; Wrap list items at ~100 chars, preserving whole items
+; Input: comma-separated string like "item1, item2, item3"
+; Output: same items wrapped to fit maxLen, with continuation lines indented
+WrapList(text, delimiter := ",", maxLen := 100) {
+  result := ""
+  currentLine := ""
+  Loop, Parse, text, %delimiter%
+  {
+    item := Trim(A_LoopField)
+    If (item = "")
+      Continue
+    ; Calculate what this line would look like with the new item
+    testLine := currentLine = "" ? item : currentLine . ", " . item
+    If (StrLen(testLine) > maxLen && currentLine != "") {
+      ; Line would be too long, start a new line
+      result .= (result = "" ? "" : "`n  ") . currentLine
+      currentLine := item
+    } Else {
+      currentLine := testLine
+    }
+  }
+  ; Add final line
+  If (currentLine != "")
+    result .= (result = "" ? "" : "`n  ") . currentLine
+  Return result
+}
+
+; Clean window text: remove non-ASCII chars, deduplicate if long
+CleanWindowText(text) {
+  ; Remove non-ASCII characters (keep only printable ASCII 0x20-0x7E)
+  cleaned := RegExReplace(text, "[^\x20-\x7E]", "")
+  ; Collapse multiple spaces
+  cleaned := RegExReplace(cleaned, "\s+", " ")
+  cleaned := Trim(cleaned)
+
+  ; If > 300 chars, deduplicate items
+  If (StrLen(cleaned) > 300) {
+    seen := {}
+    result := ""
+    Loop, Parse, cleaned, `,
+    {
+      item := Trim(A_LoopField)
+      If (item != "" && !seen.HasKey(item)) {
+        seen[item] := true
+        result .= (result ? ", " : "") . item
+      }
+    }
+    cleaned := result
+  }
+  Return cleaned
+}
+
+; Filter out items exceeding maxLen characters from comma-separated list
+FilterLongItems(text, maxItemLen := 80) {
+  result := ""
+  Loop, Parse, text, `,
+  {
+    item := Trim(A_LoopField)
+    If (item != "" && StrLen(item) <= maxItemLen)
+      result .= (result ? ", " : "") . item
+  }
+  Return result
+}
+
+; Sort comma-separated items alphabetically
+SortList(text) {
+  sorted := ""
+  Loop, Parse, text, `,
+  {
+    item := Trim(A_LoopField)
+    If (item != "")
+      sorted .= item . "`n"
+  }
+  Sort, sorted
+  result := ""
+  Loop, Parse, sorted, `n
+  {
+    If (A_LoopField != "")
+      result .= (result ? ", " : "") . A_LoopField
+  }
+  Return result
+}
+
+WindowSpyGuiEscape:
+WindowSpyGuiClose:
+  Gui, WindowSpy:Destroy
+Return
+
+WindowSpyUpdate:
+  CoordMode, Mouse, Screen
+  CoordMode, ToolTip, Screen
+  CoordMode, Pixel, Screen
+  MouseGetPos, CursorX, CursorY, CursorWin, ClassNN
+
+  ; Pause updates when hovering over our tooltip
+  WinGetClass, hoverClass, ahk_id %CursorWin%
+  WinGet, hoverExe, ProcessPath, ahk_id %CursorWin%
+  If (hoverClass = "tooltips_class32" && hoverExe = A_AhkPath)
+    Return
+
+  DetectHiddenText, On
+
+  ; === ACTIVE WINDOW ===
+  WinGet, ActiveWin, ID, A
+  WinGetTitle, ActiveTitle, ahk_id %ActiveWin%
+  WinGetClass, ActiveClass, ahk_id %ActiveWin%
+  WinGet, ActivePID, PID, ahk_id %ActiveWin%
+  WinGetPos, ActiveX, ActiveY, ActiveW, ActiveH, ahk_id %ActiveWin%
+  WinGet, ActiveStyle, Style, ahk_id %ActiveWin%
+  WinGet, ActiveExStyle, ExStyle, ahk_id %ActiveWin%
+  ControlGetFocus, ActiveFocusedControl, ahk_id %ActiveWin%
+  ActiveFocusedHwnd := ""
+  If (ActiveFocusedControl != "")
+    ControlGet, ActiveFocusedHwnd, Hwnd,, %ActiveFocusedControl%, ahk_id %ActiveWin%
+  activeExe := GetExePath("ahk_id " ActiveWin)
+  activeMon := GetMonitor("ahk_id " ActiveWin)
+  activeElevated := IsProcessElevated(ActivePID)
+  activeCmdLine := ""
+  For process in ComObjGet("winmgmts:").ExecQuery("Select CommandLine from Win32_Process where ProcessId=" . ActivePID)
+    activeCmdLine := process.CommandLine
+  WinGetText, ActiveWinText, ahk_id %ActiveWin%
+  WinGet, ActiveControls, ControlList, ahk_id %ActiveWin%
+
+  ; Format controls: comma-separated, filter >80 chars, sort alphabetically
+  StringReplace, ActiveControlsRaw, ActiveControls, `r`n, `, , All
+  StringReplace, ActiveControlsRaw, ActiveControlsRaw, `n, `, , All
+  ActiveControlsRaw := SortList(FilterLongItems(ActiveControlsRaw))
+  ActiveControlsDisplay := WrapList(ActiveControlsRaw, ",")
+  ; Format window text: comma-separated, clean non-ASCII, filter >80 chars, dedupe if long
+  StringReplace, ActiveWinTextRaw, ActiveWinText, `r`n, `, , All
+  StringReplace, ActiveWinTextRaw, ActiveWinTextRaw, `n, `, , All
+  ActiveWinTextRaw := RTrim(FilterLongItems(CleanWindowText(ActiveWinTextRaw)), ", ")
+  ActiveWinTextDisplay := WrapList(ActiveWinTextRaw, ",")
+
+  ; UIA for active window - just show persistent object reference
+  ActiveUIA_Info := ""
+  Try {
+    global G_UIA
+    If (!G_UIA)
+      G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
+    ActiveUIA_Info := "UIA: " G_UIA
+  } catch e {
+    ActiveUIA_Info := "UIA: EXCEPTION - " e.Message
+  }
+
+  ; Build wrapped version for tooltip
+  ActiveInfo := "=== ACTIVE WINDOW ===`n"
+  ActiveInfo .= "Title: " ActiveTitle "`n"
+  ActiveInfo .= "ahk_id: " ActiveWin " | ahk_class: " ActiveClass "`n"
+  ActiveInfo .= "ahk_exe: " activeExe.path "`n"
+  ActiveInfo .= "Dir: " activeExe.dir "`n"
+  ActiveInfo .= "CmdLine: " WrapList(activeCmdLine, " ") "`n"
+  ActiveInfo .= "PID: " ActivePID (activeElevated ? " (Elevated)" : "") " | Monitor: " activeMon "`n"
+  ActiveInfo .= "Pos: (" ActiveX ", " ActiveY ") | Size: " ActiveW " x " ActiveH "`n"
+  ActiveInfo .= "Style: " ActiveStyle " | ExStyle: " ActiveExStyle "`n"
+  ActiveInfo .= "Focused Control: " ActiveFocusedControl (ActiveFocusedHwnd ? " | hWnd: " ActiveFocusedHwnd : "") "`n"
+  ActiveInfo .= ActiveUIA_Info "`n"
+  ActiveInfo .= "Window Text: " ActiveWinTextDisplay "`n"
+  ActiveInfo .= "Controls: " ActiveControlsDisplay "`n"
+
+  ; Build raw version for dialog
+  ActiveInfoRaw := "=== ACTIVE WINDOW ===`n"
+  ActiveInfoRaw .= "Title: " ActiveTitle "`n"
+  ActiveInfoRaw .= "ahk_id: " ActiveWin " | ahk_class: " ActiveClass "`n"
+  ActiveInfoRaw .= "ahk_exe: " activeExe.path "`n"
+  ActiveInfoRaw .= "Dir: " activeExe.dir "`n"
+  ActiveInfoRaw .= "CmdLine: " activeCmdLine "`n"
+  ActiveInfoRaw .= "PID: " ActivePID (activeElevated ? " (Elevated)" : "") " | Monitor: " activeMon "`n"
+  ActiveInfoRaw .= "Pos: (" ActiveX ", " ActiveY ") | Size: " ActiveW " x " ActiveH "`n"
+  ActiveInfoRaw .= "Style: " ActiveStyle " | ExStyle: " ActiveExStyle "`n"
+  ActiveInfoRaw .= "Focused Control: " ActiveFocusedControl (ActiveFocusedHwnd ? " | hWnd: " ActiveFocusedHwnd : "") "`n"
+  ActiveInfoRaw .= ActiveUIA_Info "`n"
+  ActiveInfoRaw .= "Window Text: " ActiveWinTextRaw "`n"
+  ActiveInfoRaw .= "Controls: " ActiveControlsRaw "`n"
+
+  ; === WINDOW UNDER CURSOR ===
+  WinGetTitle, CursorTitle, ahk_id %CursorWin%
+  WinGetClass, CursorClass, ahk_id %CursorWin%
+  WinGet, CursorPID, PID, ahk_id %CursorWin%
+  WinGetPos, CursorWinX, CursorWinY, CursorWinW, CursorWinH, ahk_id %CursorWin%
+  WinGet, CursorStyle, Style, ahk_id %CursorWin%
+  WinGet, CursorExStyle, ExStyle, ahk_id %CursorWin%
+  cursorExe := GetExePath("ahk_id " CursorWin)
+  cursorMon := GetMonitor("ahk_id " CursorWin)
+  cursorElevated := IsProcessElevated(CursorPID)
+  CursorHwnd := DllCall("WindowFromPoint", "int64", CursorX | (CursorY << 32), "Ptr")
+  cursorCmdLine := ""
+  For process in ComObjGet("winmgmts:").ExecQuery("Select CommandLine from Win32_Process where ProcessId=" . CursorPID)
+    cursorCmdLine := process.CommandLine
+  WinGetText, CursorWinText, ahk_id %CursorWin%
+  WinGet, CursorControls, ControlList, ahk_id %CursorWin%
+
+  ; Format controls: comma-separated, filter >80 chars, sort alphabetically
+  StringReplace, CursorControlsRaw, CursorControls, `r`n, `, , All
+  StringReplace, CursorControlsRaw, CursorControlsRaw, `n, `, , All
+  CursorControlsRaw := SortList(FilterLongItems(CursorControlsRaw))
+  CursorControlsDisplay := WrapList(CursorControlsRaw, ",")
+  ; Format window text: comma-separated, clean non-ASCII, filter >80 chars, dedupe if long
+  StringReplace, CursorWinTextRaw, CursorWinText, `r`n, `, , All
+  StringReplace, CursorWinTextRaw, CursorWinTextRaw, `n, `, , All
+  CursorWinTextRaw := RTrim(FilterLongItems(CleanWindowText(CursorWinTextRaw)), ", ")
+  CursorWinTextDisplay := WrapList(CursorWinTextRaw, ",")
+
+  ; Cursor position relative to window
+  CursorRelX := CursorX - CursorWinX
+  CursorRelY := CursorY - CursorWinY
+
+  ; UIA Element Info - just show if UIA is available
+  UIA_Info := ""
+  Try {
+    global G_UIA
+    If (!G_UIA)
+      G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
+    UIA_Info := "UIA: " G_UIA
+  } catch e {
+    UIA_Info := "UIA: EXCEPTION - " e.Message
+  }
+
+  ; Build wrapped version for tooltip
+  CursorInfo := "`n=== UNDER CURSOR ===`n"
+  CursorInfo .= "Title: " CursorTitle "`n"
+  CursorInfo .= "ahk_id: " CursorWin " | ahk_class: " CursorClass "`n"
+  CursorInfo .= "ahk_exe: " cursorExe.path "`n"
+  CursorInfo .= "Dir: " cursorExe.dir "`n"
+  CursorInfo .= "CmdLine: " WrapList(cursorCmdLine, " ") "`n"
+  CursorInfo .= "PID: " CursorPID (cursorElevated ? " (Elevated)" : "") " | Monitor: " cursorMon "`n"
+  CursorInfo .= "Pos: (" CursorWinX ", " CursorWinY ") | Size: " CursorWinW " x " CursorWinH "`n"
+  CursorInfo .= "Style: " CursorStyle " | ExStyle: " CursorExStyle "`n"
+  CursorInfo .= "Control: " ClassNN " | hWnd: " CursorHwnd "`n"
+  ; CursorInfo .= "Cursor: (" CursorX ", " CursorY ") | CursorRel: (" CursorRelX ", " CursorRelY ")`n"
+  CursorInfo .= UIA_Info "`n"
+  CursorInfo .= "Window Text: " CursorWinTextDisplay "`n"
+  CursorInfo .= "Controls: " CursorControlsDisplay
+
+  ; Build raw version for dialog
+  CursorInfoRaw := "`n=== UNDER CURSOR ===`n"
+  CursorInfoRaw .= "Title: " CursorTitle "`n"
+  CursorInfoRaw .= "ahk_id: " CursorWin " | ahk_class: " CursorClass "`n"
+  CursorInfoRaw .= "ahk_exe: " cursorExe.path "`n"
+  CursorInfoRaw .= "Dir: " cursorExe.dir "`n"
+  CursorInfoRaw .= "CmdLine: " cursorCmdLine "`n"
+  CursorInfoRaw .= "PID: " CursorPID (cursorElevated ? " (Elevated)" : "") " | Monitor: " cursorMon "`n"
+  CursorInfoRaw .= "Pos: (" CursorWinX ", " CursorWinY ") | Size: " CursorWinW " x " CursorWinH "`n"
+  CursorInfoRaw .= "Style: " CursorStyle " | ExStyle: " CursorExStyle "`n"
+  CursorInfoRaw .= "Control: " ClassNN " | hWnd: " CursorHwnd "`n"
+  ; CursorInfoRaw .= "Cursor: (" CursorX ", " CursorY ") | CursorRel: (" CursorRelX ", " CursorRelY ")`n"
+  CursorInfoRaw .= UIA_Info "`n"
+  CursorInfoRaw .= "Window Text: " CursorWinTextRaw "`n"
+  CursorInfoRaw .= "Controls: " CursorControlsRaw
+
+  ; Store for tooltip and dialog
+  global WindowSpyRawInfo, WindowSpyLastContent
+  WindowSpyRawInfo := ActiveInfoRaw . CursorInfoRaw
+
+  ; Only update tooltip if content changed (reduces flicker)
+  newContent := ActiveInfo . CursorInfo
+  If (newContent = WindowSpyLastContent)
+    Return
+  WindowSpyLastContent := newContent
+
+  ; Position tooltip in bottom-right corner
+  SysGet, Workspace, MonitorWorkArea
+  tooltipHeader := "Window Spy (Click to copy, Esc or #w to close)`n`n"
+  ToolTip, %tooltipHeader%%newContent%, WorkspaceRight - 550, WorkspaceBottom - 620
+Return
+
 ; ==============================================================================================================
 
 ; VLC binding to go to next file on mouse middle button press
 #IfWinActive ahk_class QWidget
-$*MButton::Send n
+  $*MButton::Send n
 #IfWinActive
 
-; Win+L: Turn off monitor
-; TODO: Limit to local network. https://autohotkey.com/board/topic/25456-which-string-use-workgroup/?p=165074
-#l::
-    Run RunFromProcess-x64 explorer.exe nircmd cmdwait 200 monitor off
-    SendMessage, 0x112, 0xF140, 0,, Program Manager
-    Sleep 3000
-    VarSetCapacity(screen_saver_active,4,0)
-    SPI_GETSCREENSAVERRUNNING = 0x0072
-    result := DllCall( "user32.dll\SystemParametersInfo", "uint", SPI_GETSCREENSAVERRUNNING, "uint", 0, "uint*", screen_saver_active, "uint", 0 )
-    WinGetActiveTitle, Title
-    if (Title = "")
-        SendMessage, 0x112, 0xF170, 2,, Program Manager ; Shut off monitor
+; Ctrl+ShIft+L: Turn off monitor
++!l::
+  UserRun("nircmd", "cmdwait 200 monitor off")
+  SendMessage, 0x112, 0xF140, 0,, Program Manager
+  Sleep 3000
+  VarSetCapacity(screen_saver_active,4,0)
+  SPI_GETSCREENSAVERRUNNING = 0x0072
+  result := DllCall( "user32.dll\SystemParametersInfo", "uint", SPI_GETSCREENSAVERRUNNING, "uint", 0, "uint*", screen_saver_active, "uint", 0 )
+  WinGetActiveTitle, Title
+  If (Title = "")
+    SendMessage, 0x112, 0xF170, 2,, Program Manager ; Shut off monitor
 Return
 
+; Alt+D: Focus address bar in Open dialog
 #IfWinActive, Open
-    !d::Send {Alt Down}n{Alt Up}
+  !d::Send {Alt Down}n{Alt Up}
 #IfWinActive
 
-; ; ; Win+L: Turn off monitor
-; ; ; TODO: Limit to local network. https://autohotkey.com/board/topic/25456-which-string-use-workgroup/?p=165074
-
-^!l::
-    Run, psexec -l nircmd cmdwait 200 monitor off
-    SendMessage, 0x112, 0xF140, 0,, Program Manager
-    Sleep 5000
-    VarSetCapacity(screen_saver_active,4,0)
-    SPI_GETSCREENSAVERRUNNING = 0x0072
-    result := DllCall( "user32.dll\SystemParametersInfo", "uint", SPI_GETSCREENSAVERRUNNING, "uint", 0, "uint*", screen_saver_active, "uint", 0 )
-    WinGetActiveTitle, Title
-    if (Title = "")
-        SendMessage, 0x112, 0xF170, 2,, Program Manager ; Shut off monitor
+; Ctrl+E: Edit selected file (in Explorer or file dialog)
+^e::
+  selected := ""
+  If WinActive("ahk_class #32770") { ; File dialog active
+    ControlGetText, selected, Edit1, A ; Selected file's path
+  }
+  Else If WinActive("ahk_class CabinetWClass") { ; Explorer window active
+    For window in ComObjCreate("Shell.Application").Windows {
+      If (window.hwnd == WinActive("A")) {
+        selected := window.Document.SelectedItems.Item(0).Path
+        Break
+      }
+    }
+  }
+  If (selected != "") {
+    pid := ProcessExistsByCommandLine("sublime_text.exe"" """ . selected)
+    If (pid) {
+      WinActivate, ahk_pid %pid%
+    } Else {
+      UserRun("subl", selected)
+    }
+  }
 Return
 
-; Edit the currently selected file
-#IfWinActive ahk_class CabinetWClass ; Only run if Explorer window is active
+#IfWinActive ahk_class #32770 ; Only run If a file dialog is active
 ^e:: ; Ctrl+E hotkey
-    ; Get the path of the selected file
-    for window in ComObjCreate("Shell.Application").Windows
-    {
-        if (window.hwnd == WinActive("A"))
-        {
-            selected := window.Document.SelectedItems.Item(0).Path
-            break
-        }
-    }
-    ; Open the selected file with Notepad
-    Run, deelevate64 "C:\Program Files\Sublime Text\subl.exe" "\"%selected%\""
-return
-#IfWinActive
-
-#IfWinActive ahk_class #32770 ; Only run if a file dialog is active
-^e:: ; Ctrl+E hotkey
-    ; Get the path of the selected file
-    ControlGetText, selected, Edit1, A
-    ; Open the selected file with Notepad
-    Run, "C:\Program Files\Sublime Text\subl.exe" "%selected%"
-return
-#IfWinActive
-
-; Alt+Shift+S = Run or activate Everything
-; to send original key:
-; SendInput {RWin Down}s{RwinUp}
-DetectHiddenWindows, On
-+!s::
-    If WinExist("ahk_class EVERYTHING") {
-        WinShow
-        WinActivate
-    }
-    Else {
-        Run, DeElevate "C:\Program Files\Everything 1.5a\Everything64.exe"
-        WinWait ahk_exe Everything64.exe
-        WinActivate
-    }
+  ; Open the selected file with Notepad
+  Run, "C:\Program Files\Sublime Text\subl.exe" "%selected%"
 Return
-DetectHiddenWindows, Off
+#IfWinActive
 
-#IfWinActive ahk_class EVERYTHING
+; Alt+ShIft+S = Run or activate Everything
+~+!s::
+  DetectHiddenWindows, On
+  If (!WinExist("ahk_exe Everything.exe")) {
+    UserRun("C:\Program Files\Everything 1.5a\Everything.exe")
+    WinWait, ahk_exe Everything.exe
+    WinActivate
+  }
+Return
+
+#IfWinActive ahk_exe Everything.exe
 Esc::
 !F4::
-    If WinExist("ahk_class EVERYTHING_DROPDOWNLIST")
-        WinClose
-    WinHide
+  If WinExist("ahk_class EVERYTHING_DROPDOWNLIST")
+    WinClose
+  WinHide
 Return
 #IfWinActive
 
-
-; From http://www.howtogeek.com/howto/8955/make-backspace-in-windows-7-or-vista-explorer-go-up-like-xp-did/
-; Fixed quotes
+; Up one level in Explorer unless renaming or in tree view
 #IfWinActive, ahk_class CabinetWClass
-Backspace::
+  Backspace::
     ControlGet renamestatus,Visible,,Edit1,A
     ControlGetFocus focused, A
     If (renamestatus != 1 and (focused = "DirectUIHWND3" or focused = "SysTreeView321"))
-        SendInput {Alt Down}{Up}{Alt Up}
+      SendInput {Alt Down}{Up}{Alt Up}
     Else
       Send {Backspace}
-Return
+  Return
 #IfWinActive
 
 ; Global Volume controls on mouse side buttons
 $XButton1::
 While GetKeyState("XButton1","p"){
-    Send {Volume_Down}
-    Sleep 100
+  Send {Volume_Down}
+  Sleep 100
 }
 Return
 
 $XButton2::
-    While GetKeyState("XButton2","p"){
-    Send {Volume_Up}
-    Sleep 100
+  While GetKeyState("XButton2","p"){
+  Send {Volume_Up}
+  Sleep 100
 }
 Return
 
 
 ; Accelerated scrolling in MPC
-; Shift+WheelUp/Down = Scroll by 10x
 ; https://autohotkey.com/board/topic/48426-accelerated-scrolling-script/?p=333222
 ; TODO: Need to merge with scroll control under mouse
 ; TODO: Alt+WheelUp/Down = Scroll horizontally
 ; #If (WinActive("ahk_exe explorer.exe") or WinActive("ahk_class PROCMON_WINDOW_CLASS") or WinActive("ahk_class MPC-BE") or WinActive("ahk_class MediaPlayerClassicW"))
 #IfWinActive ahk_class MediaPlayerClassicW
-; The length of a scrolling session. Keep scrolling within this time to accumulate boost. ; Default: 500. Recommended between 400 and 1000.
-WheelUp::
-WheelDown::
+  ; WheelUp/Down scroll with acceleraation (10x with ShIft)
+  WheelUp::
+  WheelDown::
+    ; The length of a scrolling session. Keep scrolling within this time to accumulate boost. ; Default: 500. Recommended between 400 and 1000.
     timeout := 500
+
     ; If you scroll a long distance in one session, apply additional boost factor. The higher the ; value, the longer it takes to activate, and the slower it accumulates. ; Set to zero to disable ; completely. Default: 30.
     boost := 3
+
     ; Spamming applications with hundreds of individual scroll events can slow them down. This sets ; the maximum number of scrolls sent per click, i.e. max velocity. ; Default: 60.
     limit := 30
     distance := 0
     vmax := 1
     t := A_TimeSincePriorHotkey
-    ; ToolTip, t %t% timeout 500
-    ; ToolTip, timeout: %timeout%
-    if (A_PriorHotkey = A_ThisHotkey && t < timeout) {
-    ; if (A_PriorHotkey = A_ThisHotkey) {
-       ; ToolTip, t: %t% timeout: 500
-       ; t := A_TimeSincePriorHotkey
-           distance++
-           v := (t < 80 && t > 1) ? (250.0 / t) - 1 : 1
-           if (boost > 1 && distance > boost)
-           {
-               if (v > vmax)
-                   vmax := v
-               else
-                   v := vmax
-               v *= distance / boost
-           }
-           QuickToolTip(v, 500)
-           v := (v > 1) ? ((v > limit) ? limit : Floor(v)) : 1
-           MouseClick, %A_ThisHotkey%, , , v
-       QuickToolTip(text, delay)
-       {
-           ToolTip, ScrollAccel: %text%
-           SetTimer ToolTipOff, %delay%
-           Return
-           ToolTipOff:
-           SetTimer ToolTipOff, Off
-           ToolTip
-           Return
-       }
+    If (A_PriorHotkey = A_ThisHotkey && t < timeout) {
+        ; ToolTip, t: %t% timeout: 500
+        ; t := A_TimeSincePriorHotkey
+        distance++
+        v := (t < 80 && t > 1) ? (250.0 / t) - 1 : 1
+        If (boost > 1 && distance > boost)
+        {
+          If (v > vmax)
+            vmax := v
+          Else
+            v := vmax
+          v *= distance / boost
+        }
+        QuickToolTip(v, 500)
+        v := (v > 1) ? ((v > limit) ? limit : Floor(v)) : 1
+        MouseClick, %A_ThisHotkey%, , , v
+      QuickToolTip(text, delay)
+      {
+        ToolTip, ScrollAccel: %text%
+        SetTimer ToolTipOff, %delay%
+        Return
+        ToolTipOff:
+        SetTimer ToolTipOff, Off
+        ToolTip
+        Return
+      }
     }
-    else {
-           ; QuickToolTip("normal", 500)
-           MouseClick, %A_ThisHotkey%
+    Else {
+        ; QuickToolTip("normal", 500)
+        MouseClick, %A_ThisHotkey%
     }
     ; #If
-Return
-; +WheelDown::SendMessage,0x0111,904,,,ahk_class MediaPlayerClassicW
-; +WheelUp::SendMessage,0x0111,903,,,ahk_class MediaPlayerClassicW 
-; ~MWheel & RButton::
-+WheelUp::Send {Click WheelUp 10}
-+WheelDown::Send {Click WheelDown 10}
-    ; ToolTip, WheelDown MPC
+  Return
+  +WheelUp::Send {Click WheelUp 10}
+  +WheelDown::Send {Click WheelDown 10}
 #IfWinActive
 
-; === EXPLORER SMOOTH SCROLL ===
-; Description: Fractional scrolling in Explorer (and AllowedApps) on MButton drag, similar to Chrome
-; Permalink: https://autohotkey.com/boards/viewtopic.php?t=43715
+; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+; ┃ === EXPLORER SMOOTH SCROLL === ┃
+; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+; Description: Super-smoooth, fractional scrolling in Explorer (and more) on middle mouse button drag, similar to Chrome
+; Permalink (latest): https://github.com/rodboev/AHK/
+; Forum thread: https://autohotkey.com/boards/viewtopic.php?t=43715
 ; Author: @rodboev
-; Version: 2.1
-
-; === SCROLL CONFIG ===
-MB_PassthroughApps := ["chrome.exe", "everything64.exe", "VmConnect.exe"]
-MB_EnabledApps := ["mmc.exe", "7zFM.exe", "code.exe", "SystemInformer.exe"]
-MB_ExcludedControls := ["ToolbarWindow", "ReBarWindow", "Edit", "AddressBandRoot", "statusbar", "SysHeader"]
-
-MB_Debug := 0  ; Set to 1 to show debug tooltips
-
-; Get vertical scroll position for a control (cross-process safe)
-GetScrollPos(hwnd) {
-    SB_VERT := 1
-    return DllCall("GetScrollPos", "Ptr", hwnd, "Int", SB_VERT, "Int")
-}
-
-; Check if array contains a value (partial match)
-HasVal(arr, val) {
-    for i, v in arr
-        if (InStr(val, v))
-            return true
-    return false
-}
+; Version: 2.2
 
 $*MButton::
-    global MBScroll_X1, MBScroll_Y1, MBScroll_Win, MBScroll_CtrlClassNN, MBScroll_Triggered
-    global G_UIA, MB_ScrollPattern, MB_Element, MBScroll_Ctrl
-    global MB_Disabled, MB_Method, MB_ViewSize
+  global MBScroll_X1, MBScroll_Y1, MBScroll_Win, MBScroll_CtrlClassNN, MBScroll_Triggered
+  global G_UIA, MB_ScrollPattern := 0, MB_Element := 0, MBScroll_Ctrl
+  global MB_Disabled := 0, MB_ViewSize := 10.0, MB_AccumPct := -1
 
-    MouseGetPos,,, MBScroll_Win, MBScroll_CtrlClassNN
-    WinGetClass, ahk_class, ahk_id %MBScroll_Win%
-    WinGet, ahk_exe, ProcessName, ahk_id %MBScroll_Win%
-    WinGetText, VisibleText, ahk_id %MBScroll_Win%
-    WinGet, ControlText, ControlList, ahk_id %MBScroll_Win%
+  global MB_Method := "VSCROLL" ; Default fallback
+  global MB_FallbackChecked := 0  ; Check fallback once per drag
 
-    ; ===========================================
-    ; SCROLL PREFERENCES (uses config arrays at top)
-    ; ===========================================
-    HasNativeScroll := HasVal(MB_PassthroughApps, ahk_exe)
-    IsAllowedApp := HasVal(MB_EnabledApps, ahk_exe)
-    IsAllowedContent := InStr(VisibleText, "Tree View") or InStr(VisibleText, "FolderView") or InStr(ControlText, "ScrollBar")
-    IsExcludedRegion := HasVal(MB_ExcludedControls, MBScroll_CtrlClassNN) or (not MBScroll_CtrlClassNN and not (ahk_class = "Shell_TrayWnd" or ahk_class = "WorkerW"))
+  ; Get vertical scroll position For a control (cross-process safe)
+  GetScrollPos(hwnd) {
+    Return DllCall("GetScrollPos", "Ptr", hwnd, "Int", 1, "Int")
+  }
 
-    ; ===========================================
-    ; SCROLL METHOD SELECTION
-    ; ===========================================
-    ; UIA: Smooth fractional % scrolling via SetScrollPercent (control focused)
-    ; WHEEL: WM_MOUSEWHEEL with sub-120 to WINDOW (VS Code - routes internally)
-    ; WHEEL_CTRL: WM_MOUSEWHEEL with sub-120 to CONTROL (SI - better acceleration)
-    ; VSCROLL: WM_VSCROLL line-by-line, slower timer (Explorer nav - most compatible)
-    ForceUIA := ((ahk_exe = "mmc.exe") or (ahk_class = "CabinetWClass")) and !InStr(MBScroll_CtrlClassNN, "SysTreeView32")
-    UseWheel := (ahk_exe = "code.exe")
-    UseWheelCtrl := (ahk_exe = "SystemInformer.exe")
-    UseVScroll := InStr(MBScroll_CtrlClassNN, "SysTreeView32")
 
-    ; ===========================================
-    ; PASSTHROUGH OR SCROLL?
-    ; ===========================================
-    ShouldScroll := !HasNativeScroll and (IsAllowedApp or IsAllowedContent) and !IsExcludedRegion
-    If (!ShouldScroll) {
-        MB_Disabled := 1
-        SendInput, {Blind}{MButton Down}
-        Return
+  MouseGetPos,,, MBScroll_Win, MBScroll_CtrlClassNN
+  WinGetClass, ahk_class, ahk_id %MBScroll_Win%
+  WinGet, ahk_exe, ProcessName, ahk_id %MBScroll_Win%
+  WinGetText, VisibleText, ahk_id %MBScroll_Win%
+  WinGet, ControlText, ControlList, ahk_id %MBScroll_Win%
+
+  ; APP LIST (passthrough/allow, excluded controls)
+  MB_PassthroughApps := ["chrome.exe", "everything64.exe", "VmConnect.exe"]
+  MB_EnabledApps := ["mmc.exe", "7zFM.exe", "code.exe", "SystemInFormer.exe"]
+  MB_ExcludedControls := ["ToolbarWindow", "ReBarWindow", "Edit", "AddressBandRoot", "statusbar", "SysHeader"]
+
+  ; SCROLL CONFIG (from app list)
+  HasNativeScroll := HasVal(MB_PassthroughApps, ahk_exe)
+  IsAllowedApp := HasVal(MB_EnabledApps, ahk_exe)
+  IsAllowedContent := InStr(VisibleText, "Tree View") or InStr(VisibleText, "FolderView") or InStr(ControlText, "ScrollBar")
+  IsExcludedRegion := HasVal(MB_ExcludedControls, MBScroll_CtrlClassNN) or (not MBScroll_CtrlClassNN and not (ahk_class = "Shell_TrayWnd" or ahk_class = "WorkerW"))
+
+  ; OVERRIDES (Force specIfic method For certain apps)
+  ; - UIA: Smooth fractional % scrolling via SetScrollPercent (Explorer)
+  ; - WHEEL: WM_MOUSEWHEEL - sub-40 (Electron apps: VSCode, )
+  ; - WHEEL_CTRL: WM_MOUSEWHEEL (120, better acceleration than VSCROLL)
+  ; - VSCROLL: WM_VSCROLL line-by-line, slower timer (40 -- single line)
+  ForceUIA := ((ahk_exe = "mmc.exe") or (ahk_class = "CabinetWClass")) and !InStr(MBScroll_CtrlClassNN, "SysTreeView32")
+  UseWheel := (ahk_exe = "code.exe")
+  UseWheelCtrl := (ahk_exe = "SystemInFormer.exe")
+  UseVScroll := InStr(MBScroll_CtrlClassNN, "SysTreeView32")
+
+  ; DETERMINE If SCROLLING SHOULD OCCUR
+  ShouldScroll := !HasNativeScroll and (IsAllowedApp or IsAllowedContent) and !IsExcludedRegion
+  If (!ShouldScroll) {
+    MB_Disabled := 1
+    SendInput, {Blind}{MButton Down}
+    Return
+  }
+  MB_Disabled := 0
+
+  ; Activate Explorer window If clicking on inactive one
+  If (ahk_class = "CabinetWClass") {
+    WinGet, activeWin, ID, A
+    If (MBScroll_Win != activeWin) {
+      WinActivate, ahk_id %MBScroll_Win%
     }
-    MB_Disabled := 0
+  }
 
-    ; ===========================================
-    ; EXPLORER WINDOW ACTIVATION
-    ; ===========================================
-    ; Activate Explorer window if clicking on inactive one
-    If (ahk_class = "CabinetWClass") {
-        WinGet, activeWin, ID, A
-        If (MBScroll_Win != activeWin) {
-            WinActivate, ahk_id %MBScroll_Win%
-        }
+  ; Capture initial mouse coords
+  CoordMode, Mouse, Screen
+  MouseGetPos, MBScroll_X1, MBScroll_Y1
+
+  ; Get control window handle (hwnd)
+  ControlGet, MBScroll_Ctrl, Hwnd,, %MBScroll_CtrlClassNN%, ahk_id %MBScroll_Win%
+  MBScroll_Triggered := 0
+
+  ; DETERMINE SCROLL METHOD
+  ; UIA For mmc, Explorer file lists (control focused)
+  If (ForceUIA) {
+    If (!G_UIA) {
+      G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
     }
-
-    ; ===========================================
-    ; COORDINATE CAPTURE
-    ; ===========================================
-    CoordMode, Mouse, Screen
-    MouseGetPos, MBScroll_X1, MBScroll_Y1
-
-    ; Get control hwnd
-    ControlGet, MBScroll_Ctrl, Hwnd,, %MBScroll_CtrlClassNN%, ahk_id %MBScroll_Win%
-    MBScroll_Triggered := 0
-
-    ; ===========================================
-    ; DETERMINE SCROLL METHOD
-    ; ===========================================
-    MB_Element := 0
-    MB_ScrollPattern := 0
-    MB_AccumPct := -1
-    MB_ViewSize := 10.0
-    MB_FallbackChecked := 0  ; Only check fallback once per drag
-    MB_Method := "WHEEL"  ; Default fallback
-
-    ; UIA for mmc, Explorer file lists (control focused)
-    If (ForceUIA) {
-        If (!G_UIA) {
-            G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
-        }
-        ; Always use control if available, fallback to window
-        targetForUIA := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
-        DllCall(NumGet(NumGet(G_UIA+0)+6*A_PtrSize), "Ptr", G_UIA, "Ptr", targetForUIA, "Ptr*", MB_Element)
-        If (MB_Element) {
-            ; Get ScrollPattern (10004)
-            DllCall(NumGet(NumGet(MB_Element+0)+16*A_PtrSize), "Ptr", MB_Element, "Int", 10004, "Ptr*", MB_ScrollPattern)
-            ; Get ViewSize for normalization
-            DllCall(NumGet(NumGet(MB_ScrollPattern+0)+8*A_PtrSize), "Ptr", MB_ScrollPattern, "Double*", MB_ViewSize)
-            If (MB_ViewSize < 1)
-                MB_ViewSize := 10.0
-        }
-        MB_Method := "UIA"
+    ; Always use control If available, fallback to window
+    targetForUIA := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
+    DllCall(NumGet(NumGet(G_UIA+0)+6*A_PtrSize), "Ptr", G_UIA, "Ptr", targetForUIA, "Ptr*", MB_Element)
+    If (MB_Element) {
+      ; Get ScrollPattern (10004)
+      DllCall(NumGet(NumGet(MB_Element+0)+16*A_PtrSize), "Ptr", MB_Element, "Int", 10004, "Ptr*", MB_ScrollPattern)
+      ; Get ViewSize For normalization
+      DllCall(NumGet(NumGet(MB_ScrollPattern)+8*A_PtrSize), "Ptr", MB_ScrollPattern, "Double*", MB_ViewSize)
+      If (MB_ViewSize < 1)
+        MB_ViewSize := 10.0
     }
-    ; WHEEL_CTRL for SI (with GetScrollPos fallback detection)
-    Else If (UseWheelCtrl) {
-        MB_Method := "WHEEL_CTRL"
-    }
-    ; VSCROLL for Explorer nav bar (dynamic timer based on distance)
-    Else If (UseVScroll) {
-        MB_Method := "VSCROLL"
-    }
-    ; WHEEL to window for VS Code
-    Else If (UseWheel) {
-        MB_Method := "WHEEL"
-    }
+    MB_Method := "UIA"
+  }
+  Else If (UseWheel) { ; WM_MOUSEWHEEL For Electron apps (sub-40)
+    MB_Method := "WHEEL"
+  }
+  Else If (UseWheelCtrl) { ; WM_MOUSEWHEEL For CONTROL with GetScrollPos fallback
+    MB_Method := "WHEEL_CTRL"
+  }
+  Else If (UseVScroll) { ; WM_VSCROLL For TreeView / Explorer nav pane
+    MB_Method := "VSCROLL"
+  }
 
-    ; Start timer (VSCROLL starts slow, adjusts dynamically in timer)
-    timerInterval := (MB_Method = "VSCROLL") ? 150 : 10
-    SetTimer, MBScrollTimer, %timerInterval%
+  ; Start timer (VSCROLL starts slow, adjusts dynamically in timer)
+  timerInterval := (MB_Method = "VSCROLL") ? 150 : 10
+  SetTimer, MBScrollTimer, %timerInterval%
 Return
 
 MBScrollTimer:
-    global MB_AccumPct, MB_Method, MB_ViewSize, MBScroll_Ctrl, MB_FallbackChecked
-    ; Safety check: if MButton released, stop immediately
-    If !GetKeyState("MButton", "P") {
-        SetTimer, MBScrollTimer, Off
-        If (MB_Debug)
-            ToolTip
-        Return
+  global MB_AccumPct, MB_Method, MB_ViewSize, MBScroll_Ctrl, MB_FallbackChecked
+  ; Safety check: If MButton released, stop immediately
+  If !GetKeyState("MButton", "P") {
+    SetTimer, MBScrollTimer, Off
+    If (MB_Debug)
+      ToolTip
+    Return
+  }
+
+  CoordMode, Mouse, Screen
+  MouseGetPos,, Y2
+  SignedDist := Y2 - MBScroll_Y1
+  AbsDist := Abs(SignedDist)
+
+  If (AbsDist >= 8) {
+    MBScroll_Triggered := 1
+    signDir := (SignedDist > 0) ? 1 : -1
+    absEffective := AbsDist
+
+    ; Double curve: responsive up to 100px, soft cap beyond
+    If (absEffective <= 100) {
+      curveValue := absEffective ** 0.8
+    } Else {
+      curveValue := (100 ** 0.8) + ((absEffective - 100) ** 0.6)
     }
 
-    CoordMode, Mouse, Screen
-    MouseGetPos,, Y2
-    SignedDist := Y2 - MBScroll_Y1
-    AbsDist := Abs(SignedDist)
+    If (MB_Method = "UIA") {
+      ; ===========================================
+      ; UIA SCROLLING (mmc, Explorer file lists)
+      ; ===========================================
+      If (MB_AccumPct < 0) {
+        DllCall(NumGet(NumGet(MB_ScrollPattern+0)+6*A_PtrSize), "Ptr", MB_ScrollPattern, "Double*", MB_AccumPct)
+      }
+      ; Normalize scroll speed based on ViewSize:
+      ; - ViewSize = 100%: only 1 item visible (small list), scroll FAST
+      ; - ViewSize = 1%: 100 items visible (huge list), scroll SLOW
+      ; Formula: mult = ViewSize / 3 (5x amplIfied from /15)
+      ; Examples: ViewSize=50% → mult=16.7, ViewSize=15% → mult=5, ViewSize=3% → mult=1
+      viewMultiplier := MB_ViewSize / 3.0
+      viewMultiplier := Max(0.25, Min(viewMultiplier, 50.0))  ; Clamp 0.25x to 50x
+      deltaPct := signDir * curveValue * 0.006 * viewMultiplier
+      MB_AccumPct := MB_AccumPct + deltaPct
+      MB_AccumPct := (MB_AccumPct < 0) ? 0 : (MB_AccumPct > 100) ? 100 : MB_AccumPct
+      If (MB_Debug)
+        ToolTip, % "UIA: " Round(MB_AccumPct, 1) "%% (view=" Round(MB_ViewSize,1) "%% mult=" Round(viewMultiplier,2) ")"
+      DllCall(NumGet(NumGet(MB_ScrollPattern+0)+4*A_PtrSize), "Ptr", MB_ScrollPattern, "Double", -1.0, "Double", MB_AccumPct)
 
-    If (AbsDist >= 8) {
-        MBScroll_Triggered := 1
-        signDir := (SignedDist > 0) ? 1 : -1
-        absEffective := AbsDist
-
-        ; Double curve: responsive up to 100px, soft cap beyond
-        if (absEffective <= 100) {
-            curveValue := absEffective ** 0.8
-        } else {
-            curveValue := (100 ** 0.8) + ((absEffective - 100) ** 0.6)
+    } Else If (MB_Method = "WHEEL_CTRL") {
+      ; ===========================================
+      ; WM_MOUSEWHEEL to CONTROL with GetScrollPos fallback
+      ; No fractional scrolling, better acceleration than WM_VSCROLL
+      ; ===========================================
+      target := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
+      
+      ; Get position BEForE scroll (only on first check)
+      If (!MB_FallbackChecked) {
+        posBeFore := GetScrollPos(target)
+      }
+      
+      ; Send WHEEL message
+      lParam := ((MBScroll_Y1 & 0xFFFF) << 16) | (MBScroll_X1 & 0xFFFF)
+      magnitude := Max(1, Min(119, Floor(curveValue / 2)))
+      Delta := (SignedDist > 0) ? -magnitude : magnitude
+      wParam := Delta << 16
+      PostMessage, 0x20A, %wParam%, %lParam%,, ahk_id %target%
+      
+      ; Check For fallback on first scroll only
+      If (!MB_FallbackChecked) {
+        Sleep, 10  ; Brief pause For scroll to complete
+        posAfter := GetScrollPos(target)
+        scrolledUnits := Abs(posAfter - posBeFore)
+        
+        ; If jumped >40 units (typically >1 line), switch to VSCROLL
+        If (scrolledUnits > 40) {
+          MB_Method := "VSCROLL"
+          SetTimer, MBScrollTimer, 150
+          ; Revert the jump by scrolling opposite direction
+          revertDir := (posAfter > posBeFore) ? 0 : 1  ; 0=up, 1=down
+          PostMessage, 0x115, %revertDir%, 0,, ahk_id %target%
+          If (MB_Debug)
+            ToolTip, % "WHEEL_CTRL→VSCROLL (jumped " scrolledUnits " units)"
         }
+        MB_FallbackChecked := 1
+      }
+      
+      If (MB_Debug && MB_Method = "WHEEL_CTRL")
+        ToolTip, % "WHEEL_CTRL: d=" Delta
 
-        If (MB_Method = "UIA") {
-            ; ===========================================
-            ; UIA SCROLLING (mmc, Explorer file lists)
-            ; ===========================================
-            If (MB_AccumPct < 0) {
-                DllCall(NumGet(NumGet(MB_ScrollPattern+0)+6*A_PtrSize), "Ptr", MB_ScrollPattern, "Double*", MB_AccumPct)
-            }
-            ; Normalize scroll speed based on ViewSize:
-            ; - ViewSize = 100%: only 1 item visible (small list), scroll FAST
-            ; - ViewSize = 1%: 100 items visible (huge list), scroll SLOW
-            ; Formula: mult = ViewSize / 3 (5x amplified from /15)
-            ; Examples: ViewSize=50% → mult=16.7, ViewSize=15% → mult=5, ViewSize=3% → mult=1
-            viewMultiplier := MB_ViewSize / 3.0
-            viewMultiplier := Max(0.25, Min(viewMultiplier, 50.0))  ; Clamp 0.25x to 50x
-            deltaPct := signDir * curveValue * 0.006 * viewMultiplier
-            MB_AccumPct := MB_AccumPct + deltaPct
-            MB_AccumPct := (MB_AccumPct < 0) ? 0 : (MB_AccumPct > 100) ? 100 : MB_AccumPct
-            If (MB_Debug)
-                ToolTip, % "UIA: " Round(MB_AccumPct, 1) "%% (view=" Round(MB_ViewSize,1) "%% mult=" Round(viewMultiplier,2) ")"
-            DllCall(NumGet(NumGet(MB_ScrollPattern+0)+4*A_PtrSize), "Ptr", MB_ScrollPattern, "Double", -1.0, "Double", MB_AccumPct)
+    } Else If (MB_Method = "VSCROLL") {
+      ; ===========================================
+      ; WM_VSCROLL LINE - dynamic timer based on drag distance
+      ; No fractional scrolling, most compatible
+      ; ===========================================
+      scrollDir := (SignedDist > 0) ? 1 : 0
+      target := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
 
-        } Else If (MB_Method = "WHEEL_CTRL") {
-            ; ===========================================
-            ; WM_MOUSEWHEEL to CONTROL with GetScrollPos fallback
-            ; ===========================================
-            target := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
-            
-            ; Get position BEFORE scroll (only on first check)
-            If (!MB_FallbackChecked) {
-                posBefore := GetScrollPos(target)
-            }
-            
-            ; Send WHEEL message
-            lParam := ((MBScroll_Y1 & 0xFFFF) << 16) | (MBScroll_X1 & 0xFFFF)
-            magnitude := Max(1, Min(119, Floor(curveValue / 2)))
-            Delta := (SignedDist > 0) ? -magnitude : magnitude
-            wParam := Delta << 16
-            PostMessage, 0x20A, %wParam%, %lParam%,, ahk_id %target%
-            
-            ; Check for fallback on first scroll only
-            If (!MB_FallbackChecked) {
-                Sleep, 10  ; Brief pause for scroll to complete
-                posAfter := GetScrollPos(target)
-                scrolledUnits := Abs(posAfter - posBefore)
-                
-                ; If jumped >40 units (typically >1 line), switch to VSCROLL
-                If (scrolledUnits > 40) {
-                    MB_Method := "VSCROLL"
-                    SetTimer, MBScrollTimer, 150
-                    ; Revert the jump by scrolling opposite direction
-                    revertDir := (posAfter > posBefore) ? 0 : 1  ; 0=up, 1=down
-                    PostMessage, 0x115, %revertDir%, 0,, ahk_id %target%
-                    If (MB_Debug)
-                        ToolTip, % "WHEEL_CTRL→VSCROLL (jumped " scrolledUnits " units)"
-                }
-                MB_FallbackChecked := 1
-            }
-            
-            If (MB_Debug && MB_Method = "WHEEL_CTRL")
-                ToolTip, % "WHEEL_CTRL: d=" Delta
+      ; Dynamic timer: 300ms at 8px (slow), 20ms at 300px+ (fast)
+      ; Map AbsDist 8-200 to timer 20-300
+      timerMs := 300 - Floor((Min(AbsDist, 300) - 8) * (100 / 192))
+      timerMs := Max(20, Min(300, timerMs / 2))
+      SetTimer, MBScrollTimer, %timerMs%
 
-        } Else If (MB_Method = "VSCROLL") {
-            ; ===========================================
-            ; WM_VSCROLL LINE - dynamic timer based on drag distance
-            ; ===========================================
-            scrollDir := (SignedDist > 0) ? 1 : 0
-            target := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
+      If (MB_Debug)
+        ToolTip, % "VSCROLL: dir=" scrollDir " timer=" timerMs "ms"
+      PostMessage, 0x115, %scrollDir%, 0,, ahk_id %target%
 
-            ; Dynamic timer: 300ms at 8px (slow), 20ms at 300px+ (fast)
-            ; Map AbsDist 8-200 to timer 20-300
-            timerMs := 300 - Floor((Min(AbsDist, 300) - 8) * (100 / 192))
-            timerMs := Max(20, Min(300, timerMs / 2))
-            SetTimer, MBScrollTimer, %timerMs%
-
-            If (MB_Debug)
-                ToolTip, % "VSCROLL: dir=" scrollDir " timer=" timerMs "ms"
-            PostMessage, 0x115, %scrollDir%, 0,, ahk_id %target%
-
-        } Else {
-            ; ===========================================
-            ; WM_MOUSEWHEEL with sub-120 to WINDOW (VS Code, default)
-            ; ===========================================
-            lParam := ((MBScroll_Y1 & 0xFFFF) << 16) | (MBScroll_X1 & 0xFFFF)
-            ; MUST cap below 120 for smooth scrolling (120 = 1 notch = 3 lines)
-            magnitude := Max(1, Min(119, Floor(curveValue / 2)))
-            Delta := (SignedDist > 0) ? -magnitude : magnitude
-            wParam := Delta << 16
-            If (MB_Debug)
-                ToolTip, % "WHEEL: d=" Delta " win=" MBScroll_Win
-            PostMessage, 0x20A, %wParam%, %lParam%,, ahk_id %MBScroll_Win%
-        }
+    } Else {
+      ; ===========================================
+      ; WM_MOUSEWHEEL with sub-120 to WINDOW (Electron apps like VS Code, Antigravity, Cursor -- default)
+      ; ===========================================
+      lParam := ((MBScroll_Y1 & 0xFFFF) << 16) | (MBScroll_X1 & 0xFFFF)
+      ; MUST cap below 120 For smooth scrolling (120 = 1 notch = 3 lines)
+      magnitude := Max(1, Min(119, Floor(curveValue / 2)))
+      Delta := (SignedDist > 0) ? -magnitude : magnitude
+      wParam := Delta << 16
+      If (MB_Debug)
+        ToolTip, % "WHEEL: d=" Delta " win=" MBScroll_Win
+      PostMessage, 0x20A, %wParam%, %lParam%,, ahk_id %MBScroll_Win%
     }
+  }
 Return
 
 $*MButton Up::
-    global MB_Disabled, MBScroll_Triggered, MBScroll_Win, MB_ScrollPattern, MB_Element
-    SetTimer, MBScrollTimer, Off
-    If (MB_Debug)
-        ToolTip
+  global MB_Disabled, MBScroll_Triggered, MBScroll_Win, MB_ScrollPattern, MB_Element
+  SetTimer, MBScrollTimer, Off
+  If (MB_Debug)
+    ToolTip
 
-    ; If we passed through MButton Down, also pass through MButton Up
-    If (MB_Disabled) {
-        SendInput, {Blind}{MButton Up}
-        Return
-    }
+  ; If we passed through MButton Down, also pass through MButton Up
+  If (MB_Disabled) {
+    SendInput, {Blind}{MButton Up}
+    Return
+  }
 
-    ; Release UIA objects
-    If (MB_ScrollPattern) {
-        ObjRelease(MB_ScrollPattern)
-        MB_ScrollPattern := 0
-    }
-    If (MB_Element) {
-        ObjRelease(MB_Element)
-        MB_Element := 0
-    }
+  ; Release UIA objects
+  If (MB_ScrollPattern) {
+    ObjRelease(MB_ScrollPattern)
+    MB_ScrollPattern := 0
+  }
+  If (MB_Element) {
+    ObjRelease(MB_Element)
+    MB_Element := 0
+  }
 
-    ; If no drag occurred in non-Explorer, send click
-    WinGetClass, ahk_class, ahk_id %MBScroll_Win%
-    If (!MBScroll_Triggered and ahk_class != "CabinetWClass")
-        SendInput, {Blind}{MButton}
+  ; If no drag occurred in non-Explorer, send click
+  WinGetClass, ahk_class, ahk_id %MBScroll_Win%
+  If (!MBScroll_Triggered and ahk_class != "CabinetWClass")
+    SendInput, {Blind}{MButton}
 Return
