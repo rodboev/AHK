@@ -752,6 +752,7 @@ WindowSpyUpdate:
   ActiveInfo .= "PID: " ActivePID (activeElevated ? " (Elevated)" : "") " | Monitor: " activeMon "`n"
   ActiveInfo .= "Pos: (" ActiveX ", " ActiveY ") | Size: " ActiveW " x " ActiveH "`n"
   ActiveInfo .= "Style: " ActiveStyle " | ExStyle: " ActiveExStyle "`n"
+  ActiveInfo .= "ScrollPattern: " MB_ScrollPattern "`n"
   ActiveInfo .= "Focused Control: " ActiveFocusedControl (ActiveFocusedHwnd ? " | hWnd: " ActiveFocusedHwnd : "") "`n"
   ActiveInfo .= ActiveUIA_Info "`n"
   ActiveInfo .= "Window Text: " ActiveWinTextDisplay "`n"
@@ -912,30 +913,14 @@ Return
   }
 Return
 
-#IfWinActive ahk_class #32770 ; Only run If a file dialog is active
-^e:: ; Ctrl+E hotkey
-  ; Open the selected file with Notepad
-  Run, "C:\Program Files\Sublime Text\subl.exe" "%selected%"
-Return
-#IfWinActive
-
-#IfWinActive ahk_class #32770 ; Only run if a file dialog is active
-^e:: ; Ctrl+E hotkey
-    ; Get the path of the selected file
-    ControlGetText, selected, Edit1, A
-    ; Open the selected file with Notepad
-    Run, "C:\Program Files\Sublime Text\subl.exe" "%selected%"
-return
-#IfWinActive
-
 ; Alt+Shift+S = Run or activate Everything
 ~+!s::
-    DetectHiddenWindows, On
-    If (!WinExist("ahk_exe Everything.exe")) {
-        Run, DeElevate "C:\Program Files\Everything 1.5a\Everything.exe"
-        WinWait, ahk_exe Everything.exe
-        WinActivate
-    }
+  DetectHiddenWindows, On
+  If (!WinExist("ahk_exe Everything.exe")) {
+    UserRun("C:\Program Files\Everything 1.5a\Everything.exe")
+    WinWait, ahk_exe Everything.exe
+    WinActivate
+  }
 Return
 
 #IfWinActive ahk_exe Everything.exe
@@ -1041,19 +1026,19 @@ Return
 ; Author: @rodboev
 ; Version: 2.2
 
+MB_Debug := 1  ; Set to 1 to show debug tooltips
+
+; Get vertical scroll position for a control (cross-process safe)
+GetScrollPos(hwnd) {
+  Return DllCall("GetScrollPos", "Ptr", hwnd, "Int", 1, "Int")
+}
+
 $*MButton::
   global MBScroll_X1, MBScroll_Y1, MBScroll_Win, MBScroll_CtrlClassNN, MBScroll_Triggered
   global G_UIA, MB_ScrollPattern := 0, MB_Element := 0, MBScroll_Ctrl
   global MB_Disabled := 0, MB_ViewSize := 10.0, MB_AccumPct := -1
-
   global MB_Method := "VSCROLL" ; Default fallback
   global MB_FallbackChecked := 0  ; Check fallback once per drag
-
-  ; Get vertical scroll position For a control (cross-process safe)
-  GetScrollPos(hwnd) {
-    Return DllCall("GetScrollPos", "Ptr", hwnd, "Int", 1, "Int")
-  }
-
 
   MouseGetPos,,, MBScroll_Win, MBScroll_CtrlClassNN
   WinGetClass, ahk_class, ahk_id %MBScroll_Win%
@@ -1072,9 +1057,9 @@ $*MButton::
   IsAllowedContent := InStr(VisibleText, "Tree View") or InStr(VisibleText, "FolderView") or InStr(ControlText, "ScrollBar")
   IsExcludedRegion := HasVal(MB_ExcludedControls, MBScroll_CtrlClassNN) or (not MBScroll_CtrlClassNN and not (ahk_class = "Shell_TrayWnd" or ahk_class = "WorkerW"))
 
-  ; OVERRIDES (Force specIfic method For certain apps)
+  ; OVERRIDES (Force specific method for certain apps)
   ; - UIA: Smooth fractional % scrolling via SetScrollPercent (Explorer)
-  ; - WHEEL: WM_MOUSEWHEEL - sub-40 (Electron apps: VSCode, )
+  ; - WHEEL: WM_MOUSEWHEEL - sub-40 (Electron apps: VSCode)
   ; - WHEEL_CTRL: WM_MOUSEWHEEL (120, better acceleration than VSCROLL)
   ; - VSCROLL: WM_VSCROLL line-by-line, slower timer (40 -- single line)
   ForceUIA := ((ahk_exe = "mmc.exe") or (ahk_class = "CabinetWClass")) and !InStr(MBScroll_CtrlClassNN, "SysTreeView32")
@@ -1091,7 +1076,7 @@ $*MButton::
   }
   MB_Disabled := 0
 
-  ; Activate Explorer window If clicking on inactive one
+  ; Activate Explorer window if clicking on inactive one
   If (ahk_class = "CabinetWClass") {
     WinGet, activeWin, ID, A
     If (MBScroll_Win != activeWin) {
@@ -1108,31 +1093,31 @@ $*MButton::
   MBScroll_Triggered := 0
 
   ; DETERMINE SCROLL METHOD
-  ; UIA For mmc, Explorer file lists (control focused)
+  ; UIA for mmc, Explorer file lists (control focused)
   If (ForceUIA) {
     If (!G_UIA) {
       G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
     }
-    ; Always use control If available, fallback to window
+    ; Always use control if available, fallback to window
     targetForUIA := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
     DllCall(NumGet(NumGet(G_UIA+0)+6*A_PtrSize), "Ptr", G_UIA, "Ptr", targetForUIA, "Ptr*", MB_Element)
     If (MB_Element) {
       ; Get ScrollPattern (10004)
       DllCall(NumGet(NumGet(MB_Element+0)+16*A_PtrSize), "Ptr", MB_Element, "Int", 10004, "Ptr*", MB_ScrollPattern)
-      ; Get ViewSize For normalization
-      DllCall(NumGet(NumGet(MB_ScrollPattern)+8*A_PtrSize), "Ptr", MB_ScrollPattern, "Double*", MB_ViewSize)
+      ; Get ViewSize for normalization
+      DllCall(NumGet(NumGet(MB_ScrollPattern+0)+8*A_PtrSize), "Ptr", MB_ScrollPattern, "Double*", MB_ViewSize)
       If (MB_ViewSize < 1)
         MB_ViewSize := 10.0
     }
     MB_Method := "UIA"
   }
-  Else If (UseWheel) { ; WM_MOUSEWHEEL For Electron apps (sub-40)
+  Else If (UseWheel) { ; WM_MOUSEWHEEL for Electron apps (sub-40)
     MB_Method := "WHEEL"
   }
-  Else If (UseWheelCtrl) { ; WM_MOUSEWHEEL For CONTROL with GetScrollPos fallback
+  Else If (UseWheelCtrl) { ; WM_MOUSEWHEEL for CONTROL with GetScrollPos fallback
     MB_Method := "WHEEL_CTRL"
   }
-  Else If (UseVScroll) { ; WM_VSCROLL For TreeView / Explorer nav pane
+  Else If (UseVScroll) { ; WM_VSCROLL for TreeView / Explorer nav pane
     MB_Method := "VSCROLL"
   }
 
@@ -1143,7 +1128,7 @@ Return
 
 MBScrollTimer:
   global MB_AccumPct, MB_Method, MB_ViewSize, MBScroll_Ctrl, MB_FallbackChecked
-  ; Safety check: If MButton released, stop immediately
+  ; Safety check: if MButton released, stop immediately
   If !GetKeyState("MButton", "P") {
     SetTimer, MBScrollTimer, Off
     If (MB_Debug)
@@ -1178,7 +1163,7 @@ MBScrollTimer:
       ; Normalize scroll speed based on ViewSize:
       ; - ViewSize = 100%: only 1 item visible (small list), scroll FAST
       ; - ViewSize = 1%: 100 items visible (huge list), scroll SLOW
-      ; Formula: mult = ViewSize / 3 (5x amplIfied from /15)
+      ; Formula: mult = ViewSize / 3 (5x amplified from /15)
       ; Examples: ViewSize=50% → mult=16.7, ViewSize=15% → mult=5, ViewSize=3% → mult=1
       viewMultiplier := MB_ViewSize / 3.0
       viewMultiplier := Max(0.25, Min(viewMultiplier, 50.0))  ; Clamp 0.25x to 50x
@@ -1195,38 +1180,38 @@ MBScrollTimer:
       ; No fractional scrolling, better acceleration than WM_VSCROLL
       ; ===========================================
       target := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
-      
-      ; Get position BEForE scroll (only on first check)
+
+      ; Get position BEFORE scroll (only on first check)
       If (!MB_FallbackChecked) {
-        posBeFore := GetScrollPos(target)
+        posBefore := GetScrollPos(target)
       }
-      
+
       ; Send WHEEL message
       lParam := ((MBScroll_Y1 & 0xFFFF) << 16) | (MBScroll_X1 & 0xFFFF)
       magnitude := Max(1, Min(119, Floor(curveValue / 2)))
       Delta := (SignedDist > 0) ? -magnitude : magnitude
       wParam := Delta << 16
       PostMessage, 0x20A, %wParam%, %lParam%,, ahk_id %target%
-      
-      ; Check For fallback on first scroll only
+
+      ; Check for fallback on first scroll only
       If (!MB_FallbackChecked) {
-        Sleep, 10  ; Brief pause For scroll to complete
+        Sleep, 10  ; Brief pause for scroll to complete
         posAfter := GetScrollPos(target)
-        scrolledUnits := Abs(posAfter - posBeFore)
-        
+        scrolledUnits := Abs(posAfter - posBefore)
+
         ; If jumped >40 units (typically >1 line), switch to VSCROLL
         If (scrolledUnits > 40) {
           MB_Method := "VSCROLL"
           SetTimer, MBScrollTimer, 150
           ; Revert the jump by scrolling opposite direction
-          revertDir := (posAfter > posBeFore) ? 0 : 1  ; 0=up, 1=down
+          revertDir := (posAfter > posBefore) ? 0 : 1  ; 0=up, 1=down
           PostMessage, 0x115, %revertDir%, 0,, ahk_id %target%
           If (MB_Debug)
             ToolTip, % "WHEEL_CTRL→VSCROLL (jumped " scrolledUnits " units)"
         }
         MB_FallbackChecked := 1
       }
-      
+
       If (MB_Debug && MB_Method = "WHEEL_CTRL")
         ToolTip, % "WHEEL_CTRL: d=" Delta
 
@@ -1253,7 +1238,7 @@ MBScrollTimer:
       ; WM_MOUSEWHEEL with sub-120 to WINDOW (Electron apps like VS Code, Antigravity, Cursor -- default)
       ; ===========================================
       lParam := ((MBScroll_Y1 & 0xFFFF) << 16) | (MBScroll_X1 & 0xFFFF)
-      ; MUST cap below 120 For smooth scrolling (120 = 1 notch = 3 lines)
+      ; MUST cap below 120 for smooth scrolling (120 = 1 notch = 3 lines)
       magnitude := Max(1, Min(119, Floor(curveValue / 2)))
       Delta := (SignedDist > 0) ? -magnitude : magnitude
       wParam := Delta << 16
