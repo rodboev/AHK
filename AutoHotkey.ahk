@@ -16,6 +16,7 @@
 SendMode, Input
 SetWorkingDir, %A_ScriptDir%
 SetTitleMatchMode, 2
+MB_Debug := 1  ; MButton scroll debug tooltips (0=off, 1=on)
 
 ; Prevent script proceeding in RDP, Hyper-V, VMWare windows
 #If (WinActive("ahk_class TscShellContainerClass") or WinActive("ahk_exe vmconnect.exe") or WinActive("ahk_exe vmware.exe"))
@@ -333,7 +334,6 @@ Return
 ^+`::UserRun("elevate", "ti", "c:\Program Files\SystemInformer\SystemInformer.exe")
 
 ; [ Win + E ] -> Alternate Explorer app in case of issues after Windows updates
-; TODO: Swap with Files app
 #e::
   WinGetClass, ahk_class, A
   path := GetExplorerPath()
@@ -343,11 +343,11 @@ Return
     path := A_UserProfile
 
   ; Activate existing e++ window for this path, or open new
-  pid := ProcessExistsByCommandLine("e++.exe"" " . path)
+  pid := ProcessExistsByCommandLine("files-stable.exe"" " . path)
   If (pid) {
     WinActivate, ahk_pid %pid%
   } Else {
-    UserRun("e++", path)
+    UserRun("files-stable", path)
   }
 Return
 
@@ -1026,11 +1026,15 @@ Return
 ; Author: @rodboev
 ; Version: 2.2
 
-MB_Debug := 1  ; Set to 1 to show debug tooltips
-
 ; Get vertical scroll position for a control (cross-process safe)
 GetScrollPos(hwnd) {
   Return DllCall("GetScrollPos", "Ptr", hwnd, "Int", 1, "Int")
+}
+
+; Check if a control has a Win32 vertical scrollbar (for fallback detection)
+HasWin32Scrollbar(hwnd) {
+  DllCall("GetScrollRange", "Ptr", hwnd, "Int", 1, "Int*", scrollMin, "Int*", scrollMax)
+  Return (scrollMax > scrollMin)
 }
 
 $*MButton::
@@ -1057,16 +1061,6 @@ $*MButton::
   IsAllowedContent := InStr(VisibleText, "Tree View") or InStr(VisibleText, "FolderView") or InStr(ControlText, "ScrollBar")
   IsExcludedRegion := HasVal(MB_ExcludedControls, MBScroll_CtrlClassNN) or (not MBScroll_CtrlClassNN and not (ahk_class = "Shell_TrayWnd" or ahk_class = "WorkerW"))
 
-  ; OVERRIDES (Force specific method for certain apps)
-  ; - UIA: Smooth fractional % scrolling via SetScrollPercent (Explorer)
-  ; - WHEEL: WM_MOUSEWHEEL - sub-40 (Electron apps: VSCode)
-  ; - WHEEL_CTRL: WM_MOUSEWHEEL (120, better acceleration than VSCROLL)
-  ; - VSCROLL: WM_VSCROLL line-by-line, slower timer (40 -- single line)
-  ForceUIA := ((ahk_exe = "mmc.exe") or (ahk_class = "CabinetWClass")) and !InStr(MBScroll_CtrlClassNN, "SysTreeView32")
-  UseWheel := (ahk_exe = "code.exe")
-  UseWheelCtrl := (ahk_exe = "SystemInFormer.exe")
-  UseVScroll := InStr(MBScroll_CtrlClassNN, "SysTreeView32")
-
   ; DETERMINE If SCROLLING SHOULD OCCUR
   ShouldScroll := !HasNativeScroll and (IsAllowedApp or IsAllowedContent) and !IsExcludedRegion
   If (!ShouldScroll) {
@@ -1092,33 +1086,36 @@ $*MButton::
   ControlGet, MBScroll_Ctrl, Hwnd,, %MBScroll_CtrlClassNN%, ahk_id %MBScroll_Win%
   MBScroll_Triggered := 0
 
-  ; DETERMINE SCROLL METHOD
-  ; UIA for mmc, Explorer file lists (control focused)
-  If (ForceUIA) {
-    If (!G_UIA) {
+  ; DETERMINE SCROLL METHOD (auto-detect with fallback chain)
+  ; Chain: UIA → WHEEL → WHEEL_CTRL → VSCROLL (runtime fallback in timer)
+  If (InStr(MBScroll_CtrlClassNN, "SysTreeView32")) {
+    ; TreeView controls → direct to VSCROLL (always works, no probe needed)
+    MB_Method := "VSCROLL"
+  } Else {
+    ; Try UIA first (highest quality: fractional % scrolling)
+    If (!G_UIA)
       G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
-    }
-    ; Always use control if available, fallback to window
     targetForUIA := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
     DllCall(NumGet(NumGet(G_UIA+0)+6*A_PtrSize), "Ptr", G_UIA, "Ptr", targetForUIA, "Ptr*", MB_Element)
     If (MB_Element) {
       ; Get ScrollPattern (10004)
       DllCall(NumGet(NumGet(MB_Element+0)+16*A_PtrSize), "Ptr", MB_Element, "Int", 10004, "Ptr*", MB_ScrollPattern)
-      ; Get ViewSize for normalization
-      DllCall(NumGet(NumGet(MB_ScrollPattern+0)+8*A_PtrSize), "Ptr", MB_ScrollPattern, "Double*", MB_ViewSize)
-      If (MB_ViewSize < 1)
-        MB_ViewSize := 10.0
+      If (MB_ScrollPattern) {
+        ; Get ViewSize for normalization
+        DllCall(NumGet(NumGet(MB_ScrollPattern+0)+8*A_PtrSize), "Ptr", MB_ScrollPattern, "Double*", MB_ViewSize)
+        If (MB_ViewSize < 1)
+          MB_ViewSize := 10.0
+        MB_Method := "UIA"
+      } Else {
+        ; No ScrollPattern — release element, fall to WHEEL
+        ObjRelease(MB_Element)
+        MB_Element := 0
+        MB_Method := "WHEEL"
+      }
+    } Else {
+      ; No UIA element found — fall to WHEEL
+      MB_Method := "WHEEL"
     }
-    MB_Method := "UIA"
-  }
-  Else If (UseWheel) { ; WM_MOUSEWHEEL for Electron apps (sub-40)
-    MB_Method := "WHEEL"
-  }
-  Else If (UseWheelCtrl) { ; WM_MOUSEWHEEL for CONTROL with GetScrollPos fallback
-    MB_Method := "WHEEL_CTRL"
-  }
-  Else If (UseVScroll) { ; WM_VSCROLL for TreeView / Explorer nav pane
-    MB_Method := "VSCROLL"
   }
 
   ; Start timer (VSCROLL starts slow, adjusts dynamically in timer)
@@ -1155,11 +1152,20 @@ MBScrollTimer:
 
     If (MB_Method = "UIA") {
       ; ===========================================
-      ; UIA SCROLLING (mmc, Explorer file lists)
+      ; UIA SCROLLING (auto-detected, fractional % via SetScrollPercent)
+      ; Fallback: UIA → WHEEL if scroll is non-functional
+      ; Two-tick verification: tick 1 captures before-state, tick 2 cross-validates
       ; ===========================================
       If (MB_AccumPct < 0) {
         DllCall(NumGet(NumGet(MB_ScrollPattern+0)+6*A_PtrSize), "Ptr", MB_ScrollPattern, "Double*", MB_AccumPct)
       }
+
+      ; Capture Win32 scroll position BEFORE UIA scroll (for cross-validation)
+      If (MB_FallbackChecked = 0) {
+        uiaTarget := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
+        MB_UIAVerifyPos := GetScrollPos(uiaTarget)
+      }
+
       ; Normalize scroll speed based on ViewSize:
       ; - ViewSize = 100%: only 1 item visible (small list), scroll FAST
       ; - ViewSize = 1%: 100 items visible (huge list), scroll SLOW
@@ -1173,6 +1179,41 @@ MBScrollTimer:
       If (MB_Debug)
         ToolTip, % "UIA: " Round(MB_AccumPct, 1) "%% (view=" Round(MB_ViewSize,1) "%% mult=" Round(viewMultiplier,2) ")"
       DllCall(NumGet(NumGet(MB_ScrollPattern+0)+4*A_PtrSize), "Ptr", MB_ScrollPattern, "Double", -1.0, "Double", MB_AccumPct)
+
+      ; Verify UIA is actually working (two-tick verification)
+      If (MB_FallbackChecked = 0) {
+        ; Tick 1: UIA scroll sent, advance to pending verification
+        MB_FallbackChecked := -1
+      } Else If (MB_FallbackChecked = -1) {
+        ; Tick 2: verify UIA actually scrolled
+        uiaFailed := false
+        DllCall(NumGet(NumGet(MB_ScrollPattern+0)+6*A_PtrSize), "Ptr", MB_ScrollPattern, "Double*", verifyPct)
+        If (verifyPct < -0.5) {
+          uiaFailed := true  ; NoScroll sentinel (-1)
+        } Else {
+          ; Cross-validate: if control has a Win32 scrollbar, it should have moved
+          uiaTarget := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
+          If (HasWin32Scrollbar(uiaTarget)) {
+            posAfter := GetScrollPos(uiaTarget)
+            If (posAfter = MB_UIAVerifyPos)
+              uiaFailed := true  ; Win32 scrollbar didn't budge
+          }
+        }
+
+        If (uiaFailed) {
+          ; UIA didn't actually scroll — release COM objects, fall to WHEEL
+          ObjRelease(MB_ScrollPattern)
+          MB_ScrollPattern := 0
+          ObjRelease(MB_Element)
+          MB_Element := 0
+          MB_Method := "WHEEL"
+          MB_FallbackChecked := 0
+          If (MB_Debug)
+            ToolTip, % "UIA->WHEEL (didn't scroll)"
+        } Else {
+          MB_FallbackChecked := 1
+        }
+      }
 
     } Else If (MB_Method = "WHEEL_CTRL") {
       ; ===========================================
@@ -1235,16 +1276,37 @@ MBScrollTimer:
 
     } Else {
       ; ===========================================
-      ; WM_MOUSEWHEEL with sub-120 to WINDOW (Electron apps like VS Code, Antigravity, Cursor -- default)
+      ; WM_MOUSEWHEEL to WINDOW (Electron apps, auto-detected default)
+      ; Fallback: WHEEL → WHEEL_CTRL if window-level message doesn't scroll
       ; ===========================================
       lParam := ((MBScroll_Y1 & 0xFFFF) << 16) | (MBScroll_X1 & 0xFFFF)
       ; MUST cap below 120 for smooth scrolling (120 = 1 notch = 3 lines)
       magnitude := Max(1, Min(119, Floor(curveValue / 2)))
       Delta := (SignedDist > 0) ? -magnitude : magnitude
       wParam := Delta << 16
-      If (MB_Debug)
-        ToolTip, % "WHEEL: d=" Delta " win=" MBScroll_Win
-      PostMessage, 0x20A, %wParam%, %lParam%,, ahk_id %MBScroll_Win%
+
+      If (!MB_FallbackChecked) {
+        ; Test if window-level WHEEL actually scrolls (first scroll only)
+        ctrlTarget := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
+        posBefore := GetScrollPos(ctrlTarget)
+        PostMessage, 0x20A, %wParam%, %lParam%,, ahk_id %MBScroll_Win%
+        Sleep, 15
+        posAfter := GetScrollPos(ctrlTarget)
+        If (posBefore = posAfter) {
+          ; No movement detected — try sending to control directly
+          MB_Method := "WHEEL_CTRL"
+          MB_FallbackChecked := 0
+          If (MB_Debug)
+            ToolTip, % "WHEEL->WHEEL_CTRL (no movement)"
+        } Else {
+          MB_FallbackChecked := 1
+        }
+      } Else {
+        PostMessage, 0x20A, %wParam%, %lParam%,, ahk_id %MBScroll_Win%
+      }
+
+      If (MB_Debug && MB_Method = "WHEEL")
+        ToolTip, % "WHEEL: d=" Delta
     }
   }
 Return

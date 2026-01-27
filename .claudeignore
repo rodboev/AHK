@@ -1,0 +1,4 @@
+# Ignore community AHK libraries
+includes/
+.claude/*bug*
+.claude/*draft*
