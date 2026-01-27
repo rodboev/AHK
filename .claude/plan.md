@@ -1,161 +1,124 @@
-# === EXPLORER SMOOTH SCROLL ===
+# Phase 5: Universal App Support — Implementation Plan
 
-Implementing 4 improvements to the MButton drag scroll system: GetScrollPos-based fallback detection, configuration consolidation, dead code removal, and full fallback chain.
+## Goal
 
----
+Replace the whitelist-based app selection with a **default-on model**: MButton scroll works for ALL apps by default, with only a short exclusion list for apps with native smooth scroll.
 
-## Proposed Changes
+Currently, `ShouldScroll` requires apps to be in `MB_EnabledApps` OR match content heuristics. Phase 5 inverts this: all apps get custom scroll unless explicitly excluded.
 
-### Phase 1: GetScrollPos-based Fallback Detection
-
-The current WHEEL_CTRL → VSCROLL fallback (lines 1024-1044) doesn't work because it compares two internal counters—we never detect actual scroll position changes.
-
-#### [MODIFY] [AutoHotkey.ahk](file:///c:/Dropbox/Projects/AHK/AutoHotkey.ahk)
-
-**Add GetScrollPos helper function** (before MButton handler):
-
-```autohotkey
-; Get vertical scroll position for a control (cross-process safe)
-GetScrollPos(hwnd) {
-    SB_VERT := 1
-    return DllCall("GetScrollPos", "Ptr", hwnd, "Int", SB_VERT, "Int")
-}
-```
-
-**Modify WHEEL_CTRL section** (lines 1015-1044) to:
-
-1. Query scroll position **before** sending WHEEL message
-2. Send WHEEL message
-3. Query scroll position **after**
-4. If delta > 40 units (jumped >1 line), switch to VSCROLL
-5. If detection triggered, send VSCROLL in opposite direction to revert
-
-```diff
- } Else If (MB_Method = "WHEEL_CTRL") {
--    lParam := ((MBScroll_Y1 & 0xFFFF) << 16) | (MBScroll_X1 & 0xFFFF)
--    magnitude := Max(1, Min(119, Floor(curveValue / 2)))
--    ...existing broken detection...
--    PostMessage, 0x20A, %wParam%, %lParam%,, ahk_id %target%
-
-+    target := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
-+    
-+    ; Get position BEFORE scroll
-+    posBefore := GetScrollPos(target)
-+    
-+    ; Send WHEEL message
-+    lParam := ((MBScroll_Y1 & 0xFFFF) << 16) | (MBScroll_X1 & 0xFFFF)
-+    magnitude := Max(1, Min(119, Floor(curveValue / 2)))
-+    Delta := (SignedDist > 0) ? -magnitude : magnitude
-+    wParam := Delta << 16
-+    PostMessage, 0x20A, %wParam%, %lParam%,, ahk_id %target%
-+    Sleep, 5  ; Brief pause for scroll to complete
-+    
-+    ; Get position AFTER scroll
-+    posAfter := GetScrollPos(target)
-+    scrolledUnits := Abs(posAfter - posBefore)
-+    
-+    ; If jumped >40 units (typically >1 line), switch to VSCROLL
-+    If (!MB_FallbackChecked && scrolledUnits > 40) {
-+        MB_Method := "VSCROLL"
-+        SetTimer, MBScrollTimer, 150
-+        ; Revert the jump by scrolling opposite direction
-+        revertDir := (posAfter > posBefore) ? 0 : 1  ; 0=up, 1=down
-+        PostMessage, 0x115, %revertDir%, 0,, ahk_id %target%
-+        If (MB_Debug)
-+            ToolTip, % "WHEEL_CTRL→VSCROLL (jumped " scrolledUnits " units)"
-+    }
-+    MB_FallbackChecked := 1
- }
-```
-
-**Add initialization** in MButton Down (after line 946):
-
-```autohotkey
-MB_FallbackChecked := 0  ; Only check fallback once per drag
-```
+## File Modified
+- `AutoHotkey.ahk` — lines 1053-1065 (ShouldScroll logic) and 1089-1119 (method selection)
 
 ---
 
-### Phase 2: Configuration Consolidation
+## Changes
 
-#### [MODIFY] [AutoHotkey.ahk](file:///c:/Dropbox/Projects/AHK/AutoHotkey.ahk)
+### 1. Replace App Lists (lines 1053-1056)
 
-Replace scattered boolean expressions (lines 856-879) with a unified config block:
-
+**Before:**
 ```autohotkey
-; === SCROLL CONFIG ===
 MB_PassthroughApps := ["chrome.exe", "everything64.exe", "VmConnect.exe"]
-MB_EnabledApps := ["mmc.exe", "7zFM.exe", "code.exe", "SystemInformer.exe"]
+MB_EnabledApps := ["mmc.exe", "7zFM.exe", "code.exe", "SystemInFormer.exe"]
 MB_ExcludedControls := ["ToolbarWindow", "ReBarWindow", "Edit", "AddressBandRoot", "statusbar", "SysHeader"]
 ```
 
-Then update checks to use `HasVal()` helper:
-
+**After:**
 ```autohotkey
-HasVal(arr, val) {
-    for i, v in arr
-        if (InStr(val, v))
-            return true
-    return false
-}
-
-HasNativeScroll := HasVal(MB_PassthroughApps, ahk_exe)
-IsAllowedApp := HasVal(MB_EnabledApps, ahk_exe)
-IsExcludedRegion := HasVal(MB_ExcludedControls, MBScroll_CtrlClassNN)
+MB_ExcludedApps := ["chrome.exe", "everything64.exe", "VmConnect.exe"]
+MB_ExcludedControls := ["ToolbarWindow", "ReBarWindow", "Edit", "AddressBandRoot", "statusbar", "SysHeader"]
 ```
 
+- `MB_PassthroughApps` → renamed to `MB_ExcludedApps` (consistent with `MB_ExcludedControls`)
+- `MB_EnabledApps` → **deleted entirely** (no longer needed)
+
+### 2. Simplify ShouldScroll Logic (lines 1058-1065)
+
+**Before:**
+```autohotkey
+HasNativeScroll := HasVal(MB_PassthroughApps, ahk_exe)
+IsAllowedApp := HasVal(MB_EnabledApps, ahk_exe)
+IsAllowedContent := InStr(VisibleText, "Tree View") or InStr(VisibleText, "FolderView") or InStr(ControlText, "ScrollBar")
+IsExcludedRegion := HasVal(MB_ExcludedControls, MBScroll_CtrlClassNN) or (not MBScroll_CtrlClassNN and not (ahk_class = "Shell_TrayWnd" or ahk_class = "WorkerW"))
+
+ShouldScroll := !HasNativeScroll and (IsAllowedApp or IsAllowedContent) and !IsExcludedRegion
+```
+
+**After:**
+```autohotkey
+IsExcludedApp := HasVal(MB_ExcludedApps, ahk_exe)
+IsExcludedRegion := HasVal(MB_ExcludedControls, MBScroll_CtrlClassNN) or (not MBScroll_CtrlClassNN and not (ahk_class = "Shell_TrayWnd" or ahk_class = "WorkerW"))
+
+ShouldScroll := !IsExcludedApp and !IsExcludedRegion
+```
+
+**Removed variables:**
+- `HasNativeScroll` — replaced by `IsExcludedApp`
+- `IsAllowedApp` — no longer needed (all apps allowed by default)
+- `IsAllowedContent` — no longer needed (content heuristics were a workaround for the whitelist)
+
+### 3. Method Selection (lines 1089-1119) — NO CHANGES
+
+The existing method selection from Phase 4 is **unchanged**. All non-TreeView apps try UIA first:
+
+```
+TreeView → VSCROLL (direct)
+Else → Try UIA → fall to WHEEL on failure
+```
+
+The UIA probe is cheap (one COM call at MButton-down) and the two-tick verification handles failures gracefully (~20ms cascade). Every app benefits from trying UIA first — apps like mmc.exe get fractional % scrolling, and apps that don't support UIA fall through to WHEEL automatically.
+
+### 4. Remove `WinGetText` and `ControlList` Queries (lines 1050-1051)
+
+```autohotkey
+; REMOVE — only needed for IsAllowedContent heuristics
+WinGetText, VisibleText, ahk_id %MBScroll_Win%
+WinGet, ControlText, ControlList, ahk_id %MBScroll_Win%
+```
+
+These are only used by `IsAllowedContent` which is being removed. `WinGetText` and `ControlList` are expensive calls (especially on complex windows), so removing them improves MButton-down responsiveness.
+
 ---
 
-### Phase 3: Dead Code Removal
+## Expected Behavior by App
 
-#### [MODIFY] [AutoHotkey.ahk](file:///C:/Dropbox/Projects/AHK/AutoHotkey.ahk)
+| App | Old Behavior | New Behavior |
+|-----|-------------|--------------|
+| Explorer file list | Whitelisted via content heuristic → UIA | Default → UIA (via fallback chain) |
+| Explorer TreeView | Whitelisted via content heuristic → VSCROLL | Default → VSCROLL (TreeView check) |
+| VS Code | Whitelisted in MB_EnabledApps → UIA → WHEEL | Default → UIA → WHEEL (no change) |
+| SystemInformer | Whitelisted in MB_EnabledApps → UIA → WHEEL → WHEEL_CTRL | Default → UIA → WHEEL → WHEEL_CTRL (no change) |
+| mmc.exe | Whitelisted in MB_EnabledApps → UIA | Default → UIA (no change) |
+| 7zFM | Whitelisted in MB_EnabledApps → UIA → cascades | Default → UIA → cascades (no change) |
+| Notepad | **Not whitelisted — no custom scroll** | **Default → UIA → cascades (NEW)** |
+| Any new app | **Not whitelisted — no custom scroll** | **Default → UIA → cascades (NEW)** |
 
-1. **Remove commented SCROLLBAR code** (lines 1010-1013)
-2. **Remove unused globals from line 848**:
-   - `MB_ScrollbarHwnd`
-   - `MB_ScrollMin` (not visible but referenced in summary.md)
-   - `MB_ScrollMax`
-
----
-
-### Phase 4: Full Fallback Chain (Deferred)
-
-> [!NOTE]
-> Phase 4 is more complex and should be done after validating Phases 1-3 work correctly. It requires:
->
-> - UIA → WHEEL fallback: Detect when SetScrollPercent fails
-> - WHEEL → WHEEL_CTRL fallback: Detect when window doesn't respond to wheel
-> - Remove all hardcoded method selectors
+All apps follow the same UIA-first fallback chain. The only difference is the entry gate: previously apps needed to be whitelisted; now all apps enter by default.
 
 ---
 
-## Verification Plan
+## Fallback Chain (unchanged from Phase 4)
 
-### Manual Testing
+```
+MButton Down
+    ├── TreeView? ──────────────────→ VSCROLL (direct)
+    └── All other apps ─────────────→ UIA probe → WHEEL → WHEEL_CTRL → VSCROLL
+```
 
-Since this is an AHK script with UI interaction, manual testing is required:
+The method selection logic is identical to Phase 4. The only Phase 5 change is removing the whitelist gate — all apps now enter the fallback chain instead of only whitelisted ones.
 
-1. **SystemInformer (WHEEL_CTRL test)**
-   - Open SystemInformer
-   - Middle-click drag on the process list
-   - Should scroll smoothly without fallback (SI scrolls 1 line per message)
-   - Check tooltip if `MB_Debug := 1` shows "WHEEL_CTRL"
+---
 
-2. **Explorer navigation tree (VSCROLL fallback test)**
-   - Open Explorer with many folders in navigation pane
-   - Middle-click drag on nav tree (SysTreeView32)
-   - Should directly use VSCROLL via `UseVScroll`
-   - Check tooltip if `MB_Debug := 1` shows "VSCROLL"
+## Verification (Manual Testing)
 
-3. **Test control without smooth scroll (fallback trigger)**
-   - Find a control that scrolls 3 lines per wheel message
-   - Middle-click drag → should briefly show WHEEL_CTRL then switch to VSCROLL
-   - The jump should be imperceptible (reverted immediately)
+1. **Explorer file list**: MButton drag → smooth UIA scroll (unchanged)
+2. **Explorer nav tree**: MButton drag → VSCROLL (unchanged)
+3. **VS Code**: MButton drag → WHEEL scroll (unchanged)
+4. **SystemInformer**: MButton drag → WHEEL → WHEEL_CTRL cascade (unchanged)
+5. **mmc.exe Services**: MButton drag → WHEEL → verify it cascades to a working method
+6. **Notepad**: MButton drag → **NEW**: should now scroll (WHEEL or cascade)
+7. **Any random app**: MButton drag → should scroll via cascade
+8. **Chrome**: MButton drag → passthrough (excluded, native scroll)
+9. **Excluded controls**: Toolbar, address bar, etc. → passthrough (unchanged)
 
-### Debug Output
-
-Set `MB_Debug := 1` at line 843 to enable tooltips showing:
-
-- Current method being used
-- Scroll position deltas
-- Fallback transitions
+Enable `MB_Debug := 1` (line 19) to see method selection and fallback transitions.
+After verification, set `MB_Debug := 0`.

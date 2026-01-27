@@ -1,12 +1,103 @@
 # AHK Project: Context Transfer Summary
 
-## Current State (1/13/2026)
+## Current State (Jan 27, 2026)
 
-### === EXTENDED WINDOW SPY ===
+### Project Overview
+
+Monolithic AutoHotkey v1.1 script (`AutoHotkey.ahk`, ~1340 lines) providing:
+- **Explorer Smooth Scroll**: Multi-method MButton drag-scrolling with automatic fallback chain
+- **Extended Window Spy**: Real-time window info tooltip with click-to-dialog
+- **Windows Terminal / Elevation**: Context-aware terminal launching with de-escalation and TrustedInstaller
+- **Global hotkeys**: Volume control, window manipulation, app launchers
+
+### Key Regions in AutoHotkey.ahk
+
+| Lines | Section |
+|-------|---------|
+| 1-24 | Directives, auto-execute (MB_Debug at line 19) |
+| 26-91 | Bindings, remaps, script control |
+| 94-212 | Helper functions (`HasVal`, `GetExePath`, `GetMonitor`, `IsProcessElevated`, etc.) |
+| 215-285 | `UserRun()` - process execution with elevation support |
+| 287-521 | Windows Terminal / elevation hotkeys (F10, Shift+F10, Ctrl+Alt+Shift+F10) |
+| 523-1018 | Extended Window Spy (`#w` toggle, dialog, text processing) |
+| 1020-1340 | Explorer Smooth Scroll (MButton drag implementation) |
+
+---
+
+## Explorer Smooth Scroll (MButton)
+
+### Architecture
+
+The MButton scroll system intercepts middle-click-drag and converts it to smooth scrolling. It uses a **10ms timer** (`MBScrollTimer`) for continuous scrolling while the button is held, with a power-curve acceleration model (`absEffective^0.8` up to 100px, `+ (excess)^0.6` beyond).
+
+### Scroll Methods
+
+| Method | Mechanism | Granularity | Best For |
+|--------|-----------|-------------|----------|
+| **UIA** | `SetScrollPercent` via IUIAutomationScrollPattern | Fractional % | Explorer file lists, mmc.exe |
+| **WHEEL** | `WM_MOUSEWHEEL` sub-120 delta to window | Sub-notch | Electron apps (VS Code) |
+| **WHEEL_CTRL** | `WM_MOUSEWHEEL` to control (with fallback detection) | 1 line* | SystemInformer |
+| **VSCROLL** | `WM_VSCROLL` line-by-line, dynamic timer (300ms→20ms) | 1 line | Tree views, universal fallback |
+
+### Automatic Fallback Chain (Phase 4)
+
+Methods are **auto-detected at runtime** — no hardcoded per-app flags. The chain probes each method starting from highest quality and cascades on failure:
+
+```
+MButton Down
+    ├── TreeView control? ──────────────────→ VSCROLL (direct)
+    └── Try UIA setup
+         ├── Element + ScrollPattern found → UIA
+         │    └── Two-tick verification:
+         │         Tick 1: capture GetScrollPos before
+         │         Tick 2: check NoScroll sentinel OR Win32 scrollbar didn't move
+         │         → fail → WHEEL
+         └── Setup failed ──────────────────→ WHEEL
+              └── First scroll: GetScrollPos before/after
+                   ├── No movement → WHEEL_CTRL
+                   │    └── First scroll: GetScrollPos → jumped >40 units → VSCROLL
+                   └── Movement detected → stay WHEEL
+```
+
+Each fallback resets `MB_FallbackChecked := 0`, enabling the next method's first-scroll check. Worst-case cascade latency: ~30ms (happens once per drag session).
+
+### UIA Two-Tick Verification
+
+The UIA fallback uses a two-tick approach to avoid Sleep() in the 10ms timer:
+- **Tick 1** (`MB_FallbackChecked = 0`): Captures `GetScrollPos` of control, sends UIA scroll, sets `MB_FallbackChecked := -1`
+- **Tick 2** (`MB_FallbackChecked = -1`): Checks if UIA reports NoScroll sentinel (-1), OR cross-validates that Win32 scrollbar actually moved via `HasWin32Scrollbar()` + `GetScrollPos` comparison. Falls to WHEEL on failure.
+
+This catches apps like SystemInformer that expose a ScrollPattern but ignore `SetScrollPercent`.
+
+### Current App Selection Logic (lines 1053-1065)
+
+```autohotkey
+MB_PassthroughApps := ["chrome.exe", "everything64.exe", "VmConnect.exe"]
+MB_EnabledApps := ["mmc.exe", "7zFM.exe", "code.exe", "SystemInFormer.exe"]
+MB_ExcludedControls := ["ToolbarWindow", "ReBarWindow", "Edit", "AddressBandRoot", "statusbar", "SysHeader"]
+
+HasNativeScroll := HasVal(MB_PassthroughApps, ahk_exe)
+IsAllowedApp := HasVal(MB_EnabledApps, ahk_exe)
+IsAllowedContent := InStr(VisibleText, "Tree View") or InStr(VisibleText, "FolderView") or InStr(ControlText, "ScrollBar")
+IsExcludedRegion := HasVal(MB_ExcludedControls, MBScroll_CtrlClassNN) or (not MBScroll_CtrlClassNN and not (ahk_class = "Shell_TrayWnd" or ahk_class = "WorkerW"))
+
+ShouldScroll := !HasNativeScroll and (IsAllowedApp or IsAllowedContent) and !IsExcludedRegion
+```
+
+**Phase 5 will replace this** with a default-on model (see tasks.md and plan.md).
+
+### Key Helper Functions (Scroll)
+
+- `GetScrollPos(hwnd)` (line 1030) — Win32 `GetScrollPos` wrapper, returns vertical scroll position
+- `HasWin32Scrollbar(hwnd)` (line 1035) — Checks if `GetScrollRange(SB_VERT)` indicates a scrollbar exists
+
+---
+
+## Extended Window Spy
 
 **Status**: Stable, usable
 
-**v1.1 Features** (completed):
+### Features
 - Persistent tooltip showing Active Window + Window Under Cursor info
 - Hover-to-pause: hovering over tooltip pauses updates
 - Press `#w` again to close tooltip
@@ -14,175 +105,78 @@
 - Click tooltip to open dialog for copying text
 - Dialog auto-sizes to fit content, positions flush to bottom-right corner
 - Controls sorted alphabetically, items >80 chars filtered out
-- Window Text cleaned (non-ASCII removed, deduped if long, >80 char items filtered)
 - Comprehensive info: title, ahk_id, ahk_class, ahk_exe, dir, cmdline, PID (elevated indicator), monitor, pos, size, style, exstyle, focused control with hWnd, UIA pointer, window text, controls
-- `FilterLongItems()` to remove items >80 chars from Controls/Window Text
-- `SortList()` to sort Controls alphabetically
-- Dialog positioned flush to bottom-right
 
-**Pending: Dialog Width Matching Tooltip** (not yet implemented):
-
-- Tooltip width is captured via `WinGetPos` during updates (line 832) as WindowSpyTooltipW
-- `WindowSpyShowDialog()` needs to use captured width instead of fixed 700px
-- Expand dialog height to fit content (up to screen max)
-
-**Helper Functions**:
-
-- `GetExePath()`, `GetMonitor()`, `IsProcessElevated()`, `WrapList()`, `CleanWindowText()`, `FilterLongItems()`, `SortList()`
+### Pending Improvement
+- Dialog width should match tooltip width (captured as `WindowSpyTooltipW` at line ~832)
+- Currently uses fixed 700px width
 
 ---
 
-### Pending Goal: Spawn Windows on Cursor's Monitor
+## Critical AHK v1.1 Patterns
 
-**Goal**: Make new windows spawn on the monitor where the cursor is located, not the primary monitor.
+### COM/UIA Pointer Dereferencing
 
-**Foundation**: Already have `GetMonitor()` helper that determines which monitor a window is on.
-
-**Approach**:
-
-1. Create `GetCursorMonitor()` to get monitor number from cursor position
-2. Hook into window creation events (Shell hook or similar)
-3. When new window detected, move it to cursor's monitor
-
-**Implementation plan**:
-
+Always use `ptr+0` in the inner `NumGet()`:
 ```autohotkey
-; Get monitor from cursor position
-GetCursorMonitor() {
-  CoordMode, Mouse, Screen
-  MouseGetPos, x, y
-  SysGet, monCount, MonitorCount
-  Loop, %monCount% {
-    SysGet, mon, Monitor, %A_Index%
-    If (x >= monLeft && x <= monRight && y >= monTop && y <= monBottom)
-      Return A_Index
-  }
-  Return 1
-}
+; CORRECT — Forces numeric evaluation before dereferencing
+DllCall(NumGet(NumGet(MB_ScrollPattern+0)+8*A_PtrSize), "Ptr", MB_ScrollPattern, ...)
 
-; Shell hook to detect new windows
-Gui +LastFound
-hWnd := WinExist()
-DllCall("RegisterShellHookWindow", "Ptr", hWnd)
-MsgNum := DllCall("RegisterWindowMessage", "Str", "SHELLHOOK")
-OnMessage(MsgNum, "ShellEvent")
-
-ShellEvent(wParam, lParam) {
-  If (wParam = 1) {  ; HSHELL_WINDOWCREATED
-    targetMon := GetCursorMonitor()
-    ; Move window lParam to targetMon
-  }
-}
+; BROKEN — AHK v1.1 may misinterpret the variable
+DllCall(NumGet(NumGet(MB_ScrollPattern)+8*A_PtrSize), "Ptr", MB_ScrollPattern, ...)
 ```
 
----
+### COM DllCall Return Values
 
-## === EXPLORER SMOOTH SCROLL ===
+Never capture HRESULT from COM vtable DllCalls:
+```autohotkey
+; BROKEN — Interferes with output parameters
+hr := DllCall(NumGet(NumGet(ptr+0)+N*A_PtrSize), ..., "Ptr*", outVar)
 
-### Method Assignments
+; CORRECT — Just call, don't capture return
+DllCall(NumGet(NumGet(ptr+0)+N*A_PtrSize), ..., "Ptr*", outVar)
+```
 
-| App/Region                       | Method     | Target  | Timer | Status  |
-| -------------------------------- | ---------- | ------- | ----- | ------- |
-| mmc.exe                          | UIA        | Control | 10ms  | Working |
-| Explorer file lists              | UIA        | Control | 10ms  | Working |
-| Explorer nav bar (SysTreeView32) | VSCROLL    | Control | 50ms  | Working |
-| SystemInformer                   | WHEEL_CTRL | Control | 10ms  | Working |
-| VS Code                          | WHEEL      | Window  | 10ms  | Working |
+### Auto-Execute Section
 
-### Scroll Methods Explained
-
-| Method         | Mechanism                                          | Granularity  | Best For                                                                |
-| -------------- | -------------------------------------------------- | ------------ | ----------------------------------------------------------------------- |
-| **UIA**        | SetScrollPercent via IUIAutomationScrollPattern    | Fractional % | Apps exposing ScrollPattern (Explorer lists, mmc)                       |
-| **WHEEL**      | WM_MOUSEWHEEL with sub-120 delta to window         | Sub-notch    | Apps with internal cursor routing (VS Code, Electron)                   |
-| **WHEEL_CTRL** | WM_MOUSEWHEEL to control (with fallback detection) | 1 line\*     | Controls that scroll 1 line per message (SI)                            |
-| **VSCROLL**    | WM_VSCROLL 1 line per tick, dynamic timer          | 1 line       | Universal fallback (tree views, controls that scroll 3 lines per wheel) |
-
-### File Location
-
-`c:\Dropbox\Projects\AHK\AutoHotkey.ahk` lines 920-1170 (approximately)
+In AHK v1.1, the auto-execute section runs from line 1 until the first hotkey label. Code placed between hotkey subroutines is **unreachable dead code**. Global config must be in the auto-execute section (lines 1-24).
 
 ---
 
 ## Helper Functions Reference
 
-### GetExePath(winTitle := "A")
-
-Returns `{path: "C:\...\app.exe", dir: "C:\..."}` for a window's process.
-
-```autohotkey
-exe := GetExePath()
-MsgBox % exe.path  ; Full path to executable
-MsgBox % exe.dir   ; Directory containing executable
-```
-
-### GetMonitor(winTitle := "A")
-
-Returns 1-based monitor number where window's center is located.
-
-```autohotkey
-mon := GetMonitor()  ; Which monitor is active window on?
-```
-
-### IsProcessElevated(pid)
-
-Returns true if process is running with elevated (admin) privileges.
-
-```autohotkey
-WinGet, pid, PID, A
-If (IsProcessElevated(pid))
-  MsgBox, Running as admin
-```
-
-### ProcessExistsByCommandLine(cmdLine)
-
-Returns PID if a process with matching command line exists, 0 otherwise.
-
-```autohotkey
-pid := ProcessExistsByCommandLine("Code.exe"" """ . A_ScriptFullPath)
-If (pid)
-  WinActivate, ahk_pid %pid%
-```
-
-### WrapList(text, delimiter := ",", maxLen := 100)
-
-Wraps comma-separated text at ~100 chars, preserving whole items.
-
-```autohotkey
-wrapped := WrapList("item1, item2, item3, ...", ",", 100)
-; Returns: "item1, item2, item3, item4
-;           item5, item6, item7"
-```
-
-### FilterLongItems(text, maxItemLen := 80)
-
-Removes items exceeding maxItemLen from comma-separated list.
-
-```autohotkey
-filtered := FilterLongItems("short, verylongitemthatexceeds80chars..., another")
-; Returns: "short, another"
-```
-
-### SortList(text)
-
-Sorts comma-separated items alphabetically.
-
-```autohotkey
-sorted := SortList("Zebra, Apple, Mango")
-; Returns: "Apple, Mango, Zebra"
-```
+| Function | Location | Purpose |
+|----------|----------|---------|
+| `HasVal(arr, val)` | line 97 | Check if array contains value (partial match via InStr) |
+| `GetExePath(winTitle)` | line 108 | Returns `{path, dir}` for window's process |
+| `GetMonitor(winTitle)` | line 130 | Returns 1-based monitor number for window center |
+| `ProcessExistsByCommandLine(cmdLine)` | line 148 | Find PID by command line match via WMI |
+| `IsProcessElevated(pid)` | line 203 | Checks admin privileges via token |
+| `UserRun(exe, args*)` | line 218 | Smart process execution with elevation support |
+| `WrapList(text, delim, maxLen)` | ~line 830 | Wraps delimited text at maxLen preserving items |
+| `CleanWindowText(text)` | ~line 840 | Removes non-ASCII, dedupes long window text |
+| `FilterLongItems(text, maxLen)` | ~line 855 | Removes items >maxLen from delimited list |
+| `SortList(text)` | ~line 870 | Sorts comma-separated items alphabetically |
+| `GetScrollPos(hwnd)` | line 1030 | Win32 vertical scroll position |
+| `HasWin32Scrollbar(hwnd)` | line 1035 | Checks if Win32 scrollbar exists |
 
 ---
 
-## Session History Notes
+## Conventions
 
-### Extended Window Spy Development
+- **AHK v1.1 syntax only** — no v2 syntax
+- **Naming**: PascalCase functions, `MB_` prefix for MButton globals, `G_` for persistent globals
+- **Process launching**: Always use `UserRun()` for consistent elevation/env handling
+- **App lists**: Partial matching via `HasVal()` — add exe names without full paths
+- **Sections**: ASCII box dividers for major regions
+- **Debug**: `MB_Debug := 1` (line 19) enables ToolTip debug output during MButton drag
 
-1. Started with one-shot GUI from previous commit
-2. Converted to persistent tooltip with 250ms timer
-3. Reduced to 1500ms timer + content-change detection
-4. Added hover-to-pause functionality
-5. Fixed click-to-dialog positioning bug
-6. Added comprehensive info fields
-7. Added UIA info matching Under Cursor format
-8. v1.1: Added filtering/sorting, improved dialog sizing
+---
+
+## Pending Goal: Spawn Windows on Cursor's Monitor
+
+**Goal**: Make new windows spawn on the monitor where the cursor is located.
+
+**Foundation**: `GetMonitor()` helper already determines which monitor a window is on. Needs a `GetCursorMonitor()` and shell hook for `HSHELL_WINDOWCREATED` events.
+
+**Status**: Not started, lower priority than scroll improvements.
