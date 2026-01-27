@@ -21,8 +21,10 @@
 - Robust Scrolling System: A new, 4-layered comprehensive MButton drag-scroll feature provides custom scrolling in any window of your choosing
 - Select from one of four methods (UI Automation, WHEEL, WHEEL_CTRL, VSCROLL), each designed to provide the best possible smooth-scroll experience based on application.
 
-### *Coming soon*
-- Auto-detection/fallback on a per-app basis for OS-wide support
+### *New in v2.4*
+- **Universal app support** — smooth scroll works in ALL apps automatically, no configuration needed
+- **Native scroll auto-detection** — apps with built-in MButton drag-scroll (like Chrome) are detected at runtime and left alone
+- **Auto-fallback chain** — UIA → WHEEL → WHEEL_CTRL → VSCROLL, probed per app on first drag
 
 <br />
 

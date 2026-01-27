@@ -81,11 +81,11 @@ DllCall(NumGet(NumGet(ptr+0)+N*A_PtrSize), ..., "Ptr*", outVar)
 ```
 
 ### Configuration Arrays
-App-specific behavior is controlled via arrays:
+Control exclusions and native scroll detection:
 ```autohotkey
-MB_PassthroughApps := ["chrome.exe", "everything64.exe"]  ; Native scroll
-MB_EnabledApps := ["mmc.exe", "code.exe"]                 ; Custom scroll
-MB_ExcludedControls := ["ToolbarWindow", "Edit"]          ; Skip these
+MB_ExcludedControls := ["ToolbarWindow", "Edit"]          ; Skip these controls
+; App exclusion is automatic — native MButton drag-scroll is detected at runtime
+; via HCURSOR handle change (custom cursors only), GetScrollPos, and UIA GetVerticalScrollPercent
 ```
 
 ## Testing

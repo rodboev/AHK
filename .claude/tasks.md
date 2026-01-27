@@ -22,12 +22,29 @@
 - [x] Add `HasWin32Scrollbar()` helper function
 - [x] Fix MB_Debug placement (moved to auto-execute section, line 19)
 
-## Phase 5: Universal App Support (planned)
-- [ ] Remove `MB_EnabledApps` whitelist — scroll works for ALL apps by default
-- [ ] Rename `MB_PassthroughApps` → `MB_ExcludedApps`
-- [ ] Simplify `ShouldScroll` to: `!IsExcludedApp and !IsExcludedRegion`
-- [ ] Remove `IsAllowedApp`, `IsAllowedContent`, `HasNativeScroll` variables
-- [ ] Method selection unchanged: UIA-first fallback chain for all apps, TreeView → VSCROLL
-- [ ] No method selection code changes needed — only the ShouldScroll gate changes
-- [ ] Test across apps: Explorer, VS Code, SystemInformer, mmc.exe, 7zFM, Notepad, etc.
+## Phase 5: Universal App Support ✅
+- [x] Remove `MB_EnabledApps` whitelist and `MB_PassthroughApps` — no hardcoded app lists
+- [x] Remove `IsAllowedApp`, `IsAllowedContent`, `HasNativeScroll`, `ShouldScroll` variables
+- [x] Always pass through MButton Down — detect native scroll at runtime
+- [x] Add multi-signal native scroll probe (HCURSOR handle + GetScrollPos + UIA GetVerticalScrollPercent, 5 ticks/50ms)
+- [x] If native scroll detected → stay passive (`MB_Disabled := 1`)
+- [x] If no native scroll → engage custom scroll with UIA-first fallback chain
+- [x] TreeView → direct VSCROLL (skip probe, never has native MButton scroll)
+- [x] Keep `MB_ExcludedControls` for toolbars, edit boxes, headers
+- [ ] Test across apps: Explorer, VS Code, SystemInformer, mmc.exe, 7zFM, Chrome, etc.
 - [ ] Set `MB_Debug := 0` after verification
+
+## Phase 6: Deferred MButton Down for Explorer ✅
+- [x] Defer `SendInput, {Blind}{MButton Down}` for Explorer (`CabinetWClass`)
+- [x] Prevents navbar middle-click opening new tab during scroll intent
+- [x] Prevents Explorer selection mode from blocking UIA `SetScrollPercent`
+- [x] On MButton Up without scroll: synthesize full `{Blind}{MButton}` click
+- [x] Non-Explorer apps still get immediate passthrough for native detection
+- [x] Restore Win32 cross-validation for UIA verification (deferred down fixes the root cause)
+
+## Phase 7: Native Scroll Taming (UIA Override)
+- [ ] For apps detected as native scroll (hcursor change), check if UIA ScrollPattern is available
+- [ ] If UIA available: override native scroll with UIA `SetScrollPercent` for smooth, predictable scrolling
+- [ ] Use existing scroll curve (power-curve acceleration) instead of app's native scroll speed
+- [ ] Preserve native scroll only for apps without UIA ScrollPattern
+- [ ] Consider: suppress native scroll cursor icon when overriding with UIA

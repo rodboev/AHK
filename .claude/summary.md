@@ -4,7 +4,7 @@
 
 ### Project Overview
 
-Monolithic AutoHotkey v1.1 script (`AutoHotkey.ahk`, ~1340 lines) providing:
+Monolithic AutoHotkey v1.1 script (`AutoHotkey.ahk`, ~1430 lines) providing:
 - **Explorer Smooth Scroll**: Multi-method MButton drag-scrolling with automatic fallback chain
 - **Extended Window Spy**: Real-time window info tooltip with click-to-dialog
 - **Windows Terminal / Elevation**: Context-aware terminal launching with de-escalation and TrustedInstaller
@@ -20,7 +20,7 @@ Monolithic AutoHotkey v1.1 script (`AutoHotkey.ahk`, ~1340 lines) providing:
 | 215-285 | `UserRun()` - process execution with elevation support |
 | 287-521 | Windows Terminal / elevation hotkeys (F10, Shift+F10, Ctrl+Alt+Shift+F10) |
 | 523-1018 | Extended Window Spy (`#w` toggle, dialog, text processing) |
-| 1020-1340 | Explorer Smooth Scroll (MButton drag implementation) |
+| 1020-1430 | Explorer Smooth Scroll (MButton drag implementation) |
 
 ---
 
@@ -69,22 +69,33 @@ The UIA fallback uses a two-tick approach to avoid Sleep() in the 10ms timer:
 
 This catches apps like SystemInformer that expose a ScrollPattern but ignore `SetScrollPercent`.
 
-### Current App Selection Logic (lines 1053-1065)
+### App Selection Logic — Auto-Detection Model (Phase 5)
 
 ```autohotkey
-MB_PassthroughApps := ["chrome.exe", "everything64.exe", "VmConnect.exe"]
-MB_EnabledApps := ["mmc.exe", "7zFM.exe", "code.exe", "SystemInFormer.exe"]
 MB_ExcludedControls := ["ToolbarWindow", "ReBarWindow", "Edit", "AddressBandRoot", "statusbar", "SysHeader"]
-
-HasNativeScroll := HasVal(MB_PassthroughApps, ahk_exe)
-IsAllowedApp := HasVal(MB_EnabledApps, ahk_exe)
-IsAllowedContent := InStr(VisibleText, "Tree View") or InStr(VisibleText, "FolderView") or InStr(ControlText, "ScrollBar")
-IsExcludedRegion := HasVal(MB_ExcludedControls, MBScroll_CtrlClassNN) or (not MBScroll_CtrlClassNN and not (ahk_class = "Shell_TrayWnd" or ahk_class = "WorkerW"))
-
-ShouldScroll := !HasNativeScroll and (IsAllowedApp or IsAllowedContent) and !IsExcludedRegion
+IsExcludedRegion := HasVal(MB_ExcludedControls, MBScroll_CtrlClassNN) or (...)
 ```
 
-**Phase 5 will replace this** with a default-on model (see tasks.md and plan.md).
+### Deferred MButton Down (Explorer)
+
+For Explorer (`CabinetWClass`), MButton Down is **deferred** — not passed through to the app on press. This prevents Explorer from triggering click actions (e.g., opening a new tab when middle-clicking a navbar item) or entering selection mode (which blocks UIA scrolling) before the user's intent (scroll vs click) is determined.
+
+- **If scroll occurs** (drag ≥8px): MButton Down is never sent to Explorer. Custom scroll handles everything.
+- **If no scroll** (release without drag): `{Blind}{MButton}` (full click) is synthesized on MButton Up, preserving normal middle-click behavior.
+
+For non-Explorer apps, MButton Down is **passed through immediately** to enable native scroll detection.
+
+### Native Scroll Probe
+
+A multi-tick **native scroll probe** determines whether the app handles MButton drag-scroll natively using three signals:
+
+1. **Cursor change** (HCURSOR handle via `GetCursorInfo` + `A_Cursor = "Unknown"`): Checked every tick. The initial HCURSOR is captured *before* any MButton event is sent. A change is only detected when the handle differs AND `A_Cursor` reports `"Unknown"` (custom bitmap cursor). This dual check prevents false positives from standard cursor changes while reliably catching custom autoscroll icons (Chrome, Firefox).
+2. **Win32 scroll position** (`GetScrollPos`): Checked after drag threshold (≥3px). Catches classic Win32 apps with native scrollbars.
+3. **UIA scroll percent** (`GetVerticalScrollPercent`): Checked after drag threshold. Catches modern apps using custom renderers.
+
+The probe runs up to 5 ticks (~50ms) after drag detection. If any signal fires → **native scroll detected** → stay passive (`MB_Disabled := 1`). If none fire → engage custom scroll with auto-fallback chain (UIA → WHEEL → WHEEL_CTRL → VSCROLL). For Explorer, MButton Down is deferred so signals 2/3 are the only active detectors (signal 1 requires the app to receive MButton Down).
+
+No hardcoded app exclusion list is needed. Only excluded **controls** (toolbars, edit boxes, headers) are skipped via `MB_ExcludedControls`.
 
 ### Key Helper Functions (Scroll)
 

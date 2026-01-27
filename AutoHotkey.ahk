@@ -1040,33 +1040,37 @@ HasWin32Scrollbar(hwnd) {
 $*MButton::
   global MBScroll_X1, MBScroll_Y1, MBScroll_Win, MBScroll_CtrlClassNN, MBScroll_Triggered
   global G_UIA, MB_ScrollPattern := 0, MB_Element := 0, MBScroll_Ctrl
-  global MB_Disabled := 0, MB_ViewSize := 10.0, MB_AccumPct := -1
+  global MB_Disabled := 0, MB_DeferredDown := 0, MB_ViewSize := 10.0, MB_AccumPct := -1
   global MB_Method := "VSCROLL" ; Default fallback
   global MB_FallbackChecked := 0  ; Check fallback once per drag
+  global MB_NativeProbe := 0, MB_InitScrollPos := 0, MB_InitScrollPct := 0.0, MB_InitHCursor := 0
 
   MouseGetPos,,, MBScroll_Win, MBScroll_CtrlClassNN
   WinGetClass, ahk_class, ahk_id %MBScroll_Win%
-  WinGet, ahk_exe, ProcessName, ahk_id %MBScroll_Win%
-  WinGetText, VisibleText, ahk_id %MBScroll_Win%
-  WinGet, ControlText, ControlList, ahk_id %MBScroll_Win%
 
-  ; APP LIST (passthrough/allow, excluded controls)
-  MB_PassthroughApps := ["chrome.exe", "everything64.exe", "VmConnect.exe"]
-  MB_EnabledApps := ["mmc.exe", "7zFM.exe", "code.exe", "SystemInFormer.exe"]
-  MB_ExcludedControls := ["ToolbarWindow", "ReBarWindow", "Edit", "AddressBandRoot", "statusbar", "SysHeader"]
-
-  ; SCROLL CONFIG (from app list)
-  HasNativeScroll := HasVal(MB_PassthroughApps, ahk_exe)
-  IsAllowedApp := HasVal(MB_EnabledApps, ahk_exe)
-  IsAllowedContent := InStr(VisibleText, "Tree View") or InStr(VisibleText, "FolderView") or InStr(ControlText, "ScrollBar")
+  ; EXCLUDED CONTROLS (toolbars, edit boxes, headers — never scroll these)
+  MB_ExcludedControls := ["ToolbarWindow", "ReBarWindow", "Edit", "AddressBandRoot", "statusbar", "SysHeader", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"]
   IsExcludedRegion := HasVal(MB_ExcludedControls, MBScroll_CtrlClassNN) or (not MBScroll_CtrlClassNN and not (ahk_class = "Shell_TrayWnd" or ahk_class = "WorkerW"))
-
-  ; DETERMINE If SCROLLING SHOULD OCCUR
-  ShouldScroll := !HasNativeScroll and (IsAllowedApp or IsAllowedContent) and !IsExcludedRegion
-  If (!ShouldScroll) {
+  If (IsExcludedRegion) {
     MB_Disabled := 1
     SendInput, {Blind}{MButton Down}
     Return
+  }
+
+  ; Capture cursor handle before passing MButton to app (Chrome changes cursor immediately)
+  ; Uses HCURSOR handle (not A_Cursor name) to detect custom cursor changes
+  VarSetCapacity(ci, 16 + A_PtrSize, 0)
+  NumPut(16 + A_PtrSize, ci, 0, "UInt")
+  DllCall("GetCursorInfo", "Ptr", &ci)
+  MB_InitHCursor := NumGet(ci, 8, "UPtr")
+
+  ; Defer MButton Down for Explorer to prevent click actions during scroll
+  ; (e.g., middle-clicking a navbar item opens a new tab before scroll starts)
+  ; Non-Explorer apps get immediate passthrough for native scroll detection
+  If (ahk_class = "CabinetWClass") {
+    MB_DeferredDown := 1
+  } Else {
+    SendInput, {Blind}{MButton Down}
   }
   MB_Disabled := 0
 
@@ -1086,51 +1090,134 @@ $*MButton::
   ControlGet, MBScroll_Ctrl, Hwnd,, %MBScroll_CtrlClassNN%, ahk_id %MBScroll_Win%
   MBScroll_Triggered := 0
 
-  ; DETERMINE SCROLL METHOD (auto-detect with fallback chain)
-  ; Chain: UIA → WHEEL → WHEEL_CTRL → VSCROLL (runtime fallback in timer)
+  ; TreeView controls → direct to VSCROLL (skip native probe, never has native MButton scroll)
   If (InStr(MBScroll_CtrlClassNN, "SysTreeView32")) {
-    ; TreeView controls → direct to VSCROLL (always works, no probe needed)
     MB_Method := "VSCROLL"
-  } Else {
-    ; Try UIA first (highest quality: fractional % scrolling)
-    If (!G_UIA)
-      G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
-    targetForUIA := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
-    DllCall(NumGet(NumGet(G_UIA+0)+6*A_PtrSize), "Ptr", G_UIA, "Ptr", targetForUIA, "Ptr*", MB_Element)
-    If (MB_Element) {
-      ; Get ScrollPattern (10004)
-      DllCall(NumGet(NumGet(MB_Element+0)+16*A_PtrSize), "Ptr", MB_Element, "Int", 10004, "Ptr*", MB_ScrollPattern)
-      If (MB_ScrollPattern) {
-        ; Get ViewSize for normalization
-        DllCall(NumGet(NumGet(MB_ScrollPattern+0)+8*A_PtrSize), "Ptr", MB_ScrollPattern, "Double*", MB_ViewSize)
-        If (MB_ViewSize < 1)
-          MB_ViewSize := 10.0
-        MB_Method := "UIA"
-      } Else {
-        ; No ScrollPattern — release element, fall to WHEEL
-        ObjRelease(MB_Element)
-        MB_Element := 0
-        MB_Method := "WHEEL"
-      }
-    } Else {
-      ; No UIA element found — fall to WHEEL
-      MB_Method := "WHEEL"
+    MB_NativeProbe := 0
+    SetTimer, MBScrollTimer, 150
+    Return
+  }
+
+  ; SET UP UIA (for both native scroll detection and potential custom scroll)
+  If (!G_UIA)
+    G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
+  targetForUIA := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
+  DllCall(NumGet(NumGet(G_UIA+0)+6*A_PtrSize), "Ptr", G_UIA, "Ptr", targetForUIA, "Ptr*", MB_Element)
+  If (MB_Element) {
+    DllCall(NumGet(NumGet(MB_Element+0)+16*A_PtrSize), "Ptr", MB_Element, "Int", 10004, "Ptr*", MB_ScrollPattern)
+    If (MB_ScrollPattern) {
+      DllCall(NumGet(NumGet(MB_ScrollPattern+0)+8*A_PtrSize), "Ptr", MB_ScrollPattern, "Double*", MB_ViewSize)
+      If (MB_ViewSize < 1)
+        MB_ViewSize := 10.0
     }
   }
 
-  ; Start timer (VSCROLL starts slow, adjusts dynamically in timer)
-  timerInterval := (MB_Method = "VSCROLL") ? 150 : 10
-  SetTimer, MBScrollTimer, %timerInterval%
+  ; Capture initial scroll state for native detection
+  probeTarget := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
+  MB_InitScrollPos := GetScrollPos(probeTarget)
+  MB_InitScrollPct := -1.0
+  If (MB_ScrollPattern)
+    DllCall(NumGet(NumGet(MB_ScrollPattern+0)+6*A_PtrSize), "Ptr", MB_ScrollPattern, "Double*", MB_InitScrollPct)
+
+  ; Start timer in native probe mode
+  MB_NativeProbe := 1
+  SetTimer, MBScrollTimer, 10
 Return
 
 MBScrollTimer:
   global MB_AccumPct, MB_Method, MB_ViewSize, MBScroll_Ctrl, MB_FallbackChecked
+  global MB_NativeProbe, MB_InitScrollPos, MB_InitScrollPct, MB_InitHCursor
   ; Safety check: if MButton released, stop immediately
   If !GetKeyState("MButton", "P") {
     SetTimer, MBScrollTimer, Off
     If (MB_Debug)
       ToolTip
     Return
+  }
+
+  ; ===== NATIVE SCROLL PROBE PHASE =====
+  ; Detect if the app handles MButton drag-scroll natively.
+  ; Three signals: cursor change, Win32 scroll pos, UIA scroll percent.
+  ; Multi-tick: cursor checked every tick; scroll pos checked over 5 ticks after drag.
+  If (MB_NativeProbe > 0) {
+    nativeDetected := false
+
+    ; Signal 1: Cursor changed to a custom bitmap (e.g., Chrome/Firefox autoscroll icon)
+    ; Requires A_Cursor = "Unknown" to ignore standard cursor changes (Explorer selection, etc.)
+    VarSetCapacity(ci, 16 + A_PtrSize, 0)
+    NumPut(16 + A_PtrSize, ci, 0, "UInt")
+    DllCall("GetCursorInfo", "Ptr", &ci)
+    If (NumGet(ci, 8, "UPtr") != MB_InitHCursor and A_Cursor = "Unknown")
+      nativeDetected := true
+
+    If (!nativeDetected) {
+      CoordMode, Mouse, Screen
+      MouseGetPos,, probeY
+      probeDrag := Abs(probeY - MBScroll_Y1)
+
+      If (MB_NativeProbe = 1) {
+        ; Waiting for drag threshold
+        If (probeDrag >= 3)
+          MB_NativeProbe := 2  ; Drag detected — start scroll position checks
+        Return
+      }
+
+      ; Signal 2: Win32 scroll position changed
+      probeTarget := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
+      currentScrollPos := GetScrollPos(probeTarget)
+      If (currentScrollPos != MB_InitScrollPos)
+        nativeDetected := true
+
+      ; Signal 3: UIA scroll percent changed
+      If (!nativeDetected and MB_ScrollPattern) {
+        DllCall(NumGet(NumGet(MB_ScrollPattern+0)+6*A_PtrSize), "Ptr", MB_ScrollPattern, "Double*", currentPct)
+        If (currentPct != MB_InitScrollPct)
+          nativeDetected := true
+      }
+
+      ; Allow multiple check ticks (up to 5 ticks after drag = ~50ms)
+      If (!nativeDetected) {
+        MB_NativeProbe += 1
+        If (MB_NativeProbe <= 6)
+          Return  ; Check again next tick
+      }
+    }
+
+    If (nativeDetected) {
+      ; App handles MButton scroll natively — stay passive
+      MB_Disabled := 1
+      If (MB_ScrollPattern) {
+        ObjRelease(MB_ScrollPattern)
+        MB_ScrollPattern := 0
+      }
+      If (MB_Element) {
+        ObjRelease(MB_Element)
+        MB_Element := 0
+      }
+      SetTimer, MBScrollTimer, Off
+      If (MB_Debug) {
+        VarSetCapacity(ci2, 16 + A_PtrSize, 0)
+        NumPut(16 + A_PtrSize, ci2, 0, "UInt")
+        DllCall("GetCursorInfo", "Ptr", &ci2)
+        ToolTip, % "Native scroll detected (hCursor=" NumGet(ci2, 8, "UPtr") " was=" MB_InitHCursor ")"
+      }
+      Return
+    }
+
+    ; No native scroll — engage custom scroll
+    MB_NativeProbe := 0
+    If (MB_ScrollPattern) {
+      MB_Method := "UIA"
+    } Else {
+      If (MB_Element) {
+        ObjRelease(MB_Element)
+        MB_Element := 0
+      }
+      MB_Method := "WHEEL"
+    }
+    If (MB_Debug)
+      ToolTip, % "No native scroll — using " MB_Method
+    ; Fall through to custom scroll logic below
   }
 
   CoordMode, Mouse, Screen
@@ -1312,16 +1399,10 @@ MBScrollTimer:
 Return
 
 $*MButton Up::
-  global MB_Disabled, MBScroll_Triggered, MBScroll_Win, MB_ScrollPattern, MB_Element
+  global MB_Disabled, MB_DeferredDown, MBScroll_Triggered, MBScroll_Win, MB_ScrollPattern, MB_Element
   SetTimer, MBScrollTimer, Off
   If (MB_Debug)
     ToolTip
-
-  ; If we passed through MButton Down, also pass through MButton Up
-  If (MB_Disabled) {
-    SendInput, {Blind}{MButton Up}
-    Return
-  }
 
   ; Release UIA objects
   If (MB_ScrollPattern) {
@@ -1333,8 +1414,14 @@ $*MButton Up::
     MB_Element := 0
   }
 
-  ; If no drag occurred in non-Explorer, send click
-  WinGetClass, ahk_class, ahk_id %MBScroll_Win%
-  If (!MBScroll_Triggered and ahk_class != "CabinetWClass")
-    SendInput, {Blind}{MButton}
+  ; Release MButton to app
+  If (MB_DeferredDown) {
+    ; Explorer: MButton Down was deferred — only send click if no scroll occurred
+    If (!MBScroll_Triggered) {
+      SendInput, {Blind}{MButton}
+    }
+  } Else {
+    ; Non-Explorer: MButton Down was already sent, send Up to complete
+    SendInput, {Blind}{MButton Up}
+  }
 Return
