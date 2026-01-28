@@ -16,7 +16,23 @@
 SendMode, Input
 SetWorkingDir, %A_ScriptDir%
 SetTitleMatchMode, 2
-MB_Debug := 1  ; MButton scroll debug tooltips (0=off, 1=on)
+MB_Debug := 0  ; MButton scroll debug tooltips (0=off, 1=on)
+
+; --- Window Spawning: move new windows to cursor's monitor ---
+G_WS_Debug := 1  ; Debug tooltips (set to 0 once working)
+G_WS_ExcludedClasses := ["tooltips_class32", "NotifyIconOverflowWindow"
+  , "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Progman", "WorkerW"
+  , "MultitaskingViewFrame", "Windows.UI.Core.CoreWindow", "ForegroundStaging"]
+Gui, ShellHook:+LastFound
+Gui, ShellHook:Show, Hide
+G_WS_HookHwnd := WinExist()
+G_WS_HookOK := DllCall("RegisterShellHookWindow", "Ptr", G_WS_HookHwnd)
+G_WS_HookMsg := DllCall("RegisterWindowMessage", "Str", "SHELLHOOK")
+if (G_WS_HookOK && G_WS_HookMsg > 0)
+  OnMessage(G_WS_HookMsg, "WS_OnShellHook")
+else
+  ToolTip, WS ERROR: Hook=%G_WS_HookOK% Msg=%G_WS_HookMsg%
+OnExit("WS_Cleanup")
 
 ; Prevent script proceeding in RDP, Hyper-V, VMWare windows
 #If (WinActive("ahk_class TscShellContainerClass") or WinActive("ahk_exe vmconnect.exe") or WinActive("ahk_exe vmware.exe"))
@@ -163,6 +179,19 @@ GetMonitor(winTitle := "A") {
   Loop, %monCount% {
     SysGet, mon, Monitor, %A_Index%
     If (centerX >= monLeft && centerX <= monRight && centerY >= monTop && centerY <= monBottom)
+      Return A_Index
+  }
+  Return 1
+}
+
+; ⇒ Get which monitor the cursor is on (1-based)
+GetCursorMonitor() {
+  CoordMode, Mouse, Screen
+  MouseGetPos, mx, my
+  SysGet, monCount, MonitorCount
+  Loop, %monCount% {
+    SysGet, mon, Monitor, %A_Index%
+    If (mx >= monLeft && mx <= monRight && my >= monTop && my <= monBottom)
       Return A_Index
   }
   Return 1
@@ -1417,4 +1446,168 @@ $*MButton Up::
     ; Non-Explorer: MButton Down was already sent, send Up to complete
     SendInput, {Blind}{MButton Up}
   }
+Return
+
+; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+; ┃ === SPAWN WINDOWS ON CURRENT MONITOR === ┃
+; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+; Shell hook intercepts new window creation and moves the window
+; to whichever monitor the cursor is on. Uses BoundFunc per-window
+; timers to avoid race conditions with rapid window creation.
+
+WS_OnShellHook(wParam, lParam, msg, hwnd) {
+  if (wParam != 1)  ; Only HSHELL_WINDOWCREATED
+    return
+  global G_WS_Debug
+  if (G_WS_Debug) {
+    WinGetTitle, dbgTitle, ahk_id %lParam%
+    WinGetClass, dbgClass, ahk_id %lParam%
+    ToolTip, WS HOOK: wP=%wParam% hwnd=%lParam%`n  title="%dbgTitle%"`n  class=%dbgClass%
+    SetTimer, WS_DebugTooltipOff, -3000
+  }
+  cursorMon := GetCursorMonitor()
+  fn := Func("WS_TryMove").Bind(lParam, cursorMon, 0)
+  SetTimer, %fn%, -50
+}
+
+WS_TryMove(hwnd, targetMon, attempt) {
+  global G_WS_Debug
+  ; Check if window is ready (visible, sized, not cloaked)
+  if (!WS_IsReady(hwnd)) {
+    if (attempt < 2) {
+      delay := (attempt == 0) ? -150 : -300
+      fn := Func("WS_TryMove").Bind(hwnd, targetMon, attempt + 1)
+      SetTimer, %fn%, %delay%
+      if (G_WS_Debug)
+        ToolTip, WS RETRY: hwnd=%hwnd% attempt=%attempt%
+    }
+    return
+  }
+
+  ; Check if window should be moved
+  if (!WS_IsMovable(hwnd)) {
+    if (G_WS_Debug) {
+      WinGetTitle, dbgTitle, ahk_id %hwnd%
+      WinGetClass, dbgClass, ahk_id %hwnd%
+      ToolTip, WS SKIP: "%dbgTitle%" class=%dbgClass%
+      SetTimer, WS_DebugTooltipOff, -3000
+    }
+    return
+  }
+
+  ; Already on correct monitor?
+  windowMon := GetMonitor("ahk_id " . hwnd)
+  if (windowMon == targetMon) {
+    if (G_WS_Debug) {
+      WinGetTitle, dbgTitle, ahk_id %hwnd%
+      ToolTip, WS OK: "%dbgTitle%" already on mon %targetMon%
+      SetTimer, WS_DebugTooltipOff, -2000
+    }
+    return
+  }
+
+  WS_MoveToMonitor(hwnd, windowMon, targetMon)
+
+  if (G_WS_Debug) {
+    WinGetTitle, dbgTitle, ahk_id %hwnd%
+    ToolTip, WS MOVED: "%dbgTitle%" mon %windowMon% -> %targetMon%
+    SetTimer, WS_DebugTooltipOff, -3000
+  }
+}
+
+WS_IsReady(hwnd) {
+  ; Window must still exist
+  if !WinExist("ahk_id " . hwnd)
+    return false
+  ; Must be visible
+  WinGet, style, Style, ahk_id %hwnd%
+  if !(style & 0x10000000)  ; WS_VISIBLE
+    return false
+  ; Must not be cloaked (UWP pre-show transition)
+  VarSetCapacity(cloaked, 4, 0)
+  DllCall("dwmapi\DwmGetWindowAttribute", "Ptr", hwnd, "UInt", 14, "Ptr", &cloaked, "UInt", 4)
+  if (NumGet(cloaked, 0, "UInt"))
+    return false
+  ; Must have non-zero size
+  WinGetPos,,, w, h, ahk_id %hwnd%
+  if (w <= 0 || h <= 0)
+    return false
+  return true
+}
+
+WS_IsMovable(hwnd) {
+  global G_WS_ExcludedClasses
+  ; Must have a title (transient/system windows often don't)
+  WinGetTitle, title, ahk_id %hwnd%
+  if (title == "")
+    return false
+  ; Skip owned windows (dialogs should follow their parent)
+  owner := DllCall("GetWindow", "Ptr", hwnd, "UInt", 4, "Ptr")  ; GW_OWNER=4
+  if (owner)
+    return false
+  ; Skip tool windows (tooltips, floating toolbars)
+  WinGet, exStyle, ExStyle, ahk_id %hwnd%
+  if (exStyle & 0x80)  ; WS_EX_TOOLWINDOW
+    return false
+  ; Skip excluded window classes
+  WinGetClass, cls, ahk_id %hwnd%
+  if HasVal(G_WS_ExcludedClasses, cls)
+    return false
+  return true
+}
+
+WS_MoveToMonitor(hwnd, srcMon, tgtMon) {
+  ; Get work areas (taskbar-aware) for both monitors
+  SysGet, src, MonitorWorkArea, %srcMon%
+  SysGet, tgt, MonitorWorkArea, %tgtMon%
+  srcW := srcRight - srcLeft, srcH := srcBottom - srcTop
+  tgtW := tgtRight - tgtLeft, tgtH := tgtBottom - tgtTop
+
+  ; Get current window geometry
+  WinGetPos, winX, winY, winW, winH, ahk_id %hwnd%
+
+  ; Maximized window: restore, move to target, re-maximize
+  WinGet, minMax, MinMax, ahk_id %hwnd%
+  if (minMax == 1) {
+    WinRestore, ahk_id %hwnd%
+    centerX := tgtLeft + (tgtW - winW) // 2
+    centerY := tgtTop + (tgtH - winH) // 2
+    WinMove, ahk_id %hwnd%,, %centerX%, %centerY%
+    WinMaximize, ahk_id %hwnd%
+    return
+  }
+
+  ; Clamp window size to target work area
+  if (winW > tgtW)
+    winW := tgtW
+  if (winH > tgtH)
+    winH := tgtH
+
+  ; Map relative position: source monitor -> target monitor
+  relX := (winX - srcLeft) / srcW
+  relY := (winY - srcTop) / srcH
+  newX := Round(tgtLeft + relX * tgtW)
+  newY := Round(tgtTop + relY * tgtH)
+
+  ; Clamp to target bounds
+  if (newX < tgtLeft)
+    newX := tgtLeft
+  if (newY < tgtTop)
+    newY := tgtTop
+  if (newX + winW > tgtRight)
+    newX := tgtRight - winW
+  if (newY + winH > tgtBottom)
+    newY := tgtBottom - winH
+
+  WinMove, ahk_id %hwnd%,, %newX%, %newY%, %winW%, %winH%
+}
+
+WS_Cleanup() {
+  global G_WS_HookHwnd
+  DllCall("DeregisterShellHookWindow", "Ptr", G_WS_HookHwnd)
+  Gui, ShellHook:Destroy
+}
+
+WS_DebugTooltipOff:
+  ToolTip
 Return
