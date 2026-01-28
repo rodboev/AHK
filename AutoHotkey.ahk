@@ -1458,6 +1458,7 @@ Return
 WS_OnShellHook(wParam, lParam, msg, hwnd) {
   if (wParam != 1)  ; Only HSHELL_WINDOWCREATED
     return
+  SetWinDelay, -1  ; No delay between window commands (AHK default is 100ms)
   global G_WS_Debug
   if (G_WS_Debug) {
     WinGetTitle, dbgTitle, ahk_id %lParam%
@@ -1466,18 +1467,44 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
     SetTimer, WS_DebugTooltipOff, -3000
   }
   cursorMon := GetCursorMonitor()
+  ; Try to move immediately (no timer delay) — avoids visible jump
+  if (WS_IsReady(lParam)) {
+    if (WS_IsMovable(lParam)) {
+      windowMon := GetMonitor("ahk_id " . lParam)
+      if (windowMon != cursorMon) {
+        WS_MoveToMonitor(lParam, windowMon, cursorMon)
+        if (G_WS_Debug) {
+          WinGetTitle, dbgTitle, ahk_id %lParam%
+          ToolTip, WS MOVED (instant): "%dbgTitle%" mon %windowMon% -> %cursorMon%
+          SetTimer, WS_DebugTooltipOff, -3000
+        }
+      } else if (G_WS_Debug) {
+        WinGetTitle, dbgTitle, ahk_id %lParam%
+        ToolTip, WS OK: "%dbgTitle%" already on mon %cursorMon%
+        SetTimer, WS_DebugTooltipOff, -2000
+      }
+    } else if (G_WS_Debug) {
+      WinGetTitle, dbgTitle, ahk_id %lParam%
+      WinGetClass, dbgClass, ahk_id %lParam%
+      ToolTip, WS SKIP: "%dbgTitle%" class=%dbgClass%
+      SetTimer, WS_DebugTooltipOff, -3000
+    }
+    return
+  }
+  ; Window not ready yet — defer with short delay
   fn := Func("WS_TryMove").Bind(lParam, cursorMon, 0)
-  SetTimer, %fn%, -50
+  SetTimer, %fn%, -10
 }
 
 WS_TryMove(hwnd, targetMon, attempt) {
+  SetWinDelay, -1  ; No delay between window commands
   global G_WS_Debug
   ; Check if window is ready (visible, sized, not cloaked)
   if (!WS_IsReady(hwnd)) {
-    if (attempt < 2) {
-      delay := (attempt == 0) ? -150 : -300
+    if (attempt < 3) {
+      delay := [-20, -50, -150]  ; Escalating: 20ms, 50ms, 150ms
       fn := Func("WS_TryMove").Bind(hwnd, targetMon, attempt + 1)
-      SetTimer, %fn%, %delay%
+      SetTimer, %fn%, % delay[attempt + 1]
       if (G_WS_Debug)
         ToolTip, WS RETRY: hwnd=%hwnd% attempt=%attempt%
     }
@@ -1541,10 +1568,14 @@ WS_IsMovable(hwnd) {
   WinGetTitle, title, ahk_id %hwnd%
   if (title == "")
     return false
-  ; Skip owned windows (dialogs should follow their parent)
+  ; Skip owned windows whose owner is visible (dialogs should follow their parent)
+  ; But allow owned windows with hidden owners (e.g., Win+R Run dialog owned by hidden shell)
   owner := DllCall("GetWindow", "Ptr", hwnd, "UInt", 4, "Ptr")  ; GW_OWNER=4
-  if (owner)
-    return false
+  if (owner) {
+    WinGet, ownerStyle, Style, ahk_id %owner%
+    if (ownerStyle & 0x10000000)  ; Owner is WS_VISIBLE → real parent dialog
+      return false
+  }
   ; Skip tool windows (tooltips, floating toolbars)
   WinGet, exStyle, ExStyle, ahk_id %hwnd%
   if (exStyle & 0x80)  ; WS_EX_TOOLWINDOW
