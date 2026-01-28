@@ -1138,7 +1138,7 @@ MBScrollTimer:
   ; ===== NATIVE SCROLL PROBE PHASE =====
   ; Detect if the app handles MButton drag-scroll natively.
   ; Three signals: cursor change, Win32 scroll pos, UIA scroll percent.
-  ; Multi-tick: cursor checked every tick; scroll pos checked over 5 ticks after drag.
+  ; Movement-gated: cursor checked every tick; scroll pos checked after 3px; concludes at 8px.
   If (MB_NativeProbe > 0) {
     nativeDetected := false
 
@@ -1155,32 +1155,25 @@ MBScrollTimer:
       MouseGetPos,, probeY
       probeDrag := Abs(probeY - MBScroll_Y1)
 
-      If (MB_NativeProbe = 1) {
-        ; Waiting for drag threshold
-        If (probeDrag >= 3)
-          MB_NativeProbe := 2  ; Drag detected — start scroll position checks
-        Return
-      }
-
-      ; Signal 2: Win32 scroll position changed
-      probeTarget := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
-      currentScrollPos := GetScrollPos(probeTarget)
-      If (currentScrollPos != MB_InitScrollPos)
-        nativeDetected := true
-
-      ; Signal 3: UIA scroll percent changed
-      If (!nativeDetected and MB_ScrollPattern) {
-        DllCall(NumGet(NumGet(MB_ScrollPattern+0)+6*A_PtrSize), "Ptr", MB_ScrollPattern, "Double*", currentPct)
-        If (currentPct != MB_InitScrollPct)
+      ; Signals 2 & 3: check after 3px (filters cursor jitter)
+      If (probeDrag >= 3) {
+        ; Signal 2: Win32 scroll position changed
+        probeTarget := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
+        currentScrollPos := GetScrollPos(probeTarget)
+        If (currentScrollPos != MB_InitScrollPos)
           nativeDetected := true
+
+        ; Signal 3: UIA scroll percent changed
+        If (!nativeDetected and MB_ScrollPattern) {
+          DllCall(NumGet(NumGet(MB_ScrollPattern+0)+6*A_PtrSize), "Ptr", MB_ScrollPattern, "Double*", currentPct)
+          If (currentPct != MB_InitScrollPct)
+            nativeDetected := true
+        }
       }
 
-      ; Allow multiple check ticks (up to 5 ticks after drag = ~50ms)
-      If (!nativeDetected) {
-        MB_NativeProbe += 1
-        If (MB_NativeProbe <= 6)
-          Return  ; Check again next tick
-      }
+      ; Keep probing until 8px movement gate (matches custom scroll threshold)
+      If (!nativeDetected and probeDrag < 8)
+        Return
     }
 
     If (nativeDetected) {
