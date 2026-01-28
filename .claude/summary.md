@@ -87,13 +87,13 @@ For non-Explorer apps, MButton Down is **passed through immediately** to enable 
 
 ### Native Scroll Probe
 
-A multi-tick **native scroll probe** determines whether the app handles MButton drag-scroll natively using three signals:
+A movement-gated **native scroll probe** determines whether the app handles MButton drag-scroll natively using three signals:
 
 1. **Cursor change** (HCURSOR handle via `GetCursorInfo` + `A_Cursor = "Unknown"`): Checked every tick. The initial HCURSOR is captured *before* any MButton event is sent. A change is only detected when the handle differs AND `A_Cursor` reports `"Unknown"` (custom bitmap cursor). This dual check prevents false positives from standard cursor changes while reliably catching custom autoscroll icons (Chrome, Firefox).
 2. **Win32 scroll position** (`GetScrollPos`): Checked after drag threshold (≥3px). Catches classic Win32 apps with native scrollbars.
 3. **UIA scroll percent** (`GetVerticalScrollPercent`): Checked after drag threshold. Catches modern apps using custom renderers.
 
-The probe runs up to 5 ticks (~50ms) after drag detection. If any signal fires → **native scroll detected** → stay passive (`MB_Disabled := 1`). If none fire → engage custom scroll with auto-fallback chain (UIA → WHEEL → WHEEL_CTRL → VSCROLL). For Explorer, MButton Down is deferred so signals 2/3 are the only active detectors (signal 1 requires the app to receive MButton Down).
+The probe runs continuously until **8px of vertical movement** (the same threshold used for custom scroll activation). Signal 1 is checked every tick from 0px; signals 2/3 start after 3px (filters cursor jitter). If any signal fires → **native scroll detected**. If none fire by 8px → engage custom scroll (UIA → WHEEL → WHEEL_CTRL → VSCROLL fallback chain).
 
 No hardcoded app exclusion list is needed. Only excluded **controls** (toolbars, edit boxes, headers) are skipped via `MB_ExcludedControls`.
 
@@ -186,8 +186,4 @@ In AHK v1.1, the auto-execute section runs from line 1 until the first hotkey la
 
 ## Pending Goal: Spawn Windows on Cursor's Monitor
 
-**Goal**: Make new windows spawn on the monitor where the cursor is located.
-
-**Foundation**: `GetMonitor()` helper already determines which monitor a window is on. Needs a `GetCursorMonitor()` and shell hook for `HSHELL_WINDOWCREATED` events.
-
-**Status**: Not started, lower priority than scroll improvements.
+**Status**: Not started. Full plan and tasks at `.claude/window-spawning/`.
