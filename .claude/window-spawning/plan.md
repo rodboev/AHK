@@ -2,229 +2,196 @@
 
 ## Goal
 
-Make new windows automatically spawn on the monitor where the cursor is located, instead of defaulting to the primary monitor or wherever the app last appeared.
+Make new windows automatically appear on the monitor where the cursor is located, instead of defaulting to the primary monitor or wherever the app last appeared. Also move already-open windows to the cursor's monitor when they are re-activated (e.g., launching an already-running app from Start Menu or taskbar). Move the Alt+Tab switcher to the cursor's monitor.
 
 ## Context
 
-- **Codebase**: Monolithic AHK v1.1 script (`AutoHotkey.ahk`, ~1430 lines)
-- **Existing foundation**: `GetMonitor(winTitle)` at line 159 — determines which monitor a window is on by center point
-- **Auto-execute section**: Lines 1-19 (directives + `MB_Debug` flag). Shell hook init must go here.
-- **Helper functions**: Lines 94-212. New helpers (`GetCursorMonitor`, `MoveWindowToMonitor`) go here.
-- **No shell hooks currently exist** in the codebase
+- **Codebase**: Monolithic AHK v1.1 script (`AutoHotkey.ahk`, ~1700 lines with this feature)
+- **Existing foundation**: `GetMonitor(winTitle)` — determines which monitor a window is on by center point
+- **New helper**: `GetCursorMonitor()` — determines which monitor the cursor is on
+- **Shell hooks**: `RegisterShellHookWindow` + `OnMessage` for `HSHELL_WINDOWCREATED`, `HSHELL_WINDOWACTIVATED`, and `HSHELL_WINDOWDESTROYED`
 
 ---
 
-## Sequential Design Walkthrough
-
-### Step 1: What mechanism intercepts new window creation?
-
-**Shell hooks** via `RegisterShellHookWindow`. Windows sends `HSHELL_WINDOWCREATED` (wParam=1) to any registered window when a new top-level window appears. This is the standard AHK v1.1 approach.
-
-**Implementation**:
-```autohotkey
-; In auto-execute section (after line 19)
-Gui, ShellHook:+LastFound
-Gui, ShellHook:Show, Hide
-G_ShellHookHwnd := WinExist()
-DllCall("RegisterShellHookWindow", "Ptr", G_ShellHookHwnd)
-G_ShellHookMsg := DllCall("RegisterWindowMessage", "Str", "SHELLHOOK")
-OnMessage(G_ShellHookMsg, "OnShellHook")
-```
-
-This creates an invisible GUI window, registers it for shell messages, and routes all shell events to `OnShellHook()`.
-
-### Step 2: What information do we need when a window is created?
-
-1. **New window's hwnd** — from `lParam` of the shell message
-2. **Cursor's current monitor** — new `GetCursorMonitor()` function
-3. **New window's current monitor** — existing `GetMonitor()` function
-4. **Target monitor's work area** — `SysGet, mon, MonitorWorkArea, N` for positioning
-
-### Step 3: How do we determine the cursor's monitor?
-
-Analogous to `GetMonitor()` but uses cursor coordinates instead of window center:
-
-```autohotkey
-GetCursorMonitor() {
-  CoordMode, Mouse, Screen
-  MouseGetPos, mx, my
-  SysGet, monCount, MonitorCount
-  Loop, %monCount% {
-    SysGet, mon, Monitor, %A_Index%
-    If (mx >= monLeft && mx <= monRight && my >= monTop && my <= monBottom)
-      Return A_Index
-  }
-  Return 1
-}
-```
-
-### Step 4: How do we move a window to a different monitor?
-
-Strategy: **Preserve the window's relative position** within its current monitor, mapped to the target monitor. If the window is at 20% from the left edge of monitor A, place it at 20% from the left edge of monitor B.
+## Architecture (as implemented)
 
 ```
-Source monitor work area: (srcLeft, srcTop, srcW, srcH)
-Window position:          (winX, winY, winW, winH)
-Target monitor work area: (tgtLeft, tgtTop, tgtW, tgtH)
+Auto-Execute (lines 20-31)
+  ├── WS_Debug := 0  (debug tooltips — set to 1 to diagnose)
+  ├── #If (RDP/Hyper-V/VMWare)  ← hotkey context directive
+  ├── If !(RDP/Hyper-V/VMWare) → WS_Init()  ← runtime guard
+  └── Return  ← ends auto-execute
 
-Relative position:
-  relX = (winX - srcLeft) / srcW
-  relY = (winY - srcTop)  / srcH
+WS_Init()  (line ~1441, in window spawning section)
+  ├── WS_LastDestroyTick := 0
+  ├── WS_LastForegroundHwnd := 0
+  ├── WS_ExcludedClasses := [...]
+  ├── Gui, ShellHook:+LastFound / Show Hide
+  ├── WS_HookHwnd := WinExist()
+  ├── RegisterShellHookWindow (+ verify return value)
+  ├── RegisterWindowMessage("SHELLHOOK") (+ verify > 0)
+  ├── OnMessage → WS_OnShellHook()
+  └── OnExit → WS_Cleanup()
 
-New position:
-  newX = tgtLeft + relX * tgtW
-  newY = tgtTop  + relY * tgtH
+WS_OnShellHook(wParam, lParam, msg, hwnd)
+  ├── wParam == 2: HSHELL_WINDOWDESTROYED
+  │   └── Record WS_LastDestroyTick := A_TickCount (for activation guard)
+  ├── wParam == 1: HSHELL_WINDOWCREATED
+  │   ├── Try instant move (no timer) if window is already ready
+  │   └── Else defer via BoundFunc timer (-10ms) → WS_TryMove()
+  ├── wParam == 4 or 0x8004: HSHELL_WINDOWACTIVATED / RUDE
+  │   └── Activation guard chain (see below)
+  └── All other wParam values → ignored
 
-Clamp to target monitor bounds:
-  newX = Max(tgtLeft, Min(newX, tgtLeft + tgtW - winW))
-  newY = Max(tgtTop,  Min(newY, tgtTop  + tgtH - winH))
-```
+Activation Guard Chain (7 checks, in order):
+  1. WS_IsMovable(lParam)          → filter system windows (prevents tracker pollution)
+  2. lParam == WS_LastForegroundHwnd → skip overlay re-activation (Start menu, etc.)
+  3. Save prevHwnd, update tracker  → WS_LastForegroundHwnd := lParam
+  4. A_TickCount - WS_LastDestroyTick < 500 → skip Z-order fallback after close
+  5. prevHwnd MinMax == -1          → skip Z-order fallback after minimize
+  6. Cursor over taskbar?           → skip taskbar button clicks
+  7. windowMon == cursorMon?        → already on correct monitor
 
-Special case: if the window was **centered** on the source monitor (common for new windows), center it on the target monitor instead.
+WS_TryMove(hwnd, targetMon, attempt)          ← BoundFunc callback
+  ├── if !WS_IsReady(hwnd) → retry with attempt+1 (max 3)
+  │   Escalating delays: 20ms → 50ms → 150ms
+  ├── if !WS_IsMovable(hwnd) → return (skip)
+  ├── windowMon := GetMonitor("ahk_id " . hwnd)
+  ├── if windowMon == targetMon → return (already correct)
+  └── WS_MoveToMonitor(hwnd, windowMon, targetMon)
 
-### Step 5: What windows should we SKIP (not move)?
+~!Tab:: hotkey  (line ~1680)
+  ├── Capture cursor monitor
+  ├── 20ms BoundFunc timer → WS_MoveAltTab()
+  └── Finds "Task Switching ahk_class XamlExplorerHostIslandWindow" and moves it
 
-A window should NOT be moved if:
+Helper Functions (lines ~190-200)
+  └── GetCursorMonitor() → 1-based monitor index from mouse position
 
-1. **Already on cursor's monitor** — most common case, no action needed
-2. **Owned/child window** — dialogs should follow their parent, not the cursor. Check: `DllCall("GetWindow", "Ptr", hwnd, "UInt", 4)` returns owner hwnd
-3. **Tool window** — has `WS_EX_TOOLWINDOW` (0x80) extended style. These are small utility windows (tooltips, floating toolbars)
-4. **Not visible** — `WinGet, style` check for `WS_VISIBLE` (0x10000000)
-5. **No title** — likely a transient or system window
-6. **Excluded class** — system windows that shouldn't be touched: `tooltips_class32`, `NotifyIconOverflowWindow`, `Shell_TrayWnd`, `Progman`, `WorkerW`, `MultitaskingViewFrame`
-7. **Cloaked window** — UWP apps create cloaked windows before showing them. Check `DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED=14)`
-
-### Step 6: Timing — when is the window ready to move?
-
-`HSHELL_WINDOWCREATED` fires when the window is first created, but:
-- The window may not have its final size/position yet
-- Some apps create windows at (0,0) then move them
-- UWP apps go through a cloaked→uncloaked transition
-
-**Solution**: Use a **deferred move** with a short `SetTimer` (50-100ms). Store the hwnd in a variable, and on timer fire, check if the window is visible, has a title, and has a reasonable position. If not ready, retry once more (100ms). If still not ready, give up.
-
-```autohotkey
-OnShellHook(wParam, lParam) {
-  If (wParam != 1)  ; Only HSHELL_WINDOWCREATED
-    Return
-  global G_PendingHwnd
-  G_PendingHwnd := lParam
-  SetTimer, MoveNewWindow, -50  ; One-shot 50ms timer
-}
-```
-
-### Step 7: Configuration and toggle
-
-- **Global enable/disable**: `G_MoveNewWindows := 1` in auto-execute (on by default)
-- **Hotkey toggle**: e.g., `#m` to toggle on/off with tooltip feedback
-- **Exclusion list**: Array of window classes to never move
-
-### Step 8: Cleanup on script exit
-
-Unregister the shell hook to be a good citizen:
-```autohotkey
-OnExit, CleanupShellHook
-; ...
-CleanupShellHook:
-  DllCall("DeregisterShellHookWindow", "Ptr", G_ShellHookHwnd)
-  Gui, ShellHook:Destroy
-  ExitApp
+Feature Functions (lines ~1441-1700)
+  ├── WS_Init()              → hook registration, globals, OnExit
+  ├── WS_OnShellHook()       → shell hook message handler (created + activated + destroyed)
+  ├── WS_TryMove()           → deferred per-window processing via BoundFunc
+  ├── WS_IsReady(hwnd)       → timing: visible, sized, uncloaked?
+  ├── WS_IsMovable(hwnd)     → policy: not dialog, not tool, not excluded?
+  ├── WS_MoveToMonitor()     → reposition with relative mapping + maximize handling
+  ├── ~!Tab:: hotkey         → Alt+Tab switcher passthrough hook
+  ├── WS_MoveAltTab()        → moves Task Switching window to cursor's monitor
+  └── WS_Cleanup()           → deregister shell hook on exit
 ```
 
 ---
 
-## Architecture Summary
+## Key Design Decisions
 
-```
-Auto-Execute Section
-  ├── Create hidden GUI (ShellHook)
-  ├── RegisterShellHookWindow
-  ├── OnMessage → OnShellHook()
-  └── G_MoveNewWindows := 1
+### 1. BoundFunc per window (no race condition)
 
-OnShellHook(wParam=1, lParam=hwnd)
-  ├── Filter: HSHELL_WINDOWCREATED only
-  ├── Store hwnd → G_PendingHwnd
-  └── SetTimer, MoveNewWindow, -50
+Each `HSHELL_WINDOWCREATED` event creates a unique `Func("WS_TryMove").Bind(hwnd, cursorMon, attempt)` function object. AHK v1.1 treats each BoundFunc as an independent timer key, so multiple windows spawning rapidly each get their own processing pipeline. No shared global state to overwrite.
 
-MoveNewWindow: (timer label, fires once)
-  ├── Validate window (visible, has title, not owned, not tool window, not cloaked, not excluded class)
-  ├── cursorMon := GetCursorMonitor()
-  ├── windowMon := GetMonitor("ahk_id " . G_PendingHwnd)
-  ├── If cursorMon = windowMon → Return (already correct)
-  └── MoveWindowToMonitor(G_PendingHwnd, cursorMon)
+### 2. Instant-first, defer-second
 
-Helper Functions
-  ├── GetCursorMonitor() → 1-based monitor index
-  ├── MoveWindowToMonitor(hwnd, targetMon) → repositions window
-  └── IsWindowMovable(hwnd) → filters excluded windows
-```
+The shell hook callback tries to move the window **immediately** (inside `WS_OnShellHook`). If the window is already visible and sized, this avoids any visible "jump" between monitors. Only if the window isn't ready yet does it fall back to the timer path with short escalating delays (10ms → 20ms → 50ms → 150ms).
+
+### 3. SetWinDelay, -1
+
+AHK v1.1 defaults to `SetWinDelay, 100` — a 100ms sleep after every `WinMove`, `WinGet`, `WinRestore`, etc. A single `WS_MoveToMonitor` call chains ~3 Win* commands = 300ms of hidden sleep. Setting `SetWinDelay, -1` in the shell hook and timer callbacks eliminates this entirely. Thread-safe because AHK pseudo-threads have independent settings.
+
+### 4. Cursor captured at event time
+
+`GetCursorMonitor()` is called inside `WS_OnShellHook()` — the instant the event fires — not when the deferred timer processes it 10-150ms later. The cursor monitor is passed through the BoundFunc so even if the cursor moves during the delay, the window goes to the right monitor.
+
+### 5. Activation events for already-open windows
+
+Handles `HSHELL_WINDOWACTIVATED` (wParam=4) and `HSHELL_RUDEAPPACTIVATED` (wParam=0x8004) in addition to creation. When a user launches an already-running app (e.g., Settings from Start Menu), the window is activated rather than created — we move it to the cursor's monitor. Naturally safe: clicking directly on a window means cursor is on that monitor → no move.
+
+### 6. Smart owner filtering
+
+Owned windows with a **visible** owner are skipped (real dialogs like Save As should stay with their parent). Owned windows with a **hidden** owner are allowed through (standalone system dialogs like Win+R Run, whose owner is the hidden Explorer shell).
+
+### 7. Foreground tracking (overlay dismissal guard)
+
+`WS_LastForegroundHwnd` tracks the last **movable** window that was activated. When a system overlay (Start menu, Action Center, notifications) opens, no shell hook fires — so the tracker stays pointed at the window that was active before the overlay. When the overlay closes and re-activates that same window, `lParam == WS_LastForegroundHwnd` → skip. The tracker is only updated for windows that pass `WS_IsMovable()`, preventing system windows from polluting it.
+
+### 8. Destroy tracking (close-then-activate guard)
+
+When a window is closed, Windows auto-activates the next window in the Z-order. This is system-initiated, not user-initiated. `HSHELL_WINDOWDESTROYED` records `WS_LastDestroyTick`, and any activation within 500ms is suppressed.
+
+### 9. Alt+Tab via passthrough hotkey
+
+The Alt+Tab switcher (`XamlExplorerHostIslandWindow`) is a DWM overlay invisible to shell hooks. A `~!Tab::` hotkey (passthrough — `~` lets Alt+Tab work normally) fires a 20ms BoundFunc timer to find and move the Task Switching window after it appears.
+
+### 10. Init in function, not auto-execute
+
+All initialization is in `WS_Init()` (called from auto-execute) rather than inline. This keeps the auto-execute section clean and groups all WS_* code in the window spawning section. The auto-execute uses a runtime `If` guard to skip init in RDP/Hyper-V/VMWare sessions.
 
 ---
 
-## File Changes
+## Window Filtering
+
+### WS_IsReady(hwnd) — timing gate
+- Window must exist
+- Must be visible (`WS_VISIBLE`)
+- Must not be cloaked (`DwmGetWindowAttribute` with `DWMWA_CLOAKED=14`)
+- Must have non-zero size
+
+### WS_IsMovable(hwnd) — policy gate
+- Must have a non-empty title
+- Owner check: skip only if owner is visible (allows hidden-owner dialogs like Win+R)
+- Skip tool windows (`WS_EX_TOOLWINDOW` = 0x80)
+- Skip excluded classes (see list below)
+
+### Excluded Classes
+| Class | Reason |
+|-------|--------|
+| `tooltips_class32` | System tooltip popups |
+| `NotifyIconOverflowWindow` | System tray overflow |
+| `Shell_TrayWnd` | Main taskbar |
+| `Shell_SecondaryTrayWnd` | Secondary monitor taskbar |
+| `Progman` | Desktop window manager |
+| `WorkerW` | Desktop wallpaper layer |
+| `MultitaskingViewFrame` | Old Alt-Tab / Task View |
+| `Windows.UI.Core.CoreWindow` | UWP hosted windows, Start menu |
+| `ForegroundStaging` | Windows transition animations |
+
+---
+
+## File Locations
 
 All changes in `AutoHotkey.ahk`:
 
-| Location | Change |
-|----------|--------|
-| Lines 19-20 (auto-execute) | Add shell hook registration + `G_MoveNewWindows := 1` |
-| Lines ~170 (after GetMonitor) | Add `GetCursorMonitor()` function |
-| Lines ~175 (after GetCursorMonitor) | Add `MoveWindowToMonitor(hwnd, targetMon)` function |
-| Lines ~180 (after MoveWindowToMonitor) | Add `IsWindowMovable(hwnd)` filter function |
-| Lines ~185 (new section) | Add `OnShellHook()` callback + `MoveNewWindow:` timer label |
-| End of hotkeys section | Add `#m::` toggle hotkey (optional) |
-| End of script | Add `OnExit` cleanup label |
-
----
-
-## Phases
-
-### Phase 1: Core Infrastructure
-- Shell hook registration in auto-execute
-- `GetCursorMonitor()` helper
-- `OnShellHook()` callback with basic filtering
-- `MoveNewWindow:` timer with deferred move
-
-### Phase 2: Window Movement
-- `MoveWindowToMonitor()` with relative position mapping
-- Work area awareness (respects taskbar)
-- Size clamping for windows larger than target monitor
-
-### Phase 3: Filtering & Edge Cases
-- `IsWindowMovable()` with full exclusion logic
-- Owned/child window detection
-- Tool window filtering (`WS_EX_TOOLWINDOW`)
-- Cloaked window detection (UWP apps)
-- Class exclusion list
-
-### Phase 4: Polish
-- `#m` toggle hotkey with tooltip feedback
-- OnExit cleanup
-- Debug mode (tooltip showing moved windows)
-- Test across apps: Notepad, Explorer, VS Code, Terminal, UWP apps, dialogs
+| Location | What |
+|----------|------|
+| Lines 20-21 | Debug flags (`MB_Debug`, `WS_Debug`) |
+| Lines 23-31 | Auto-execute: `#If` context, `If` guard → `WS_Init()`, `Return` |
+| Lines ~190-200 | `GetCursorMonitor()` helper (after `GetMonitor()`) |
+| Lines ~1441-1700 | Feature section: `WS_Init()`, all WS_* functions, `~!Tab::` hotkey, cleanup |
 
 ---
 
 ## Verification
 
-1. **Basic test**: Open Notepad while cursor is on monitor 2 → Notepad appears on monitor 2
-2. **Multi-monitor**: Repeat on 3 monitors, different positions
-3. **Dialog test**: Open File → Save As in Notepad → dialog should follow parent, not cursor
-4. **UWP test**: Open Settings or Calculator → should appear on cursor's monitor after uncloaking
-5. **Toggle test**: Press `#m` to disable → new windows use default positioning
-6. **Explorer test**: Open new Explorer window → appears on cursor's monitor
-7. **Terminal test**: Press F10 → Windows Terminal opens on cursor's monitor
-8. **Rapid creation**: Open multiple windows quickly → all land on correct monitor
+| # | Test | Expected |
+|---|------|----------|
+| 1 | Script reload (Shift+Alt+R) | No `WS ERROR:` tooltip → hooks registered OK |
+| 2 | Open Sublime Text, watch tooltip | `WS HOOK` appears → shell hook works |
+| 3 | Cursor on monitor 2, open Sublime Text | `WS MOVED (instant)` → window on monitor 2 |
+| 4 | Cursor on monitor 1, open Explorer (Win+E) | Explorer appears on monitor 1 |
+| 5 | Open File → Save As in app | `WS SKIP:` → dialog stays with parent |
+| 6 | Win+R Run dialog | Moves to cursor's monitor (hidden-owner dialog allowed) |
+| 7 | Launch already-open Settings app | `WS MOVED (activate)` → moves to cursor's monitor |
+| 8 | Click directly on window on other monitor | No move (cursor already on that monitor) |
+| 9 | Open 3 Explorer windows rapidly | All 3 land on cursor's monitor |
+| 10 | Close a window | Next window stays on its monitor (destroy guard) |
+| 11 | Open/close Start menu | Previously active window stays put (foreground guard) |
+| 12 | Alt+Tab with cursor on different monitor | Task Switcher appears on cursor's monitor |
+| 13 | Once stable | Set `WS_Debug := 0` to silence tooltips |
 
----
-
-## Key Risks & Mitigations
-
-| Risk | Mitigation |
-|------|-----------|
-| Moving windows causes visual glitch (flash at wrong position then correct) | 50ms timer lets window settle; most apps create near final position |
-| Breaking app state by moving during initialization | Only move after visible + titled + non-cloaked checks |
-| Performance impact from shell hook | Callback is lightweight; only fires for top-level window creation |
-| DPI differences between monitors | Use work area coordinates (already DPI-aware via SysGet) |
-| AHK v1.1 `OnMessage` thread safety | Shell hook fires on AHK's main thread; no concurrency issues |
+### Debug Tooltip Reference
+- `WS HOOK` — shell hook fired for created window
+- `WS MOVED (instant)` — moved immediately in callback (fastest path)
+- `WS MOVED (activate)` — moved on re-activation of existing window
+- `WS MOVED` — moved via deferred timer
+- `WS RETRY` — window not ready, retrying
+- `WS SKIP` — filtered out (shows class for diagnosis)
+- `WS OK` — already on correct monitor
+- `WS ERROR` — shell hook registration failed (shown at startup)

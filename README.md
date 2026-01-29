@@ -29,6 +29,66 @@
 <br />
 
 ---
+
+<br />
+
+```asciidoc
+┏━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ WINDOWS TERMINAL HOTKEY ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+[ F10 ] -> Open Windows Terminal as user (auto de-escalation if running in privileged user context)
+[ Shift+F10] -> ... with user admin rights
+[ Ctrl+ShiftF10] -> ... with TrustedInstaller (NT AUTHORITY/SYSTEM) privileges (edit any reg key!)
+```
+
+<br />
+
+- **Works everywhere**
+  - Any Explorer window (including virtual folders) opens current folder open
+  - Any application (opens its home folder)
+- Highly extensible with robust envvar handling
+- Safe fallbacks to user profile or desktop if no path found
+
+<br />
+
+---
+
+<br />
+
+```asciidoc
+ ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+ ┃ SPAWN WINDOWS ON CURRENT MONITOR ┃
+ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+ 
+ New and activated windows appear where your cursor is
+```
+
+<br />
+
+- **New windows spawn on your cursor's monitor** — no more hunting for windows that opened on the wrong screen
+- **Activated windows follow your cursor** — re-launching an already-running app from Start Menu or taskbar moves it to you
+- **Alt+Tab switcher moves too** — the task switching overlay appears on whichever monitor your cursor is on
+- **Smart filtering** — dialogs stay with their parent, system overlays are ignored, and clicking directly on a window never triggers a move
+
+### Guard chain
+
+Seven checks prevent unintended moves:
+
+| # | Guard | Purpose |
+|---|-------|---------|
+| 1 | `WS_IsMovable` | Filter system windows, tool windows, dialogs |
+| 2 | Same-window check | Skip overlay re-activation (Start menu dismissed) |
+| 3 | Foreground tracker | Save previous window, update to current |
+| 4 | Destroy tick (500ms) | Skip Z-order fallback after window **close** |
+| 5 | MinMax == -1 check | Skip Z-order fallback after window **minimize** |
+| 6 | Cursor over taskbar | Skip taskbar button clicks |
+| 7 | Same monitor | No move needed if already on cursor's monitor |
+
+<br />
+
+---
+
 <br/>
 
 ```asciidoc
@@ -81,30 +141,24 @@
 
 ---
 
-<br />
+## Release notes (v2.5)
 
-```
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃ WINDOWS TERMINAL / PRIVILEGE ESCALATION ┃
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+### *Window Spawning on Current Monitor*
 
-[ F10 ] -> Open Windows Terminal as user (auto de-escalation if running in privileged user context)
-[ Shift+F10] -> ... with user admin rights
-[ Ctrl+ShiftF10] -> ... with TrustedInstaller (NT AUTHORITY/SYSTEM) privileges (edit any reg key!)
-```
+- **Shell hook architecture** — uses `RegisterShellHookWindow` to intercept `HSHELL_WINDOWCREATED`, `HSHELL_WINDOWACTIVATED`, and `HSHELL_WINDOWDESTROYED` events
+- **Instant-first, defer-second** — tries to move the window immediately in the shell hook callback; only defers to a BoundFunc timer (10ms → 20ms → 50ms → 150ms) if the window isn't ready yet
+- **BoundFunc per window** — each window gets its own timer, so rapid window creation has no race conditions
+- **Relative position mapping** — windows maintain their proportional position when moved between monitors of different sizes
+- **Maximized window handling** — restore → move → re-maximize to land correctly on the target monitor
+- **Smart owner filtering** — owned windows with a visible parent are skipped (real dialogs); owned windows with a hidden owner are allowed (Win+R Run dialog)
+- **Alt+Tab passthrough hotkey** — `~!Tab::` fires a 20ms timer to find and move the DWM-hosted Task Switching overlay
+- **7-guard activation chain** — overlay dismissal, window close, window minimize, taskbar click, and same-monitor checks prevent unintended moves
+- **Minimize guard** — when the previous foreground window is minimized (`MinMax == -1`), the system Z-order fallback activation is suppressed
 
-```
-[ Win+C] -> Copy command line of active window to clipboard
-[ Ctrl+Shift+Plus ] Relaunch active window with TrustedInstaller (NT AUTHORITY/SYSTEM) privileges
-```
+### *New Helper Functions*
 
-<br />
-
-- **Works everywhere**
-  - Any Explorer window (including virtual folders) opens current folder open
-  - Any application (opens its home folder)
-- Highly extensible with robust envvar handling
-- Safe fallbacks to user profile or desktop if no path found
+- `GetCursorMonitor()` — returns which monitor (1-based) the mouse cursor is on
+- `IsRemoteSession()` — detects RDP, Hyper-V, and VMWare sessions to disable the feature
 
 <br />
 
@@ -203,7 +257,6 @@ All methods employ acceleration curves and dynamic timers to minimize the janky 
         MB_PassthroughApps := ["chrome.exe", "everything64.exe", "VmConnect.exe"]
         MB_EnabledApps := ["mmc.exe", "7zFM.exe", "code.exe", "SystemInformer.exe"]
         MB_ExcludedControls := ["ToolbarWindow", "ReBarWindow", "Edit", "SysHeader"]
-</open>
 
 ### *Changes*
 

@@ -1,11 +1,12 @@
 # AHK Project: Context Transfer Summary
 
-## Current State (Jan 27, 2026)
+## Current State (Jan 29, 2026)
 
 ### Project Overview
 
-Monolithic AutoHotkey v1.1 script (`AutoHotkey.ahk`, ~1430 lines) providing:
+Monolithic AutoHotkey v1.1 script (`AutoHotkey.ahk`, ~1700 lines) providing:
 - **Explorer Smooth Scroll**: Multi-method MButton drag-scrolling with automatic fallback chain
+- **Window Spawning**: Auto-move new/activated windows and Alt+Tab to cursor's monitor via shell hooks
 - **Extended Window Spy**: Real-time window info tooltip with click-to-dialog
 - **Windows Terminal / Elevation**: Context-aware terminal launching with de-escalation and TrustedInstaller
 - **Global hotkeys**: Volume control, window manipulation, app launchers
@@ -14,13 +15,16 @@ Monolithic AutoHotkey v1.1 script (`AutoHotkey.ahk`, ~1430 lines) providing:
 
 | Lines | Section |
 |-------|---------|
-| 1-24 | Directives, auto-execute (MB_Debug at line 19) |
-| 26-91 | Bindings, remaps, script control |
-| 94-212 | Helper functions (`HasVal`, `GetExePath`, `GetMonitor`, `IsProcessElevated`, etc.) |
+| 1-19 | Directives, config (`SendMode`, `SetWorkingDir`, `SetTitleMatchMode`) |
+| 20-21 | Debug flags (`MB_Debug`, `WS_Debug`) |
+| 23-31 | Auto-execute: `#If` RDP context, `If` guard → `WS_Init()`, `Return` |
+| 34-91 | Bindings, remaps, script control |
+| 94-212 | Helper functions (`HasVal`, `GetExePath`, `GetMonitor`, `GetCursorMonitor`, etc.) |
 | 215-285 | `UserRun()` - process execution with elevation support |
 | 287-521 | Windows Terminal / elevation hotkeys (F10, Shift+F10, Ctrl+Alt+Shift+F10) |
 | 523-1018 | Extended Window Spy (`#w` toggle, dialog, text processing) |
 | 1020-1430 | Explorer Smooth Scroll (MButton drag implementation) |
+| 1434-1700 | Window Spawning (`WS_Init`, shell hook, activation guards, Alt+Tab, cleanup) |
 
 ---
 
@@ -176,14 +180,42 @@ In AHK v1.1, the auto-execute section runs from line 1 until the first hotkey la
 ## Conventions
 
 - **AHK v1.1 syntax only** — no v2 syntax
-- **Naming**: PascalCase functions, `MB_` prefix for MButton globals, `G_` for persistent globals
+- **Naming**: PascalCase functions, `MB_` prefix for MButton globals, `WS_` prefix for window spawning globals
 - **Process launching**: Always use `UserRun()` for consistent elevation/env handling
 - **App lists**: Partial matching via `HasVal()` — add exe names without full paths
 - **Sections**: ASCII box dividers for major regions
-- **Debug**: `MB_Debug := 1` (line 19) enables ToolTip debug output during MButton drag
+- **Debug flags** (line 20-21): `MB_Debug` for MButton scroll, `WS_Debug` for window spawning
 
 ---
 
-## Pending Goal: Spawn Windows on Cursor's Monitor
+## Window Spawning (Cursor's Monitor)
 
-**Status**: Not started. Full plan and tasks at `.claude/window-spawning/`.
+**Status**: Implemented. Full design and tasks at `.claude/window-spawning/`.
+
+### Summary
+
+Shell hook (`RegisterShellHookWindow`) intercepts `HSHELL_WINDOWCREATED`, `HSHELL_WINDOWACTIVATED`, and `HSHELL_WINDOWDESTROYED`. New windows are moved to the cursor's monitor; activated windows are moved unless filtered by the activation guard chain (overlay dismissal, window close, window minimize, taskbar click). Alt+Tab switcher is moved via a `~!Tab::` passthrough hotkey.
+
+### Activation Guard Chain (7 checks)
+
+| # | Guard | Code |
+|---|-------|------|
+| 1 | System window filter | `WS_IsMovable(lParam)` |
+| 2 | Overlay re-activation | `lParam == WS_LastForegroundHwnd` |
+| 3 | Tracker update | Save `prevHwnd`, set `WS_LastForegroundHwnd := lParam` |
+| 4 | Close fallback (500ms) | `A_TickCount - WS_LastDestroyTick < 500` |
+| 5 | Minimize fallback | `WinGet, prevMinMax, MinMax` on previous foreground; skip if `-1` |
+| 6 | Taskbar click | Cursor over `Shell_TrayWnd` or `Shell_SecondaryTrayWnd` |
+| 7 | Same monitor | `windowMon == cursorMon` |
+
+Guard 5 (minimize) checks the `MinMax` state of the *previous* foreground window. When a window is minimized, Windows auto-activates the next Z-order window — the minimize guard detects this by seeing that the previously tracked window is now minimized (`MinMax == -1`). The guard is naturally one-shot: after blocking the fallback activation, the tracker updates to the new window, so subsequent activations are unaffected.
+
+### Key Globals
+
+| Variable | Purpose |
+|----------|---------|
+| `WS_Debug` | Debug tooltips toggle (line 21) |
+| `WS_ExcludedClasses` | Array of 9 window classes to skip |
+| `WS_HookHwnd` | Hidden GUI window for shell hook |
+| `WS_LastDestroyTick` | Timestamp of last window close (activation guard) |
+| `WS_LastForegroundHwnd` | Last movable foreground hwnd (overlay dismissal guard) |

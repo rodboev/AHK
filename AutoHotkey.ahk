@@ -16,26 +16,14 @@
 SendMode, Input
 SetWorkingDir, %A_ScriptDir%
 SetTitleMatchMode, 2
-MB_Debug := 0  ; MButton scroll debug tooltips (0=off, 1=on)
 
-; --- Window Spawning: move new windows to cursor's monitor ---
-G_WS_Debug := 1  ; Debug tooltips (set to 0 once working)
-G_WS_ExcludedClasses := ["tooltips_class32", "NotifyIconOverflowWindow"
-  , "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Progman", "WorkerW"
-  , "MultitaskingViewFrame", "Windows.UI.Core.CoreWindow", "ForegroundStaging"]
-Gui, ShellHook:+LastFound
-Gui, ShellHook:Show, Hide
-G_WS_HookHwnd := WinExist()
-G_WS_HookOK := DllCall("RegisterShellHookWindow", "Ptr", G_WS_HookHwnd)
-G_WS_HookMsg := DllCall("RegisterWindowMessage", "Str", "SHELLHOOK")
-if (G_WS_HookOK && G_WS_HookMsg > 0)
-  OnMessage(G_WS_HookMsg, "WS_OnShellHook")
-else
-  ToolTip, WS ERROR: Hook=%G_WS_HookOK% Msg=%G_WS_HookMsg%
-OnExit("WS_Cleanup")
+MB_Debug := 0 ; MButton scroll debug tooltips (0=off, 1=on)
+WS_Debug := 0 ; Window spawning debug tooltips (0=off, 1=on)
 
-; Prevent script proceeding in RDP, Hyper-V, VMWare windows
-#If (WinActive("ahk_class TscShellContainerClass") or WinActive("ahk_exe vmconnect.exe") or WinActive("ahk_exe vmware.exe"))
+; Disable hotkeys inside remote sessions (RDP, Hyper-V, VMWare)
+#If IsRemoteSession()
+  If !IsRemoteSession()
+    WS_Init() ; Init window spawning
   Return
 #If
 
@@ -48,18 +36,9 @@ OnExit("WS_Cleanup")
   Suspend
   Pause,,1
 Return
-; [ Shift+Alt+E ] -> Edit script in Antigravity (activate if already open)
-+!e::
-  pid := ProcessExistsByCommandLine("Antigravity.exe"" """ . A_ScriptFullPath) ; Check If Antigravity is already open with this script
-  If (pid) {
-    WinActivate, ahk_pid %pid%
-  } Else {
-    UserRun("C:\Users\Rod\AppData\Local\Programs\Antigravity\Antigravity.exe", A_ScriptFullPath)
-  }
-Return
-; [ Ctrl+S ] -> Reload script on save (in any editor)
++!e::Edit ; [ Shift+Alt+E ] -> Edit script (same as tray menu "Edit This Script")
 #IfWinActive AutoHotkey.ahk
-  ~^s::Reload
+  ~^s::Reload ; [ Ctrl+S ] -> Reload script on save (in any editor)
 #IfWinActive
 
 ; ⇒ Sublime Text (bindings/remaps)
@@ -98,7 +77,7 @@ Return
       UserRun("Rexplorer_x64.exe")
     }
     Else {
-      UserRun("nircmd", "execmd taskkill /f /im explorer.exe && start explorer.exe")
+      UserRun("taskkill", "/f /im explorer.exe && start explorer.exe")
     }
   }
   Else {
@@ -110,6 +89,11 @@ Return
 ; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ; ┃ === HELPER FUNCTIONS === ┃
 ; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+; ⇒ Check if inside a remote desktop session (RDP, Hyper-V, VMWare)
+IsRemoteSession() {
+  Return WinActive("ahk_class TscShellContainerClass") or WinActive("ahk_exe vmconnect.exe") or WinActive("ahk_exe vmware.exe")
+}
+
 ; ⇒ Check If array contains a value (allow partial match)
 HasVal(arr, val) {
     For i, v in arr
@@ -362,8 +346,8 @@ Return
 ; [ Ctrl+Shift+` ] -> Open System Informer as SYSTEM with TI privileges
 ^+`::UserRun("elevate", "ti", "c:\Program Files\SystemInformer\SystemInformer.exe")
 
-; [ Win + E ] -> Alternate Explorer app in case of issues after Windows updates
-#e::
+; [ Win+Shift+E ] -> Alternate Explorer app in case of issues after Windows updates
+#+e::
   WinGetClass, ahk_class, A
   path := GetExplorerPath()
   If (ahk_class = "Progman")
@@ -1455,35 +1439,105 @@ Return
 ; to whichever monitor the cursor is on. Uses BoundFunc per-window
 ; timers to avoid race conditions with rapid window creation.
 
+WS_Init() {
+  global
+  WS_LastDestroyTick := 0
+  WS_LastForegroundHwnd := 0
+  WS_ExcludedClasses := ["tooltips_class32", "NotifyIconOverflowWindow"
+    , "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Progman", "WorkerW"
+    , "MultitaskingViewFrame", "Windows.UI.Core.CoreWindow", "ForegroundStaging"]
+  Gui, ShellHook:+LastFound
+  Gui, ShellHook:Show, Hide
+  WS_HookHwnd := WinExist()
+  WS_HookOK := DllCall("RegisterShellHookWindow", "Ptr", WS_HookHwnd)
+  WS_HookMsg := DllCall("RegisterWindowMessage", "Str", "SHELLHOOK")
+  if (WS_HookOK && WS_HookMsg > 0)
+    OnMessage(WS_HookMsg, "WS_OnShellHook")
+  else
+    ToolTip, WS ERROR: Hook=%WS_HookOK% Msg=%WS_HookMsg%
+  OnExit("WS_Cleanup")
+}
+
 WS_OnShellHook(wParam, lParam, msg, hwnd) {
-  if (wParam != 1)  ; Only HSHELL_WINDOWCREATED
+  ; HSHELL_WINDOWCREATED=1, HSHELL_WINDOWACTIVATED=4, HSHELL_RUDEAPPACTIVATED=0x8004
+  isCreated := (wParam == 1)
+  isActivated := (wParam == 4 || wParam == 0x8004)
+  isDestroyed := (wParam == 2)
+  if (!isCreated && !isActivated && !isDestroyed)
     return
   SetWinDelay, -1  ; No delay between window commands (AHK default is 100ms)
-  global G_WS_Debug
-  if (G_WS_Debug) {
+  global WS_Debug, WS_LastDestroyTick, WS_LastForegroundHwnd
+
+  ; Track window destruction to suppress auto-activation after close
+  if (isDestroyed) {
+    WS_LastDestroyTick := A_TickCount
+    return
+  }
+
+  cursorMon := GetCursorMonitor()
+
+  ; --- Activation path: move existing window to cursor's monitor ---
+  if (isActivated) {
+    ; Ignore system windows (Start menu, tool windows, excluded classes)
+    if (!WS_IsMovable(lParam))
+      return
+    ; Skip re-activation of the same window (system overlay dismissed, e.g. Start menu)
+    if (lParam == WS_LastForegroundHwnd)
+      return
+    ; Save previous foreground before updating tracker
+    prevHwnd := WS_LastForegroundHwnd
+    WS_LastForegroundHwnd := lParam
+    ; Skip auto-activation after window close (system Z-order fallback, not user action)
+    if (A_TickCount - WS_LastDestroyTick < 500)
+      return
+    ; Skip auto-activation after window minimize (system Z-order fallback, not user action)
+    if (prevHwnd) {
+      WinGet, prevMinMax, MinMax, ahk_id %prevHwnd%
+      if (prevMinMax == -1)
+        return
+    }
+    ; Skip if cursor is over the taskbar (user clicked a taskbar button)
+    MouseGetPos,,, mouseWin
+    WinGetClass, mouseClass, ahk_id %mouseWin%
+    if (mouseClass == "Shell_TrayWnd" || mouseClass == "Shell_SecondaryTrayWnd")
+      return
+    windowMon := GetMonitor("ahk_id " . lParam)
+    if (windowMon == cursorMon)
+      return  ; Already on correct monitor — silent, no tooltip
+    WS_MoveToMonitor(lParam, windowMon, cursorMon)
+    if (WS_Debug) {
+      WinGetTitle, dbgTitle, ahk_id %lParam%
+      ToolTip, WS MOVED (activate): "%dbgTitle%" mon %windowMon% -> %cursorMon%
+      SetTimer, WS_DebugTooltipOff, -3000
+    }
+    return
+  }
+
+  ; --- Creation path: new window ---
+  if (WS_Debug) {
     WinGetTitle, dbgTitle, ahk_id %lParam%
     WinGetClass, dbgClass, ahk_id %lParam%
-    ToolTip, WS HOOK: wP=%wParam% hwnd=%lParam%`n  title="%dbgTitle%"`n  class=%dbgClass%
+    ToolTip, WS HOOK: hwnd=%lParam%`n  title="%dbgTitle%"`n  class=%dbgClass%
     SetTimer, WS_DebugTooltipOff, -3000
   }
-  cursorMon := GetCursorMonitor()
-  ; Try to move immediately (no timer delay) — avoids visible jump
+
+  ; Try to move immediately, defer if not ready
   if (WS_IsReady(lParam)) {
     if (WS_IsMovable(lParam)) {
       windowMon := GetMonitor("ahk_id " . lParam)
       if (windowMon != cursorMon) {
         WS_MoveToMonitor(lParam, windowMon, cursorMon)
-        if (G_WS_Debug) {
+        if (WS_Debug) {
           WinGetTitle, dbgTitle, ahk_id %lParam%
           ToolTip, WS MOVED (instant): "%dbgTitle%" mon %windowMon% -> %cursorMon%
           SetTimer, WS_DebugTooltipOff, -3000
         }
-      } else if (G_WS_Debug) {
+      } else if (WS_Debug) {
         WinGetTitle, dbgTitle, ahk_id %lParam%
         ToolTip, WS OK: "%dbgTitle%" already on mon %cursorMon%
         SetTimer, WS_DebugTooltipOff, -2000
       }
-    } else if (G_WS_Debug) {
+    } else if (WS_Debug) {
       WinGetTitle, dbgTitle, ahk_id %lParam%
       WinGetClass, dbgClass, ahk_id %lParam%
       ToolTip, WS SKIP: "%dbgTitle%" class=%dbgClass%
@@ -1498,14 +1552,14 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
 
 WS_TryMove(hwnd, targetMon, attempt) {
   SetWinDelay, -1  ; No delay between window commands
-  global G_WS_Debug
+  global WS_Debug
   ; Check if window is ready (visible, sized, not cloaked)
   if (!WS_IsReady(hwnd)) {
     if (attempt < 3) {
       delay := [-20, -50, -150]  ; Escalating: 20ms, 50ms, 150ms
       fn := Func("WS_TryMove").Bind(hwnd, targetMon, attempt + 1)
       SetTimer, %fn%, % delay[attempt + 1]
-      if (G_WS_Debug)
+      if (WS_Debug)
         ToolTip, WS RETRY: hwnd=%hwnd% attempt=%attempt%
     }
     return
@@ -1513,7 +1567,7 @@ WS_TryMove(hwnd, targetMon, attempt) {
 
   ; Check if window should be moved
   if (!WS_IsMovable(hwnd)) {
-    if (G_WS_Debug) {
+    if (WS_Debug) {
       WinGetTitle, dbgTitle, ahk_id %hwnd%
       WinGetClass, dbgClass, ahk_id %hwnd%
       ToolTip, WS SKIP: "%dbgTitle%" class=%dbgClass%
@@ -1525,7 +1579,7 @@ WS_TryMove(hwnd, targetMon, attempt) {
   ; Already on correct monitor?
   windowMon := GetMonitor("ahk_id " . hwnd)
   if (windowMon == targetMon) {
-    if (G_WS_Debug) {
+    if (WS_Debug) {
       WinGetTitle, dbgTitle, ahk_id %hwnd%
       ToolTip, WS OK: "%dbgTitle%" already on mon %targetMon%
       SetTimer, WS_DebugTooltipOff, -2000
@@ -1535,7 +1589,7 @@ WS_TryMove(hwnd, targetMon, attempt) {
 
   WS_MoveToMonitor(hwnd, windowMon, targetMon)
 
-  if (G_WS_Debug) {
+  if (WS_Debug) {
     WinGetTitle, dbgTitle, ahk_id %hwnd%
     ToolTip, WS MOVED: "%dbgTitle%" mon %windowMon% -> %targetMon%
     SetTimer, WS_DebugTooltipOff, -3000
@@ -1563,7 +1617,7 @@ WS_IsReady(hwnd) {
 }
 
 WS_IsMovable(hwnd) {
-  global G_WS_ExcludedClasses
+  global WS_ExcludedClasses
   ; Must have a title (transient/system windows often don't)
   WinGetTitle, title, ahk_id %hwnd%
   if (title == "")
@@ -1582,7 +1636,7 @@ WS_IsMovable(hwnd) {
     return false
   ; Skip excluded window classes
   WinGetClass, cls, ahk_id %hwnd%
-  if HasVal(G_WS_ExcludedClasses, cls)
+  if HasVal(WS_ExcludedClasses, cls)
     return false
   return true
 }
@@ -1633,9 +1687,21 @@ WS_MoveToMonitor(hwnd, srcMon, tgtMon) {
   WinMove, ahk_id %hwnd%,, %newX%, %newY%, %winW%, %winH%
 }
 
+; Alt+Tab switcher doesn't trigger shell hooks (DWM overlay), so wait for it to appear
+~!Tab::
+  targetMon := GetCursorMonitor()
+  WinWait, Task Switching ahk_class XamlExplorerHostIslandWindow,, 0.3
+  if (!ErrorLevel) {
+    hwnd := WinExist("Task Switching ahk_class XamlExplorerHostIslandWindow")
+    windowMon := GetMonitor("ahk_id " . hwnd)
+    if (windowMon != targetMon)
+      WS_MoveToMonitor(hwnd, windowMon, targetMon)
+  }
+Return
+
 WS_Cleanup() {
-  global G_WS_HookHwnd
-  DllCall("DeregisterShellHookWindow", "Ptr", G_WS_HookHwnd)
+  global WS_HookHwnd
+  DllCall("DeregisterShellHookWindow", "Ptr", WS_HookHwnd)
   Gui, ShellHook:Destroy
 }
 
