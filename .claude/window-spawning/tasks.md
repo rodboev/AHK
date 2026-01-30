@@ -22,12 +22,10 @@
 - [x] Skip cloaked UWP windows (`DwmGetWindowAttribute` with `DWMWA_CLOAKED=14`)
 - [x] Skip windows with no title
 - [x] Class exclusion list (9 classes: tooltips, taskbar, desktop, UWP splash, etc.)
-- [x] Retry logic with escalating delays: 10ms → 20ms → 50ms → 150ms (3 retries)
 
 ## Phase 4: Performance
 - [x] Instant-first: try moving immediately in shell hook callback (no timer delay)
 - [x] `SetWinDelay, -1` in callback and timer threads (eliminates 100ms default per Win* command)
-- [x] Short fallback timer (-10ms) only when window isn't ready yet
 
 ## Phase 5: Activation Support
 - [x] Handle `HSHELL_WINDOWACTIVATED` (wParam=4) — move existing windows to cursor's monitor
@@ -43,21 +41,43 @@
 
 ## Phase 7: Alt+Tab Support
 - [x] `~!Tab::` passthrough hotkey — intercepts Alt+Tab without blocking native behavior
-- [x] `WS_MoveAltTab()` — finds `Task Switching ahk_class XamlExplorerHostIslandWindow`
-- [x] 20ms BoundFunc timer — allows DWM overlay to appear before checking
+- [x] Non-blocking: `WS_PendingAltTab` + WinEvent SHOW detection (replaces 20ms BoundFunc timer)
 
 ## Phase 8: Code Restructure
 - [x] Move init from inline auto-execute to `WS_Init()` function in window spawning section
 - [x] Add `If` guard for RDP/Hyper-V/VMWare sessions (runtime check, not `#If` directive)
-- [x] Move `#If...Return...#If` block back above init call for readability
-- [x] Rename `G_WS_` prefix → `WS_` prefix (matches `MB_` convention)
 - [x] Move `WS_Debug` to top of file alongside `MB_Debug` for easy toggling
 
-## Phase 9: Cleanup & Debug
-- [x] `WS_Cleanup()` on exit: `DeregisterShellHookWindow` + `Gui Destroy`
-- [x] `WS_Debug` with comprehensive tooltips at every decision point
-- [x] Debug tooltips: HOOK, MOVED (instant/activate/deferred), RETRY, SKIP, OK, ERROR
+## Phase 9: Event-Driven UWP Detection (SetWinEventHook)
+- [x] Register `EVENT_OBJECT_SHOW` (0x8002) hook via `SetWinEventHook`
+- [x] Register `EVENT_OBJECT_UNCLOAKED` (0x8018) hook via `SetWinEventHook`
+- [x] `RegisterCallback("WS_OnWinEvent", "", 7)` — 7-param WinEventProc, no Fast flag
+- [x] 32-bit parameter masking for x64 register junk (`idObject & 0xFFFFFFFF`)
+- [x] Numeric coercion `hwnd + 0` for consistent object key lookup
+- [x] `CoInitialize` / `CoUninitialize` lifecycle
+- [x] Idempotent event handling — only consume pending entry when ready+movable
+- [x] Early discard of permanently excluded windows (ready + titled + not movable)
+- [x] Replace 4 escalating polls with single 200ms backup + 2s timeout
+- [x] `WS_Cleanup()` — unhook WinEvents before exit
+- [x] Fix: add `WS_Pending` to `global` declaration in `WS_OnShellHook`
+
+## Phase 9b: Cleanup
+- [x] Remove `WS_FallbackRetry()` (dead code after event-skip refactor)
+- [x] Remove RAW-UNCLOAK pre-filter diagnostic logging
+- [x] Remove per-event/per-poll verbose debug lines
+- [x] Streamline debug output to essential entries only (DEFERRED, MOVED, INIT)
+- [x] Clean `WS_Pending` on `HSHELL_WINDOWDESTROYED` (immediate cleanup of destroyed deferred windows)
+- [x] Restore shell hook error feedback via `WS_Log()` when registration fails
+- [x] Add elapsed timing (`+NNms`) to MOVED log entries with source labels (show/uncloak/poll/timeout)
 - [ ] Set `WS_Debug := 0` once feature is fully stable
+
+## Phase 10: Win32 Zero-Flash (Exploration)
+- [ ] Investigate `EVENT_OBJECT_CREATE` (0x8000) for pre-visibility interception
+- [ ] Prototype CREATE → SHOW pipeline (bypass shell hook for creation detection)
+- [ ] Measure actual Win32 flash duration with high-resolution timing (use `+NNms` log data)
+- [ ] Test `EVENT_OBJECT_LOCATIONCHANGE` as alternative snap-back mechanism
+- [ ] Evaluate top-level window filtering heuristics for CREATE events
+- [ ] Compare approaches and select best trade-off
 
 ## Remaining / Future
 - [ ] Test across apps: Sublime Text, Explorer, VS Code, Terminal, UWP Settings, dialogs

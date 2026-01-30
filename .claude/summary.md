@@ -24,7 +24,7 @@ Monolithic AutoHotkey v1.1 script (`AutoHotkey.ahk`, ~1700 lines) providing:
 | 287-521 | Windows Terminal / elevation hotkeys (F10, Shift+F10, Ctrl+Alt+Shift+F10) |
 | 523-1018 | Extended Window Spy (`#w` toggle, dialog, text processing) |
 | 1020-1430 | Explorer Smooth Scroll (MButton drag implementation) |
-| 1434-1700 | Window Spawning (`WS_Init`, shell hook, activation guards, Alt+Tab, cleanup) |
+| 1434-1782 | Window Spawning (`WS_Init`, shell hook, WinEvent hooks, activation guards, Alt+Tab, cleanup) |
 
 ---
 
@@ -190,11 +190,19 @@ In AHK v1.1, the auto-execute section runs from line 1 until the first hotkey la
 
 ## Window Spawning (Cursor's Monitor)
 
-**Status**: Implemented. Full design and tasks at `.claude/window-spawning/`.
+**Status**: Implemented (event-driven). Full design and tasks at `.claude/window-spawning/`.
 
 ### Summary
 
-Shell hook (`RegisterShellHookWindow`) intercepts `HSHELL_WINDOWCREATED`, `HSHELL_WINDOWACTIVATED`, and `HSHELL_WINDOWDESTROYED`. New windows are moved to the cursor's monitor; activated windows are moved unless filtered by the activation guard chain (overlay dismissal, window close, window minimize, taskbar click). Alt+Tab switcher is moved via a `~!Tab::` passthrough hotkey.
+Shell hook (`RegisterShellHookWindow`) intercepts `HSHELL_WINDOWCREATED`, `HSHELL_WINDOWACTIVATED`, and `HSHELL_WINDOWDESTROYED`. WinEvent hooks (`SetWinEventHook`) listen for `EVENT_OBJECT_SHOW` (0x8002) and `EVENT_OBJECT_UNCLOAKED` (0x8018) to detect when deferred windows become visible.
+
+**Two paths:**
+- **Win32 instant**: Shell hook fires → window already ready → move immediately
+- **UWP event-driven**: Shell hook fires → not ready → `WS_Pending[hwnd]` → SHOW/UNCLOAK event → move (~62ms)
+
+Activated windows are moved unless filtered by the activation guard chain. Alt+Tab switcher is moved via non-blocking `WS_PendingAltTab` + WinEvent SHOW detection.
+
+Destroyed windows are cleaned from `WS_Pending` immediately via `HSHELL_WINDOWDESTROYED`. All deferred MOVED log entries include elapsed timing (`+NNms`) and source label (show/uncloak/poll/timeout) for Phase 10 analysis.
 
 ### Activation Guard Chain (7 checks)
 
@@ -208,14 +216,23 @@ Shell hook (`RegisterShellHookWindow`) intercepts `HSHELL_WINDOWCREATED`, `HSHEL
 | 6 | Taskbar click | Cursor over `Shell_TrayWnd` or `Shell_SecondaryTrayWnd` |
 | 7 | Same monitor | `windowMon == cursorMon` |
 
-Guard 5 (minimize) checks the `MinMax` state of the *previous* foreground window. When a window is minimized, Windows auto-activates the next Z-order window — the minimize guard detects this by seeing that the previously tracked window is now minimized (`MinMax == -1`). The guard is naturally one-shot: after blocking the fallback activation, the tracker updates to the new window, so subsequent activations are unaffected.
-
 ### Key Globals
 
 | Variable | Purpose |
 |----------|---------|
-| `WS_Debug` | Debug tooltips toggle (line 21) |
+| `WS_Debug` | Debug log toggle (line 21). Logs to `%TEMP%\WS_Debug.log` |
+| `WS_Pending` | Associative array: deferred hwnd → `{mon, tick}` |
+| `WS_PendingAltTab` | Alt+Tab state: `{mon, tick}` or `""` |
 | `WS_ExcludedClasses` | Array of 9 window classes to skip |
 | `WS_HookHwnd` | Hidden GUI window for shell hook |
+| `WS_EventHookShow` | Handle from `SetWinEventHook` (EVENT_OBJECT_SHOW) |
+| `WS_EventHookUncloak` | Handle from `SetWinEventHook` (EVENT_OBJECT_UNCLOAKED) |
+| `WS_WinEventCB` | `RegisterCallback` pointer for WinEventProc |
 | `WS_LastDestroyTick` | Timestamp of last window close (activation guard) |
 | `WS_LastForegroundHwnd` | Last movable foreground hwnd (overlay dismissal guard) |
+
+### Critical AHK v1.1 Details
+- **32-bit masking**: `idObject & 0xFFFFFFFF` — WinEventProc uses 32-bit params but AHK reads 64-bit register slots on x64
+- **Numeric coercion**: `hwnd + 0` — ensures consistent object key type in `WS_Pending`
+- **Global discipline**: Every function accessing `WS_Pending` must declare `global WS_Pending`
+- **No Fast flag**: `RegisterCallback("WS_OnWinEvent", "", 7)` — isolated pseudo-thread per callback

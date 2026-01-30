@@ -18,7 +18,7 @@ SetWorkingDir, %A_ScriptDir%
 SetTitleMatchMode, 2
 
 MB_Debug := 0 ; MButton scroll debug tooltips (0=off, 1=on)
-WS_Debug := 0 ; Window spawning debug tooltips (0=off, 1=on)
+WS_Debug := 1 ; Window spawning debug tooltips (0=off, 1=on)
 
 ; Disable hotkeys inside remote sessions (RDP, Hyper-V, VMWare)
 #If IsRemoteSession()
@@ -1436,16 +1436,21 @@ Return
 ; ┃ === SPAWN WINDOWS ON CURRENT MONITOR === ┃
 ; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 ; Shell hook intercepts new window creation and moves the window
-; to whichever monitor the cursor is on. Uses BoundFunc per-window
-; timers to avoid race conditions with rapid window creation.
+; to whichever monitor the cursor is on. WinEvent hooks (EVENT_OBJECT_SHOW,
+; EVENT_OBJECT_UNCLOAKED) detect when deferred windows become visible,
+; replacing timer-based polling with event-driven detection.
 
 WS_Init() {
   global
   WS_LastDestroyTick := 0
   WS_LastForegroundHwnd := 0
+  WS_Pending := {}            ; Deferred windows: hwnd -> {mon, tick}
+  WS_PendingAltTab := ""      ; Alt+Tab: {mon, tick} or ""
+  WS_LogFile := A_Temp . "\WS_Debug.log"
   WS_ExcludedClasses := ["tooltips_class32", "NotifyIconOverflowWindow"
     , "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Progman", "WorkerW"
     , "MultitaskingViewFrame", "Windows.UI.Core.CoreWindow", "ForegroundStaging"]
+  ; Shell hook for window creation/activation detection
   Gui, ShellHook:+LastFound
   Gui, ShellHook:Show, Hide
   WS_HookHwnd := WinExist()
@@ -1454,7 +1459,23 @@ WS_Init() {
   if (WS_HookOK && WS_HookMsg > 0)
     OnMessage(WS_HookMsg, "WS_OnShellHook")
   else
-    ToolTip, WS ERROR: Hook=%WS_HookOK% Msg=%WS_HookMsg%
+    WS_Log("ERROR: Shell hook failed — Hook=" . WS_HookOK . " Msg=" . WS_HookMsg)
+  ; WinEvent hooks for instant visibility/uncloak detection (UWP apps)
+  DllCall("ole32\CoInitialize", "Ptr", 0)
+  WS_WinEventCB := RegisterCallback("WS_OnWinEvent", "", 7)
+  WS_EventHookShow := DllCall("SetWinEventHook"
+    , "UInt", 0x8002, "UInt", 0x8002   ; EVENT_OBJECT_SHOW
+    , "Ptr", 0, "Ptr", WS_WinEventCB
+    , "UInt", 0, "UInt", 0, "UInt", 0x0002, "Ptr")
+  WS_EventHookUncloak := DllCall("SetWinEventHook"
+    , "UInt", 0x8018, "UInt", 0x8018   ; EVENT_OBJECT_UNCLOAKED
+    , "Ptr", 0, "Ptr", WS_WinEventCB
+    , "UInt", 0, "UInt", 0, "UInt", 0x0002, "Ptr")
+  if (WS_Debug) {
+    FileDelete, %WS_LogFile%
+    WS_Log("INIT: SHOW=" . (WS_EventHookShow ? "OK" : "FAIL")
+      . " UNCLOAK=" . (WS_EventHookUncloak ? "OK" : "FAIL"))
+  }
   OnExit("WS_Cleanup")
 }
 
@@ -1466,11 +1487,12 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
   if (!isCreated && !isActivated && !isDestroyed)
     return
   SetWinDelay, -1  ; No delay between window commands (AHK default is 100ms)
-  global WS_Debug, WS_LastDestroyTick, WS_LastForegroundHwnd
+  global WS_Debug, WS_LastDestroyTick, WS_LastForegroundHwnd, WS_Pending
 
   ; Track window destruction to suppress auto-activation after close
   if (isDestroyed) {
     WS_LastDestroyTick := A_TickCount
+    WS_Pending.Delete(lParam + 0)
     return
   }
 
@@ -1507,21 +1529,14 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
     WS_MoveToMonitor(lParam, windowMon, cursorMon)
     if (WS_Debug) {
       WinGetTitle, dbgTitle, ahk_id %lParam%
-      ToolTip, WS MOVED (activate): "%dbgTitle%" mon %windowMon% -> %cursorMon%
-      SetTimer, WS_DebugTooltipOff, -3000
+      WS_Log("MOVED (activate): """ . dbgTitle . """ mon " . windowMon . " -> " . cursorMon)
     }
     return
   }
 
   ; --- Creation path: new window ---
-  if (WS_Debug) {
-    WinGetTitle, dbgTitle, ahk_id %lParam%
-    WinGetClass, dbgClass, ahk_id %lParam%
-    ToolTip, WS HOOK: hwnd=%lParam%`n  title="%dbgTitle%"`n  class=%dbgClass%
-    SetTimer, WS_DebugTooltipOff, -3000
-  }
 
-  ; Try to move immediately, defer if not ready
+  ; Try to move immediately, defer if not ready or not yet movable
   if (WS_IsReady(lParam)) {
     if (WS_IsMovable(lParam)) {
       windowMon := GetMonitor("ahk_id " . lParam)
@@ -1529,71 +1544,118 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
         WS_MoveToMonitor(lParam, windowMon, cursorMon)
         if (WS_Debug) {
           WinGetTitle, dbgTitle, ahk_id %lParam%
-          ToolTip, WS MOVED (instant): "%dbgTitle%" mon %windowMon% -> %cursorMon%
-          SetTimer, WS_DebugTooltipOff, -3000
+          WS_Log("MOVED (instant): """ . dbgTitle . """ mon " . windowMon . " -> " . cursorMon)
         }
-      } else if (WS_Debug) {
-        WinGetTitle, dbgTitle, ahk_id %lParam%
-        ToolTip, WS OK: "%dbgTitle%" already on mon %cursorMon%
-        SetTimer, WS_DebugTooltipOff, -2000
       }
-    } else if (WS_Debug) {
-      WinGetTitle, dbgTitle, ahk_id %lParam%
-      WinGetClass, dbgClass, ahk_id %lParam%
-      ToolTip, WS SKIP: "%dbgTitle%" class=%dbgClass%
-      SetTimer, WS_DebugTooltipOff, -3000
+      return
     }
-    return
+    ; Ready but not movable — permanent exclusion or just missing title?
+    WinGetTitle, chkTitle, ahk_id %lParam%
+    if (chkTitle != "")
+      return  ; Has title but genuinely not movable — skip entirely
+    ; Visible but no title yet — fall through to defer path
   }
-  ; Window not ready yet — defer with short delay
-  fn := Func("WS_TryMove").Bind(lParam, cursorMon, 0)
-  SetTimer, %fn%, -10
+  ; Window not ready OR visible-but-no-title — defer for event/poll/timeout
+  WS_Pending[lParam + 0] := {mon: cursorMon, tick: A_TickCount}
+  fn := Func("WS_BackupPoll").Bind(lParam + 0)
+  SetTimer, %fn%, -200
+  fn2 := Func("WS_TimeoutPending").Bind(lParam + 0)
+  SetTimer, %fn2%, -2000
+  if (WS_Debug) {
+    WinGetTitle, dbgTitle, ahk_id %lParam%
+    WinGetClass, dbgClass, ahk_id %lParam%
+    WS_Log("DEFERRED: hwnd=" . lParam . " """ . dbgTitle . """ class=" . dbgClass)
+  }
 }
 
-WS_TryMove(hwnd, targetMon, attempt) {
-  SetWinDelay, -1  ; No delay between window commands
+; WinEvent callback — fires when any window becomes visible (SHOW) or uncloaked (UNCLOAK)
+WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTime) {
+  global WS_Pending, WS_PendingAltTab, WS_Debug
+  ; WinEventProc uses 32-bit LONG params, but AHK reads 64-bit register slots on x64.
+  ; Upper 32 bits may contain junk — mask to lower 32 before comparing.
+  idObject := idObject & 0xFFFFFFFF
+  idChild := idChild & 0xFFFFFFFF
+  if (idObject != 0 || idChild != 0 || !hwnd)  ; OBJID_WINDOW = 0
+    return
+  SetWinDelay, -1
+  hwnd := hwnd + 0  ; Ensure numeric type for consistent object key lookup
+
+  ; --- Pending creation moves ---
+  if (WS_Pending.HasKey(hwnd)) {
+    if (WS_IsReady(hwnd)) {
+      if (WS_IsMovable(hwnd)) {
+        entry := WS_Pending.Delete(hwnd)
+        evName := (event == 0x8002) ? "show" : "uncloak"
+        WS_ProcessPending(hwnd, entry.mon, evName, entry.tick)
+      } else {
+        ; Ready but not movable — discard if permanently excluded (has title)
+        WinGetTitle, chkTitle, ahk_id %hwnd%
+        if (chkTitle != "")
+          WS_Pending.Delete(hwnd)
+        ; else: no title yet — leave in pending for backup poll
+      }
+    }
+    ; Not ready at all — leave in pending for UNCLOAK or backup poll
+    return
+  }
+
+  ; --- Pending Alt+Tab ---
+  if (WS_PendingAltTab != "") {
+    WinGetClass, cls, ahk_id %hwnd%
+    if (cls == "XamlExplorerHostIslandWindow") {
+      entry := WS_PendingAltTab
+      WS_PendingAltTab := ""
+      windowMon := GetMonitor("ahk_id " . hwnd)
+      if (windowMon != entry.mon)
+        WS_MoveToMonitor(hwnd, windowMon, entry.mon)
+    }
+  }
+}
+
+; Process a deferred window that is now ready
+WS_ProcessPending(hwnd, targetMon, source:="event", tick:=0) {
   global WS_Debug
-  ; Check if window is ready (visible, sized, not cloaked)
-  if (!WS_IsReady(hwnd)) {
-    if (attempt < 3) {
-      delay := [-20, -50, -150]  ; Escalating: 20ms, 50ms, 150ms
-      fn := Func("WS_TryMove").Bind(hwnd, targetMon, attempt + 1)
-      SetTimer, %fn%, % delay[attempt + 1]
-      if (WS_Debug)
-        ToolTip, WS RETRY: hwnd=%hwnd% attempt=%attempt%
-    }
+  if (!WS_IsMovable(hwnd))
     return
-  }
-
-  ; Check if window should be moved
-  if (!WS_IsMovable(hwnd)) {
-    if (WS_Debug) {
-      WinGetTitle, dbgTitle, ahk_id %hwnd%
-      WinGetClass, dbgClass, ahk_id %hwnd%
-      ToolTip, WS SKIP: "%dbgTitle%" class=%dbgClass%
-      SetTimer, WS_DebugTooltipOff, -3000
-    }
-    return
-  }
-
-  ; Already on correct monitor?
   windowMon := GetMonitor("ahk_id " . hwnd)
-  if (windowMon == targetMon) {
-    if (WS_Debug) {
-      WinGetTitle, dbgTitle, ahk_id %hwnd%
-      ToolTip, WS OK: "%dbgTitle%" already on mon %targetMon%
-      SetTimer, WS_DebugTooltipOff, -2000
-    }
+  if (windowMon == targetMon)
     return
-  }
-
   WS_MoveToMonitor(hwnd, windowMon, targetMon)
-
   if (WS_Debug) {
+    elapsed := tick ? A_TickCount - tick : 0
     WinGetTitle, dbgTitle, ahk_id %hwnd%
-    ToolTip, WS MOVED: "%dbgTitle%" mon %windowMon% -> %targetMon%
-    SetTimer, WS_DebugTooltipOff, -3000
+    WS_Log("MOVED (" . source . "): """ . dbgTitle . """ mon " . windowMon . " -> " . targetMon . " +" . elapsed . "ms")
   }
+}
+
+; Single backup poll — catches windows where WinEvent arrived but wasn't ready/movable yet
+WS_BackupPoll(hwnd) {
+  global WS_Pending, WS_Debug
+  if (!WS_Pending.HasKey(hwnd))
+    return
+  SetWinDelay, -1
+  if (WS_IsReady(hwnd)) {
+    if (WS_IsMovable(hwnd)) {
+      entry := WS_Pending.Delete(hwnd)
+      WS_ProcessPending(hwnd, entry.mon, "poll", entry.tick)
+      return
+    }
+    ; Ready but not movable — discard if permanently excluded (has title)
+    WinGetTitle, chkTitle, ahk_id %hwnd%
+    if (chkTitle != "")
+      WS_Pending.Delete(hwnd)
+  }
+}
+
+; 2s safety net — last-ditch attempt, then discard
+WS_TimeoutPending(hwnd) {
+  global WS_Pending
+  if (!WS_Pending.HasKey(hwnd))
+    return
+  entry := WS_Pending.Delete(hwnd)
+  SetWinDelay, -1
+  if (WS_IsReady(hwnd))
+    WS_ProcessPending(hwnd, entry.mon, "timeout", entry.tick)
 }
 
 WS_IsReady(hwnd) {
@@ -1687,24 +1749,38 @@ WS_MoveToMonitor(hwnd, srcMon, tgtMon) {
   WinMove, ahk_id %hwnd%,, %newX%, %newY%, %winW%, %winH%
 }
 
-; Alt+Tab switcher doesn't trigger shell hooks (DWM overlay), so wait for it to appear
+; Alt+Tab switcher doesn't trigger shell hooks (DWM overlay), so use WinEvent hook
 ~!Tab::
   targetMon := GetCursorMonitor()
-  WinWait, Task Switching ahk_class XamlExplorerHostIslandWindow,, 0.3
-  if (!ErrorLevel) {
-    hwnd := WinExist("Task Switching ahk_class XamlExplorerHostIslandWindow")
+  hwnd := WinExist("Task Switching ahk_class XamlExplorerHostIslandWindow")
+  if (hwnd) {
+    ; Already visible (fast re-press)
     windowMon := GetMonitor("ahk_id " . hwnd)
     if (windowMon != targetMon)
       WS_MoveToMonitor(hwnd, windowMon, targetMon)
+  } else {
+    ; Defer — WS_OnWinEvent catches the SHOW event
+    WS_PendingAltTab := {mon: targetMon, tick: A_TickCount}
+    SetTimer, WS_TimeoutAltTab, -500
   }
 Return
 
+WS_TimeoutAltTab:
+  WS_PendingAltTab := ""
+Return
+
 WS_Cleanup() {
-  global WS_HookHwnd
+  global WS_HookHwnd, WS_EventHookShow, WS_EventHookUncloak
   DllCall("DeregisterShellHookWindow", "Ptr", WS_HookHwnd)
   Gui, ShellHook:Destroy
+  if (WS_EventHookShow)
+    DllCall("UnhookWinEvent", "Ptr", WS_EventHookShow)
+  if (WS_EventHookUncloak)
+    DllCall("UnhookWinEvent", "Ptr", WS_EventHookUncloak)
+  DllCall("ole32\CoUninitialize")
 }
 
-WS_DebugTooltipOff:
-  ToolTip
-Return
+WS_Log(msg) {
+  global WS_LogFile
+  FileAppend, %A_Hour%:%A_Min%:%A_Sec% [%A_TickCount%] %msg%`n, %WS_LogFile%
+}
