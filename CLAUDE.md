@@ -11,20 +11,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Architecture
 
-Single-script design with `AutoHotkey.ahk` as the monolithic entrypoint. All hotkeys are registered here. The `includes/` directory contains reference libraries (loosely coupled, mostly for inspiration).
+`AutoHotkey.ahk` is the parent entrypoint. It `#Include`s two module files at the bottom:
+
+| File | Purpose |
+|------|---------|
+| `AutoHotkey.ahk` | Parent: config directives, helpers, bindings, Window Spy, misc hotkeys |
+| `mbutton-scroll.ahk` | MButton smooth scroll (hotkeys, timer, scroll methods) |
+| `window-spawning.ahk` | Shell hook window spawning (WS_Init, hooks, move logic, Alt+Tab) |
+
+The `includes/` directory contains reference libraries (loosely coupled, mostly for inspiration).
 
 ### Key Regions in AutoHotkey.ahk
-- **Lines 1-24**: Configuration directives (`#SingleInstance`, `#UseHook`, etc.)
-- **Lines 29-90**: Script control and editor-specific hotkeys
-- **Lines 94-212**: Helper functions (`GetExePath`, `UserRun`, `IsProcessElevated`, etc.)
-- **Lines 290-530**: Windows Terminal and elevation hotkeys (F10 variants)
-- **Lines 531-865**: Extended Window Spy (`#w`)
-- **Lines 1029-1284**: MButton smooth scroll implementation
+- **Lines 1-25**: Configuration directives, remote session guard, `WS_Init()` call
+- **Lines 27-80**: Script control, editor-specific, and global hotkey bindings
+- **Lines 82-196**: Helper functions (`GetExePath`, `GetMonitor`, `HasVal`, etc.)
+- **Lines 198-268**: `UserRun()` + `IsProcessElevated()` (safe run / elevation)
+- **Lines 286-415**: Windows Terminal and elevation hotkeys (F10 variants)
+- **Lines 520-860**: Extended Window Spy (`#w`)
+- **Lines 862-1017**: Misc bindings (VLC, monitor off, Explorer, MPC-BE accel scroll)
+- **Lines 1019-1021**: `#Include` directives for module files
 
 ### Core Features
-1. **Explorer Smooth Scroll** (`MButton + drag`) — 4-method system: UIA, WHEEL, WHEEL_CTRL, VSCROLL
-2. **Extended Window Spy** (`Win+W`) — Persistent tooltip with window/control info
-3. **Terminal/Elevation** (`F10`, `Shift+F10`, `Ctrl+Shift+F10`) — Context-aware terminal launching
+1. **Explorer Smooth Scroll** (`MButton + drag`) — 4-method system: UIA, WHEEL, WHEEL_CTRL, VSCROLL — in `mbutton-scroll.ahk`
+2. **Window Spawning** — Shell hook + WinEvent hooks move new windows to cursor's monitor — in `window-spawning.ahk`
+3. **Extended Window Spy** (`Win+W`) — Persistent tooltip with window/control info
+4. **Terminal/Elevation** (`F10`, `Shift+F10`, `Ctrl+Shift+F10`) — Context-aware terminal launching
 
 ## Running & Debugging
 
@@ -92,8 +103,10 @@ MB_ExcludedControls := ["ToolbarWindow", "Edit"]          ; Skip these controls
 
 No automated tests. Manual verification required:
 1. **MButton scroll**: Test in Windows Explorer (file lists + nav tree) and VS Code
-2. **Window Spy**: Press `Win+W`, hover different windows, click tooltip to copy
-3. **Terminal hotkeys**: Test `F10` from Explorer, Desktop, and applications
+2. **Window spawning**: Open a new window — should appear on cursor's monitor
+3. **Window Spy**: Press `Win+W`, hover different windows, click tooltip to copy
+4. **Terminal hotkeys**: Test `F10` from Explorer, Desktop, and applications
+5. **Alt+Tab**: Press `Alt+Tab` — switcher should appear on cursor's monitor
 
 ## Key Helper Functions
 

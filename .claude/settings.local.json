@@ -2,6 +2,9 @@
   "permissions": {
     "allow": [
       "Read(//tmp/**)"
+    ],
+    "deny": [
+      "Read(./includes/**)"
     ]
   }
 }
