@@ -1,10 +1,14 @@
 # AHK Project: Context Transfer Summary
 
-## Current State (Jan 30, 2026)
+## Current State (Feb 1, 2026)
 
 ### Project Overview
 
-Monolithic AutoHotkey v1.1 script (`AutoHotkey.ahk`, ~2000 lines) providing:
+AutoHotkey v1.1 project split across two files:
+- **`AutoHotkey.ahk`** (~1022 lines) — main script with hotkeys, helpers, and smooth scroll
+- **`window-spawning.ahk`** (~720 lines) — included via `#Include`, all window spawning logic
+
+Features:
 - **Explorer Smooth Scroll**: Multi-method MButton drag-scrolling with automatic fallback chain
 - **Window Spawning**: Auto-move new/activated windows and Alt+Tab to cursor's monitor via shell hooks
 - **Extended Window Spy**: Real-time window info tooltip with click-to-dialog
@@ -16,15 +20,30 @@ Monolithic AutoHotkey v1.1 script (`AutoHotkey.ahk`, ~2000 lines) providing:
 | Lines | Section |
 |-------|---------|
 | 1-19 | Directives, config (`SendMode`, `SetWorkingDir`, `SetTitleMatchMode`) |
-| 20-21 | Debug flags (`MB_Debug`, `WS_Debug`) |
+| 20-21 | Debug flags (`MB_Debug`, `WS.Debug`) |
 | 23-31 | Auto-execute: `#If` RDP context, `If` guard → `WS_Init()`, `Return` |
 | 34-91 | Bindings, remaps, script control |
 | 94-212 | Helper functions (`HasVal`, `GetExePath`, `GetMonitor`, `GetCursorMonitor`, etc.) |
 | 215-285 | `UserRun()` - process execution with elevation support |
 | 287-521 | Windows Terminal / elevation hotkeys (F10, Shift+F10, Ctrl+Alt+Shift+F10) |
 | 523-1018 | Extended Window Spy (`#w` toggle, dialog, text processing) |
-| 1020-1430 | Explorer Smooth Scroll (MButton drag implementation) |
-| 1434-2010 | Window Spawning (`WS_Init`, shell hook, WinEvent hooks, Phase 10 zero-flash, activation guards, Alt+Tab, cleanup) |
+| 1020-1022 | `#Include window-spawning.ahk` + Explorer Smooth Scroll begins |
+
+### Key Regions in window-spawning.ahk
+
+| Section | Content |
+|---------|---------|
+| `WS_Init()` | Initialize `WS` object, register shell hook, SetWinEventHook (SHOW, UNCLOAKED, CREATE), CoInitialize, cleanup timer |
+| `WS_OnShellHook()` | Handle DESTROYED (brief-process detection + cleanup), ACTIVATED (positive intent detection), CREATED (exe recording + pre-pending + deferred move) |
+| `WS_OnWinEvent()` | Handle EVENT_OBJECT_SHOW, UNCLOAKED, CREATE (opacity hiding, deferred window processing) |
+| `WS_IsReady()` | Timing gate: visible, sized, uncloaked |
+| `WS_IsMovable()` | Policy gate: skip tool windows, cloaked, no-title, excluded classes, visible-owner |
+| `WS_MoveToMonitor()` | Relative position mapping across monitors with taskbar-aware clamping, maximized/minimized handling, inline opacity reveal |
+| `WS_Reveal()` | Idempotent opacity restore + sentinel set |
+| `WS_Log()` | Debug logging to `%TEMP%\WS_Debug.log` |
+| `WS_CleanPrePending` | Timer: stale entry cleanup for PrePending, Hidden, OwnerSentinel, RecentCreated, RecentExes |
+| `WS_Cleanup()` | OnExit: unhook WinEvents, reveal hidden windows, CoUninitialize |
+| `~!Tab::` | Alt+Tab passthrough hotkey with non-blocking WinEvent detection |
 
 ---
 
@@ -103,8 +122,8 @@ No hardcoded app exclusion list is needed. Only excluded **controls** (toolbars,
 
 ### Key Helper Functions (Scroll)
 
-- `GetScrollPos(hwnd)` (line 1030) — Win32 `GetScrollPos` wrapper, returns vertical scroll position
-- `HasWin32Scrollbar(hwnd)` (line 1035) — Checks if `GetScrollRange(SB_VERT)` indicates a scrollbar exists
+- `GetScrollPos(hwnd)` (AutoHotkey.ahk line 1030) — Win32 `GetScrollPos` wrapper, returns vertical scroll position
+- `HasWin32Scrollbar(hwnd)` (AutoHotkey.ahk line 1035) — Checks if `GetScrollRange(SB_VERT)` indicates a scrollbar exists
 
 ---
 
@@ -152,6 +171,18 @@ hr := DllCall(NumGet(NumGet(ptr+0)+N*A_PtrSize), ..., "Ptr*", outVar)
 DllCall(NumGet(NumGet(ptr+0)+N*A_PtrSize), ..., "Ptr*", outVar)
 ```
 
+### FileDelete/FileAppend with Object Properties
+
+AHK v1.1 commands take plain string parameters. Forced expression syntax (`% WS.Property`) is unreliable for `FileDelete`/`FileAppend`. Always dereference to a local variable first:
+```autohotkey
+; BROKEN — unreliable with object property access
+FileDelete, % WS.LogFile
+
+; CORRECT — local variable + traditional dereferencing
+_logFile := WS.LogFile
+FileDelete, %_logFile%
+```
+
 ### Auto-Execute Section
 
 In AHK v1.1, the auto-execute section runs from line 1 until the first hotkey label. Code placed between hotkey subroutines is **unreachable dead code**. Global config must be in the auto-execute section (lines 1-24).
@@ -162,153 +193,134 @@ In AHK v1.1, the auto-execute section runs from line 1 until the first hotkey la
 
 | Function | Location | Purpose |
 |----------|----------|---------|
-| `HasVal(arr, val)` | line 97 | Check if array contains value (partial match via InStr) |
-| `GetExePath(winTitle)` | line 108 | Returns `{path, dir}` for window's process |
-| `GetMonitor(winTitle)` | line 130 | Returns 1-based monitor number for window center |
-| `ProcessExistsByCommandLine(cmdLine)` | line 148 | Find PID by command line match via WMI |
-| `IsProcessElevated(pid)` | line 203 | Checks admin privileges via token |
-| `UserRun(exe, args*)` | line 218 | Smart process execution with elevation support |
-| `WrapList(text, delim, maxLen)` | ~line 830 | Wraps delimited text at maxLen preserving items |
-| `CleanWindowText(text)` | ~line 840 | Removes non-ASCII, dedupes long window text |
-| `FilterLongItems(text, maxLen)` | ~line 855 | Removes items >maxLen from delimited list |
-| `SortList(text)` | ~line 870 | Sorts comma-separated items alphabetically |
-| `GetScrollPos(hwnd)` | line 1030 | Win32 vertical scroll position |
-| `HasWin32Scrollbar(hwnd)` | line 1035 | Checks if Win32 scrollbar exists |
+| `HasVal(arr, val)` | AutoHotkey.ahk line 97 | Check if array contains value (partial match via InStr) |
+| `GetExePath(winTitle)` | AutoHotkey.ahk line 108 | Returns `{path, dir}` for window's process |
+| `GetMonitor(winTitle)` | AutoHotkey.ahk line 130 | Returns 1-based monitor number for window center |
+| `GetCursorMonitor()` | AutoHotkey.ahk line ~145 | Returns 1-based monitor index for cursor position |
+| `ProcessExistsByCommandLine(cmdLine)` | AutoHotkey.ahk line 148 | Find PID by command line match via WMI |
+| `IsProcessElevated(pid)` | AutoHotkey.ahk line 203 | Checks admin privileges via token |
+| `UserRun(exe, args*)` | AutoHotkey.ahk line 218 | Smart process execution with elevation support |
+| `WrapList(text, delim, maxLen)` | AutoHotkey.ahk ~line 830 | Wraps delimited text at maxLen preserving items |
+| `CleanWindowText(text)` | AutoHotkey.ahk ~line 840 | Removes non-ASCII, dedupes long window text |
+| `FilterLongItems(text, maxLen)` | AutoHotkey.ahk ~line 855 | Removes items >maxLen from delimited list |
+| `SortList(text)` | AutoHotkey.ahk ~line 870 | Sorts comma-separated items alphabetically |
+| `GetScrollPos(hwnd)` | AutoHotkey.ahk line 1030 | Win32 vertical scroll position |
+| `HasWin32Scrollbar(hwnd)` | AutoHotkey.ahk line 1035 | Checks if Win32 scrollbar exists |
 
 ---
 
 ## Conventions
 
 - **AHK v1.1 syntax only** — no v2 syntax
-- **Naming**: PascalCase functions, `MB_` prefix for MButton globals, `WS_` prefix for window spawning globals
+- **Naming**: PascalCase functions, `MB_` prefix for MButton globals, `WS` object for window spawning state, `WS_` prefix for window spawning functions
 - **Process launching**: Always use `UserRun()` for consistent elevation/env handling
 - **App lists**: Partial matching via `HasVal()` — add exe names without full paths
 - **Sections**: ASCII box dividers for major regions
-- **Debug flags** (line 20-21): `MB_Debug` for MButton scroll, `WS_Debug` for window spawning
+- **Debug flags**: `MB_Debug` (AutoHotkey.ahk line 20) for MButton scroll, `WS.Debug` (window-spawning.ahk) for window spawning
 
 ---
 
 ## Window Spawning (Cursor's Monitor)
 
-**Status**: Phase 10d (activation guard fix) **ACTIVE BUG** — overlay detection for Start menu. Full design and tasks at `.claude/window-spawning/`.
+**Status**: Phase 11 complete (positive intent detection). Full design and tasks at `.claude/window-spawning/`.
 
-### Summary
+**File**: `window-spawning.ahk` — included from `AutoHotkey.ahk` line 1021.
 
-Shell hook (`RegisterShellHookWindow`) intercepts `HSHELL_WINDOWCREATED`, `HSHELL_WINDOWACTIVATED`, and `HSHELL_WINDOWDESTROYED`. WinEvent hooks (`SetWinEventHook`) listen for `EVENT_OBJECT_SHOW` (0x8002), `EVENT_OBJECT_UNCLOAKED` (0x8018), and `EVENT_OBJECT_CREATE` (0x8000) to detect when windows are created or become visible.
+### Architecture
 
-**Three paths:**
+Shell hook (`RegisterShellHookWindow`) intercepts `HSHELL_WINDOWCREATED`, `HSHELL_WINDOWACTIVATED`, and `HSHELL_WINDOWDESTROYED`. WinEvent hooks (`SetWinEventHook`) listen for `EVENT_OBJECT_SHOW` (0x8002), `EVENT_OBJECT_UNCLOAKED` (0x8018), and `EVENT_OBJECT_CREATE` (0x8000).
+
+All state is stored in a single `WS := {}` object (replaces 12+ individual `WS_*` globals). Every function declares only `global WS`.
+
+### New Window Creation Paths
+
 - **Win32 instant**: Shell hook fires → window already ready → move immediately
-- **UWP event-driven**: Shell hook fires → not ready → `WS_Pending[hwnd]` → SHOW/UNCLOAK event → move (~62ms)
-- **CREATE pre-pipeline (Phase 10)**: CREATE event fires 55-77ms before shell hook → register target in `WS_PrePending` → hide via opacity (`WS_EX_LAYERED` + alpha 0) → shell hook moves → restore opacity
+- **UWP event-driven**: Shell hook fires → not ready → `WS.Pending[hwnd]` → SHOW/UNCLOAK event → move (~62ms)
+- **CREATE pre-pipeline (zero-flash)**: CREATE event fires 55-77ms before shell hook → register target in `WS.PrePending` → hide via opacity (`WS_EX_LAYERED` + alpha 0) → shell hook moves → restore opacity
 
-Activated windows are moved unless filtered by the activation guard chain. Alt+Tab switcher is moved via non-blocking `WS_PendingAltTab` + WinEvent SHOW detection.
+### Activation Path: Positive Intent Detection (Phase 11)
 
-Destroyed windows are cleaned from `WS_Pending`, `WS_PrePending`, and `WS_Hidden` immediately via `HSHELL_WINDOWDESTROYED`. All deferred MOVED log entries include elapsed timing (`+NNms`) and source label (show/uncloak/poll/timeout).
+**Architecture**: Default-skip — activated windows are NOT moved unless positive intent is detected.
+Replaces the previous 7-guard negative-filtering chain (~125 lines → ~55 lines).
 
-### Phase 10: Zero-Flash Opacity Approach
+**Tier 1 — Brief-process detection** (Win32 single-instance re-launch):
+When a single-instance Win32 app is re-launched, a new process briefly exists (100-500ms). It detects the existing instance via mutex/named pipe, sends a message, then exits. We detect this pattern:
+1. `HSHELL_WINDOWCREATED` → record `{exe, tick}` in `WS.RecentCreated`
+2. `HSHELL_WINDOWDESTROYED` → if window died within 3s, record exe in `WS.RecentExes`
+3. `HSHELL_WINDOWACTIVATED` → if exe matches a `WS.RecentExes` entry (<5s) → **move**
+
+**Tier 2 — Overlay-launch detection** (UWP single-instance re-launch):
+UWP apps don't create a new process on re-launch (shell uses `IApplicationActivationManager`).
+If overlay (Start menu) was recently visible (`WS.OverlayTick` < 2s) AND a **different** window activates (`lParam != prevHwnd`) → **move**.
+The `lParam != prevHwnd` check distinguishes "user launched something" from "Start menu closed, same window bounced back."
+
+**Z-order fallback protection**: `WS.OverlayTick` is cleared when the foreground window is destroyed (prevents false Tier 2 on close-fallback) and when the previous window was minimized (prevents false Tier 2 on minimize-fallback).
+
+**Retained guards** (not intent-based):
+- Taskbar cursor check: cursor over `Shell_TrayWnd`/`Shell_SecondaryTrayWnd` → skip
+- Same-monitor optimization: `windowMon == cursorMon` → skip
+
+### Zero-Flash Opacity Approach (Phase 10)
 
 **Goal**: Eliminate the visual flash where windows briefly appear on the wrong monitor before being moved.
 
 **Mechanism**: At `EVENT_OBJECT_CREATE` time, hide windows using `WS_EX_LAYERED` + `SetLayeredWindowAttributes` (alpha 0 in production, 128 in debug mode for 50% visibility). After `WS_MoveToMonitor` places the window on the correct monitor, restore full opacity.
 
 **Key data structures:**
-- `WS_PrePending` dict: `hwnd → {mon, tick, qpc}` — tracks CREATE-to-ShellHook/SHOW pipeline
-- `WS_Hidden` dict: `hwnd → hadLayered` (bool if opacity-hidden, `-1` sentinel if "processed")
+- `WS.PrePending` dict: `hwnd → {mon, tick, qpc}` — tracks CREATE-to-ShellHook/SHOW pipeline
+- `WS.Hidden` dict: `hwnd → hadLayered` (bool if opacity-hidden, `-1` sentinel if "processed")
 
-**Sentinel mechanism**: `WS_Hidden[hwnd] := -1` marks a window as "processed" so duplicate CREATE events don't re-hide an already-moved window. Sentinels are set by:
+**Sentinel mechanism**: `WS.Hidden[hwnd] := -1` marks a window as "processed" so duplicate CREATE events don't re-hide an already-moved window. Sentinels are set by:
 - `WS_MoveToMonitor()` — always, unconditionally after move
 - `WS_Reveal()` — for any window passed through it
 
-**Owner-based sentinel** (`WS_OwnerSentinel`): When `WS_MoveToMonitor` processes a window, it records the window's owner hwnd with a timestamp. The CREATE handler checks if a new window's owner has a recent sentinel (<200ms) and skips hiding. This protects sibling `#32770` windows (e.g., Run dialog) that the Win32 dialog manager creates during initialization — they share the same owner but have different HWNDs, so the per-hwnd sentinel doesn't cover them.
+**Owner-based sentinel** (`WS.OwnerSentinel`): When `WS_MoveToMonitor` processes a window, it records the window's owner hwnd with a timestamp. The CREATE handler checks if a new window's owner has a recent sentinel (<200ms) and skips hiding. This protects sibling `#32770` windows (e.g., Run dialog) that the Win32 dialog manager creates during initialization.
 
-**Safety nets:**
-- Empty-class filter in CREATE handler (skips transient Win32 objects with no class name)
-- Orphan sweep in `WS_CleanPrePending` timer (reveals windows stuck in WS_Hidden not tracked elsewhere)
-- Sentinels cleaned by `HSHELL_WINDOWDESTROYED`; owner sentinels expire via 2s TTL sweep
+### WS Object Properties
 
-**Current status**: Works for Chrome, Registry Workshop, Everything, Explorer, UWP Settings. Owner-based sentinel fix for Run dialog create-shell path awaiting test confirmation.
-
-### Activation Guard Chain (7 checks)
-
-| # | Guard | Code |
-|---|-------|------|
-| 1 | System window filter | `WS_IsMovable(lParam)` (records `WS_OverlayTick` for: empty-class infrastructure, taskbar, explorer.exe/StartMenuExperienceHost.exe CoreWindow) |
-| 2 | Overlay/Start menu bounce-back | `lParam == WS_LastForegroundHwnd` — Check A: overlay tick < 2000ms; Check B: Start menu visible (DWM uncloaked) |
-| 3 | Tracker update | Save `prevHwnd`, set `WS_LastForegroundHwnd := lParam`, clear `WS_OverlayTick` |
-| 4 | Foreground close fallback (500ms) | `A_TickCount - WS_LastDestroyTick < 500` (only armed when foreground window destroyed) |
-| 5 | Minimize fallback | `WinGet, prevMinMax, MinMax` on previous foreground; skip if `-1` |
-| 6 | Taskbar click | Cursor over `Shell_TrayWnd` or `Shell_SecondaryTrayWnd` |
-| 7 | Same monitor | `windowMon == cursorMon` |
-
-### Key Globals
-
-| Variable | Purpose |
+| Property | Purpose |
 |----------|---------|
-| `WS_Debug` | Debug log toggle (line 21). Logs to `%TEMP%\WS_Debug.log` |
-| `WS_Pending` | Associative array: deferred hwnd → `{mon, tick}` |
-| `WS_PendingAltTab` | Alt+Tab state: `{mon, tick}` or `""` |
-| `WS_ExcludedClasses` | Array of 9 window classes to skip |
-| `WS_HookHwnd` | Hidden GUI window for shell hook |
-| `WS_EventHookShow` | Handle from `SetWinEventHook` (EVENT_OBJECT_SHOW) |
-| `WS_EventHookUncloak` | Handle from `SetWinEventHook` (EVENT_OBJECT_UNCLOAKED) |
-| `WS_WinEventCB` | `RegisterCallback` pointer for WinEventProc |
-| `WS_LastDestroyTick` | Timestamp of last window close (activation guard) |
-| `WS_LastForegroundHwnd` | Last movable foreground hwnd (overlay dismissal guard) |
-| `WS_OverlayTick` | `A_TickCount` when overlay/infrastructure detected. Three sources: (1) empty-class infrastructure windows (fire before every activation), (2) taskbar activation (`Shell_TrayWnd`/`Shell_SecondaryTrayWnd`), (3) explorer.exe/StartMenuExperienceHost.exe CoreWindow. 2-band filter: 0-2000ms=bounce-back, >2000ms=allow. Guard #2 also directly checks Start menu visibility via DWM cloaked state |
-| `WS_PrePending` | Associative array: CREATE-registered hwnd → `{mon, tick, qpc}` |
-| `WS_Hidden` | Associative array: opacity-hidden hwnd → `hadLayered` (bool), or `-1` (sentinel = "processed") |
-| `WS_OwnerSentinel` | Associative array: owner hwnd → `A_TickCount` (sibling CREATE suppression, 200ms active, 2s TTL) |
-| `WS_EventHookCreate` | Handle from `SetWinEventHook` (EVENT_OBJECT_CREATE) |
-| `WS_QPCFreq` | QPC frequency for µs-precision timing |
+| `WS.Debug` | Debug log toggle. Logs to `%TEMP%\WS_Debug.log` |
+| `WS.LogFile` | Path to debug log file |
+| `WS.HookHwnd` | Hidden GUI window for shell hook |
+| `WS.Pending` | Associative array: deferred hwnd → `{mon, tick}` |
+| `WS.PendingAltTab` | Alt+Tab state: `{mon, tick}` or `""` |
+| `WS.ExcludedClasses` | Array of 9 window classes to skip |
+| `WS.PrePending` | CREATE-registered hwnd → `{mon, tick, qpc}` |
+| `WS.Hidden` | Opacity-hidden hwnd → `hadLayered` (bool), or `-1` (sentinel) |
+| `WS.OwnerSentinel` | Owner hwnd → `A_TickCount` (sibling CREATE suppression, 200ms active) |
+| `WS.RecentCreated` | hwnd → `{exe, tick}` — window lifespan tracking for Tier 1 |
+| `WS.RecentExes` | exe name → `A_TickCount` — brief-process signal for Tier 1 |
+| `WS.LastForegroundHwnd` | Last movable foreground hwnd (Tier 2 overlay detection) |
+| `WS.OverlayTick` | `A_TickCount` when overlay/infrastructure detected (Tier 2) |
+| `WS.EventHookShow` | Handle from `SetWinEventHook` (EVENT_OBJECT_SHOW) |
+| `WS.EventHookUncloak` | Handle from `SetWinEventHook` (EVENT_OBJECT_UNCLOAKED) |
+| `WS.EventHookCreate` | Handle from `SetWinEventHook` (EVENT_OBJECT_CREATE) |
+| `WS.WinEventCB` | `RegisterCallback` pointer for WinEventProc |
+| `WS.QPCFreq` | QPC frequency for µs-precision timing |
 
-### Critical AHK v1.1 Details
+### Critical AHK v1.1 Details (Window Spawning)
 - **32-bit masking**: `idObject & 0xFFFFFFFF` — WinEventProc uses 32-bit params but AHK reads 64-bit register slots on x64
-- **Numeric coercion**: `hwnd + 0` — ensures consistent object key type in `WS_Pending`
-- **Global discipline**: Every function accessing `WS_Pending` must declare `global WS_Pending`
+- **Numeric coercion**: `hwnd + 0` — ensures consistent object key type in `WS.Pending` etc.
+- **Global discipline**: Every function declares `global WS` (single object replaces 12+ individual globals)
 - **No Fast flag**: `RegisterCallback("WS_OnWinEvent", "", 7)` — isolated pseudo-thread per callback
+- **Command parameter syntax**: `FileDelete`/`FileAppend` require local variable intermediary for `WS.Property` access
 
 ---
 
-## Phase 10d: Overlay Detection — FIXED (Jan 30, 2026)
+## Minimized Window Move — FIXED (Jan 30, 2026)
 
-### Problem Summary
+### Problem
 
-Guard #2 (overlay bounce-back) relied entirely on shell hooks to detect overlay windows like the Start menu. But the Start menu's CoreWindow does **not** fire `HSHELL_WINDOWACTIVATED`. Result: `WS_OverlayTick` was never set → bounce-back never triggered → windows incorrectly moved when Start menu closed.
+`WS_MoveToMonitor` only handled maximized windows (`minMax == 1`). Minimized windows (`minMax == -1`) fell through to the normal path where `WinGetPos` returns garbage dimensions (~160×28 at position -32000,-32000). Result: windows activated from minimized state (e.g., via Alt+Tab) appeared at tiny size.
 
-### Previous Attempts (8 iterations)
+### Fix
 
-| # | Approach | Failure |
-|---|----------|---------|
-| 1 | Time-bounded tick | Tick only set for movable windows; Start menu never refreshed it |
-| 2 | Cursor-monitor comparison | Cursor moves freely between monitors |
-| 3 | Boolean overlay flag | UWP internal CoreWindow set flag, blocking all UWP |
-| 4 | 3-band timing | Correct timing logic but wrong detection source |
-| 5a | PID-based source filter | UWP split-process makes PIDs always differ |
-| 5b | explorer.exe source filter | Start menu CoreWindow doesn't fire shell hook at all |
-| 6 | `GetKeyState("LWin", "P")` in Guard #1b | Doesn't work in shell hook `OnMessage` callback context — zero log entries despite LWin held |
-| 7 | `~LWin Up::` hotkey only | Sets tick on key RELEASE, but UWP cascade fires on key DOWN (too late for same-tick activations) |
+Added `minMax == -1` branch using `GetWindowPlacement` API to retrieve the window's normal (restored) rectangle — accurate even while minimized. Window is then restored, sized correctly, and centered on the target monitor.
 
-### Fix: Activation-Based Overlay Detection (Iteration 8)
+---
 
-**Key insight from debug log:** An empty-class infrastructure window (class="", exe="") fires a `HSHELL_WINDOWACTIVATED` event **before every window activation**. This is Windows' focus management signaling. Previously Guard #1 skipped these entirely — now they set `WS_OverlayTick`.
-
-**Why this is safe:** Guard #2 requires `lParam == WS_LastForegroundHwnd` (same window re-activates). Non-movable windows never update `WS_LastForegroundHwnd`. So:
-- **Start menu bounce-back:** Settings foreground → empty-class fires → Settings re-activates → same hwnd → **blocked** ✓
-- **Normal switch:** Settings foreground → empty-class fires → VSCodium activates → different hwnd → **allowed** ✓
-- **Alt+Tab round-trip:** Settings → VSCodium (updates tracker) → Settings → different from VSCodium → **allowed** ✓
-
-**Guard #2 Check B — Direct Start menu detection:** Guard #2 also checks if `StartMenuExperienceHost.exe` is currently visible (uncloaked) via `DwmGetWindowAttribute(DWMWA_CLOAKED)`. This is reliable because the Start menu must still be open when the bounce-back activation fires — the activation is caused by its dismissal. Catches all Start menu open methods (Win key, mouse click, touch, Ctrl+Esc) without any hooks or hotkeys.
-
-**Complementary signals (Guard #1 → Guard #2 Check A):**
-- Empty-class infrastructure: fires before every activation (primary overlay tick signal).
-- Taskbar activation: `Shell_TrayWnd`/`Shell_SecondaryTrayWnd` activations set `WS_OverlayTick`.
-- CoreWindow: `explorer.exe` (Action Center) and `StartMenuExperienceHost.exe` (if it fires shell hooks).
-
-**Timing simplified from 3-band to 2-band:** The <50ms exception (originally for UWP internal CoreWindow→Frame cascade) was removed because empty-class → re-activation fires at 0ms delta (same tick). The `lParam == WS_LastForegroundHwnd` check already prevents false positives for different-window switches.
-
-**`~LWin Up::` hotkey removed (iteration 9):** Caused delays for Win+key hotkeys and didn't catch mouse Start button clicks. Replaced by direct Start menu visibility detection in Guard #2 Check B.
-
-### UWP Split-Process Architecture (Reference)
+## UWP Split-Process Architecture (Reference)
 
 ```
 ApplicationFrameHost.exe          SystemSettings.exe (or other UWP app)
@@ -322,14 +334,7 @@ explorer.exe
        PID = Z
 ```
 
----
-
-## Phase 10d-2: Minimized Window Move — FIXED (Jan 30, 2026)
-
-### Problem
-
-`WS_MoveToMonitor` only handled maximized windows (`minMax == 1`). Minimized windows (`minMax == -1`) fell through to the normal path where `WinGetPos` returns garbage dimensions (~160×28 at position -32000,-32000). Result: windows activated from minimized state (e.g., via Alt+Tab) appeared at tiny size.
-
-### Fix
-
-Added `minMax == -1` branch using `GetWindowPlacement` API to retrieve the window's normal (restored) rectangle — accurate even while minimized. Window is then restored, sized correctly, and centered on the target monitor.
+This architecture is relevant to:
+- **WS_IsMovable()**: ApplicationFrameWindow is movable, CoreWindow is not
+- **Tier 2 overlay detection**: Start menu CoreWindow doesn't fire shell hooks, so overlay detection relies on empty-class infrastructure events and `WS.OverlayTick`
+- **Brief-process detection**: UWP re-launch doesn't create a new process (Tier 1 misses), hence Tier 2 exists

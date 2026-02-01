@@ -27,7 +27,7 @@ SetTitleMatchMode, 2
 ; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ; ┃ === BINDINGS / REMAPS === ┃
 ; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-; ⇒ AutoHotkey (global bindings)
+; ⇒ AutoHotkey/global
 +!r::Reload ; [ ShIft+Alt+R ] -> Reload script
 +!p::       ; [ ShIft+Alt+P ] -> Toggle pause script+suspend hotkeys
   Suspend
@@ -38,7 +38,7 @@ Return
   ~^s::Reload ; [ Ctrl+S ] -> Reload script on save (in any editor)
 #IfWinActive
 
-; ⇒ Sublime Text (bindings/remaps)
+; ⇒ Sublime Text
 #IfWinActive ahk_exe sublime_text.exe
   ^Tab::Send {Ctrl Down}{PgDn}{Ctrl Up} ; [ Ctrl+Tab ] -> Next tab
   +^Tab::Send {Ctrl Down}{PgUp}{Ctrl Up} ; [ ShIft+Ctrl+Tab ] -> Previous tab
@@ -51,8 +51,8 @@ Return
   +!d::Send {Alt Down}f{AltUp}e{Ctrl Down} ; [ Ctrl+Alt+D] -> Duplicate line
 #IfWinActive
 
-; ⇒ VS Code / Cursor / Antigravity
-#If (WinActive("ahk_exe code.exe") or WinActive("ahk_exe cursor.exe") or WinActive("ahk_exe antigravity.exe"))
+; ⇒ VSCode + forks
+#If (WinActive("ahk_exe code.exe") or WinActive("ahk_exe cursor.exe") or WinActive("ahk_exe antigravity.exe") or WinActive("ahk_exe vscodium.exe"))
   ^w::Send {Alt Down}z{AltUp} ; [ Ctrl+W ] -> Toggle word wrap
 #If
 
@@ -60,7 +60,6 @@ Return
 #IfWinActive ahk_exe WindowsTerminal.exe
   ^n::Send ^+t ; [ Ctrl+N] -> New tab
 #IfWinActive
-
 
 ; ⇒ Other global bindings
 +!-::Send {U+2014} ; [ ShIft+Alt+Minus ] -> em-dash: —
@@ -82,6 +81,185 @@ Return
   }
 Return
 
+; Global Volume controls on mouse side buttons
+$XButton1::
+While GetKeyState("XButton1","p"){
+  Send {Volume_Down}
+  Sleep 100
+}
+Return
+
+$XButton2::
+  While GetKeyState("XButton2","p"){
+  Send {Volume_Up}
+  Sleep 100
+}
+Return
+
+; VLC binding to go to next file on mouse middle button press
+#IfWinActive ahk_class QWidget
+  $*MButton::Send n
+#IfWinActive
+
+; Ctrl+ShIft+L: Turn off monitor
++!l::
+  UserRun("nircmd", "cmdwait 200 monitor off")
+  SendMessage, 0x112, 0xF140, 0,, Program Manager
+  Sleep 3000
+  VarSetCapacity(screen_saver_active,4,0)
+  SPI_GETSCREENSAVERRUNNING = 0x0072
+  result := DllCall( "user32.dll\SystemParametersInfo", "uint", SPI_GETSCREENSAVERRUNNING, "uint", 0, "uint*", screen_saver_active, "uint", 0 )
+  WinGetActiveTitle, Title
+  If (Title = "")
+    SendMessage, 0x112, 0xF170, 2,, Program Manager ; Shut off monitor
+Return
+
+; Alt+D: Focus address bar in Open dialog
+#IfWinActive, Open
+  !d::Send {Alt Down}n{Alt Up}
+#IfWinActive
+
+; Ctrl+E: Edit selected file (in Explorer or file dialog)
+^e::
+  selected := ""
+  If WinActive("ahk_class #32770") { ; File dialog active
+    ControlGetText, selected, Edit1, A ; Selected file's path
+  }
+  Else If WinActive("ahk_class CabinetWClass") { ; Explorer window active
+    For window in ComObjCreate("Shell.Application").Windows {
+      If (window.hwnd == WinActive("A")) {
+        selected := window.Document.SelectedItems.Item(0).Path
+        Break
+      }
+    }
+  }
+  If (selected != "") {
+    pid := ProcessExistsByCommandLine("sublime_text.exe"" """ . selected)
+    If (pid) {
+      WinActivate, ahk_pid %pid%
+    } Else {
+      UserRun("subl", selected)
+    }
+  }
+Return
+
+; Alt+Shift+S = Run or activate Everything
+~+!s::
+  DetectHiddenWindows, On
+  If (!WinExist("ahk_exe Everything.exe")) {
+    UserRun("C:\Program Files\Everything 1.5a\Everything.exe")
+    WinWait, ahk_exe Everything.exe
+    WinActivate
+  }
+Return
+
+#IfWinActive ahk_exe Everything.exe
+Esc::
+!F4::
+  If WinExist("ahk_class EVERYTHING_DROPDOWNLIST")
+    WinClose
+  WinHide
+Return
+#IfWinActive
+
+; Up one level in Explorer unless renaming or in tree view
+#IfWinActive, ahk_class CabinetWClass
+  Backspace::
+    ControlGet renamestatus,Visible,,Edit1,A
+    ControlGetFocus focused, A
+    If (renamestatus != 1 and (focused = "DirectUIHWND3" or focused = "SysTreeView321"))
+      SendInput {Alt Down}{Up}{Alt Up}
+    Else
+      Send {Backspace}
+  Return
+#IfWinActive
+
+
+; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+; ┃ === PROCESS MANAGEMENT / PRIVELEGE ESCALATION === ┃
+; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+; [ Ctrl+Shift+` ] -> Open System Informer as SYSTEM with TI privileges
+^+`::UserRun("elevate", "ti", "c:\Program Files\SystemInformer\SystemInformer.exe")
+
+; [ Win+Shift+E ] -> Alternate Explorer app in case of issues after Windows updates
+#+e::
+  WinGetClass, ahk_class, A
+  path := GetExplorerPath()
+  If (ahk_class = "Progman")
+    path := A_Desktop
+  Else If (ahk_class != "CabinetWClass" || path = "")
+    path := A_UserProfile
+
+  ; Activate existing e++ window for this path, or open new
+  pid := ProcessExistsByCommandLine("files-stable.exe"" " . path)
+  If (pid) {
+    WinActivate, ahk_pid %pid%
+  } Else {
+    UserRun("files-stable", path)
+  }
+Return
+
+; Win+C: Copy command line of active window to clipboard
+#c::
+  cmdLine := GetActiveWindowCommandLine()
+  If (cmdLine && cmdLine != "") {
+    ; Make sure to clear the clipboard first
+    Clipboard := ""
+    ; Copy the command line to the clipboard
+    Clipboard := cmdLine
+    ; Wait For the clipboard to contain data
+    ClipWait, 1
+    If (ErrorLevel) {
+      ToolTip, Failed to copy command line to clipboard
+    } Else {
+      ToolTip, >> %cmdLine%
+    }
+    SetTimer, RemoveToolTip, -3000
+  } Else {
+    ToolTip, Could not get command line
+    SetTimer, RemoveToolTip, -2000
+  }
+Return
+
+; Ctrl+Shift+Plus: Relaunch active window with TrustedInstaller (NT AUTHORITY/SYSTEM) privileges
+^+=::
+  WinGet, activePid, PID, A
+  WinGet, activeExe, ProcessName, A
+  exe := GetExePath()
+
+  If (exe.path) {
+    fullCmd := "ti.exe """ . exe.path . """"
+    MsgBox, 4, Command to run, %fullCmd%`n`nClick Yes to run, No to cancel
+    IfMsgBox Yes
+    {
+      ; Store the original path for comparison
+      originalPath := exe.path
+      
+      ; Run the elevated command
+      Run, %fullCmd%
+      
+      ; Wait for new process to appear (up to 250ms)
+      startTime := A_TickCount, newProcessFound := false
+      While (!newProcessFound && A_TickCount - startTime <= 250) {
+        For process in ComObjGet("winmgmts:").ExecQuery("Select ProcessId, ExecutablePath from Win32_Process")
+          If (process.ExecutablePath = originalPath && process.ProcessId != activePid && newProcessFound := true)
+            Break
+        Sleep, 50
+      }
+      
+      ; If no new process appeared, close the original app and try again
+      If (!newProcessFound) {
+        WinClose, ahk_pid %activePid%
+        startCloseTime := A_TickCount
+        While (WinExist("ahk_pid " . activePid) && A_TickCount - startCloseTime <= 500)
+          Sleep, 50
+        If (WinExist("ahk_pid " . activePid))
+          Process, Close, %activePid%
+        Run, %fullCmd%
+      }
+    }
+  }
+Return
 
 ; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ; ┃ === HELPER FUNCTIONS === ┃
@@ -165,7 +343,18 @@ GetMonitor(winTitle := "A") {
   Return 1
 }
 
-; ⇒ Get which monitor the cursor is on (1-based)
+; Get which monitor the cursor is on (1-based)
+GetCursorMonitor() {
+  CoordMode, Mouse, Screen
+  MouseGetPos, mx, my
+  SysGet, monCount, MonitorCount
+  Loop, %monCount% {
+    SysGet, mon, Monitor, %A_Index%
+    If (mx >= monLeft && mx <= monRight && my >= monTop && my <= monBottom)
+      Return A_Index
+  }
+  Return 1
+}
 
 ; ⇒ Get CmdLine for any active window (for elevation)
 GetActiveWindowCommandLine() {
@@ -283,11 +472,17 @@ IsProcessElevated(pid) {
   Return elevation
 }
 
-; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-; ┃ WINDOWS TERMINAL / ELEVATION ┃
-; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+RemoveToolTip:
+  ToolTip
+Return
 
-F10:: ; Open Windows Terminal in current Explorer path
+; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+; ┃ WINDOWS TERMINAL FROM ANYWHERE ┃
+; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+; [ F10 ] -> Open Windows Terminal in current Explorer path
+; [ Shift+F10 ] -> Open with admin rights
+; [ Ctrl+Alt+Shift+F10 ] -> Open Windows Terminal with SYSTEM rights
+F10::
   WinGetClass, ahk_class, A
   path := GetExplorerPath()
 
@@ -301,7 +496,7 @@ F10:: ; Open Windows Terminal in current Explorer path
   }
 Return
 
-+F10:: ; [ Shift+F10 ] -> Open with admin rights
++F10::
   WinGetClass, ahk_class, A
   path := GetExplorerPath()
 
@@ -315,7 +510,7 @@ Return
   }
 Return
 
-^!+F10:: ; [ Ctrl+Alt+Shift+F10 ] -> Open Windows Terminal with SYSTEM rights
+^!+F10::
   WinGetClass, ahk_class, A
   path := GetExplorerPath()
 
@@ -327,196 +522,6 @@ Return
     exe := GetExePath()
     UserRun("elevate", "ti", "wt", "-d " . (exe.dir ? exe.dir : A_UserProfile))
   }
-Return
-
-; [ Ctrl+Shift+` ] -> Open System Informer as SYSTEM with TI privileges
-^+`::UserRun("elevate", "ti", "c:\Program Files\SystemInformer\SystemInformer.exe")
-
-; [ Win+Shift+E ] -> Alternate Explorer app in case of issues after Windows updates
-#+e::
-  WinGetClass, ahk_class, A
-  path := GetExplorerPath()
-  If (ahk_class = "Progman")
-    path := A_Desktop
-  Else If (ahk_class != "CabinetWClass" || path = "")
-    path := A_UserProfile
-
-  ; Activate existing e++ window for this path, or open new
-  pid := ProcessExistsByCommandLine("files-stable.exe"" " . path)
-  If (pid) {
-    WinActivate, ahk_pid %pid%
-  } Else {
-    UserRun("files-stable", path)
-  }
-Return
-
-; Win+C: Copy command line of active window to clipboard
-#c::
-  cmdLine := GetActiveWindowCommandLine()
-  If (cmdLine && cmdLine != "") {
-    ; Make sure to clear the clipboard first
-    Clipboard := ""
-    ; Copy the command line to the clipboard
-    Clipboard := cmdLine
-    ; Wait For the clipboard to contain data
-    ClipWait, 1
-    If (ErrorLevel) {
-      ToolTip, Failed to copy command line to clipboard
-    } Else {
-      ToolTip, >> %cmdLine%
-    }
-    SetTimer, RemoveToolTip, -3000
-  } Else {
-    ToolTip, Could not get command line
-    SetTimer, RemoveToolTip, -2000
-  }
-Return
-
-; Ctrl+Shift+Plus: Relaunch active window with TrustedInstaller (NT AUTHORITY/SYSTEM) privileges
-^+=::
-  WinGet, activePid, PID, A
-  WinGet, activeExe, ProcessName, A
-  exe := GetExePath()
-
-  If (exe.path) {
-    fullCmd := "ti.exe """ . exe.path . """"
-    MsgBox, 4, Command to run, %fullCmd%`n`nClick Yes to run, No to cancel
-    IfMsgBox Yes
-    {
-      ; Store the original path for comparison
-      originalPath := exe.path
-      
-      ; Run the elevated command
-      Run, %fullCmd%
-      
-      ; Wait for new process to appear (up to 250ms)
-      startTime := A_TickCount, newProcessFound := false
-      While (!newProcessFound && A_TickCount - startTime <= 250) {
-        For process in ComObjGet("winmgmts:").ExecQuery("Select ProcessId, ExecutablePath from Win32_Process")
-          If (process.ExecutablePath = originalPath && process.ProcessId != activePid && newProcessFound := true)
-            Break
-        Sleep, 50
-      }
-      
-      ; If no new process appeared, close the original app and try again
-      If (!newProcessFound) {
-        WinClose, ahk_pid %activePid%
-        startCloseTime := A_TickCount
-        While (WinExist("ahk_pid " . activePid) && A_TickCount - startCloseTime <= 500)
-          Sleep, 50
-        If (WinExist("ahk_pid " . activePid))
-          Process, Close, %activePid%
-        Run, %fullCmd%
-      }
-    }
-  }
-Return
-
-RemoveToolTip:
-  ToolTip
-Return
-
-#F12::
-MsgBox, F12 pressed 
-    MouseGetPos, CursorX, CursorY, Window, ClassNN
-    WinGetTitle, Title, ahk_id %Window%
-    WinGetClass, ahk_class, ahk_id %Window%
-    DetectHiddenText, On
-    WinGetText, WindowText, ahk_id %Window%
-    WinGet, WindowPID, PID, ahk_id %Window%
-    WinGet, ControlText, ControlList, ahk_id %Window%
-    CursorHwnd := DllCall("WindowFromPoint", "int64", CursorX | (CursorY << 32), "Ptr")
-
-    ; UIA Element Info - with persistent global and error tracking
-    UIA_Info := ""
-    try {
-        global G_UIA
-        If (!G_UIA)
-            G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
-        UIA_Info := "`nG_UIA: " G_UIA " (persistent)"
-
-        ; ElementFromPoint (vtable index 7)
-        uiaElement := 0
-        hr := DllCall(NumGet(NumGet(G_UIA+0)+7*A_PtrSize), "Ptr", G_UIA, "Int64", CursorX | (CursorY << 32), "Ptr*", uiaElement)
-        UIA_Info .= "`n  ElementFromPoint: hr=" hr " element=" uiaElement
-
-        if (uiaElement) {
-            ; CurrentControlType (vtable index 23)
-            ctrlType := 0
-            hr := DllCall(NumGet(NumGet(uiaElement+0)+23*A_PtrSize), "Ptr", uiaElement, "Int*", ctrlType)
-            UIA_Info .= "`n  ControlType: " ctrlType " (hr=" hr ")"
-
-            ; CurrentName (vtable index 24)
-            pName := 0
-            hr := DllCall(NumGet(NumGet(uiaElement+0)+24*A_PtrSize), "Ptr", uiaElement, "Ptr*", pName)
-            elName := pName ? StrGet(pName, "UTF-16") : ""
-            UIA_Info .= "`n  Name: " elName " (hr=" hr ")"
-
-            ; GetCurrentPattern for ScrollPattern (ID 10004, vtable index 16)
-            scrollPat := 0
-            hr := DllCall(NumGet(NumGet(uiaElement+0)+16*A_PtrSize), "Ptr", uiaElement, "Int", 10004, "Ptr*", scrollPat)
-            UIA_Info .= "`n  ScrollPattern: " (scrollPat ? "YES (" scrollPat ")" : "NO") " (hr=" hr ")"
-
-            if (scrollPat) {
-                ; CurrentVerticalScrollPercent (vtable index 6)
-                vPct := 0.0
-                hr := DllCall(NumGet(NumGet(scrollPat+0)+6*A_PtrSize), "Ptr", scrollPat, "Double*", vPct)
-                UIA_Info .= "`n  VerticalScroll%%: " Round(vPct, 1) " (hr=" hr ")"
-            }
-        }
-    } catch e {
-        UIA_Info := "`nUIA: EXCEPTION - " e.Message
-    }
-
-    StringReplace, ControlText, ControlText, `n, %A_SPACE%, All
-    StringReplace, WindowText, WindowText, `n,  , All
-    StringReplace, WindowText, WindowText, %A_SPACE%%A_SPACE%, , All
-    If !(WindowText = "")
-        WindowText = `n%WindowText%
-    WinGetText, Text, ahk_id %Window%
-    WinGet, ahk_exe, ProcessName, ahk_id %Window%
-    WinGet, Path, ProcessPath, ahk_id %Window%
-    ; TODO: Rewrite using . syntax
-    ; if ahk_exe != AutoHotkey.exe and ahk_class != AutoHotkeyGUI
-    UnderCursor =
-(
-Title: %Title%
-ahk_id = %Window%
-ahk_exe = %ahk_exe%
-ahk_class = %ahk_class%
-Path: %Path%
-Process ID: %WindowPID%
-Control ClassNN: %ClassNN%
-hWnd under cursor: %CursorHwnd%
-%UIA_Info%
-Window Text:%WindowText%
-
-Control Text:
-%ControlText%
-)
-    Gui, Destroy
-    SysGet, Workspace, MonitorWorkArea
-    Gui, Add, Text, , Select text and Ctrl+C to copy it to to clipboard. Repeat %A_ThisHotkey% to update.
-    Gui, Add, Edit, vInfo +Wrap w380, %UnderCursor%
-    DetectHiddenWindows, On
-    Gui, +LastFound +AlwaysOnTop +Owner
-    Gui, Show, NoActivate h255 Hide
-    GuiControl, Move, Info, h220
-    AspectRatio := WorkspaceRight/WorkSpaceBottom
-    GUI_ID := WinExist()
-    WinGetPos, GUIX, GUIY, GUIWidth, GUIHeight, ahk_id %GUI_ID%
-    Offset = 30
-    Gui, Show, % "NoActivate x"WorkspaceRight-GUIWidth-WorkspaceRight/Offset/AspectRatio " y"WorkspaceBottom-GUIHeight-WorkSpaceBottom/Offset, Window under cursor
-;         ; ~Esc::
-;             ; KeyWait, Esc, D
-;             ; if (WinActive("ahk_id " GUI_ID)) {
-;                 ; Gui, Destroy
-;                 ; ; Process, Exist, %GUI_ID%
-;                 ; ; If (ErrorLevel = 0)
-;                     ; ; Process, Close, %GUI_ID%
-;             ; }
-;         Return
-    Return
 Return
 
 ; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
@@ -864,100 +869,6 @@ WindowSpyUpdate:
 Return
 
 ; ==============================================================================================================
-
-; VLC binding to go to next file on mouse middle button press
-#IfWinActive ahk_class QWidget
-  $*MButton::Send n
-#IfWinActive
-
-; Ctrl+ShIft+L: Turn off monitor
-+!l::
-  UserRun("nircmd", "cmdwait 200 monitor off")
-  SendMessage, 0x112, 0xF140, 0,, Program Manager
-  Sleep 3000
-  VarSetCapacity(screen_saver_active,4,0)
-  SPI_GETSCREENSAVERRUNNING = 0x0072
-  result := DllCall( "user32.dll\SystemParametersInfo", "uint", SPI_GETSCREENSAVERRUNNING, "uint", 0, "uint*", screen_saver_active, "uint", 0 )
-  WinGetActiveTitle, Title
-  If (Title = "")
-    SendMessage, 0x112, 0xF170, 2,, Program Manager ; Shut off monitor
-Return
-
-; Alt+D: Focus address bar in Open dialog
-#IfWinActive, Open
-  !d::Send {Alt Down}n{Alt Up}
-#IfWinActive
-
-; Ctrl+E: Edit selected file (in Explorer or file dialog)
-^e::
-  selected := ""
-  If WinActive("ahk_class #32770") { ; File dialog active
-    ControlGetText, selected, Edit1, A ; Selected file's path
-  }
-  Else If WinActive("ahk_class CabinetWClass") { ; Explorer window active
-    For window in ComObjCreate("Shell.Application").Windows {
-      If (window.hwnd == WinActive("A")) {
-        selected := window.Document.SelectedItems.Item(0).Path
-        Break
-      }
-    }
-  }
-  If (selected != "") {
-    pid := ProcessExistsByCommandLine("sublime_text.exe"" """ . selected)
-    If (pid) {
-      WinActivate, ahk_pid %pid%
-    } Else {
-      UserRun("subl", selected)
-    }
-  }
-Return
-
-; Alt+Shift+S = Run or activate Everything
-~+!s::
-  DetectHiddenWindows, On
-  If (!WinExist("ahk_exe Everything.exe")) {
-    UserRun("C:\Program Files\Everything 1.5a\Everything.exe")
-    WinWait, ahk_exe Everything.exe
-    WinActivate
-  }
-Return
-
-#IfWinActive ahk_exe Everything.exe
-Esc::
-!F4::
-  If WinExist("ahk_class EVERYTHING_DROPDOWNLIST")
-    WinClose
-  WinHide
-Return
-#IfWinActive
-
-; Up one level in Explorer unless renaming or in tree view
-#IfWinActive, ahk_class CabinetWClass
-  Backspace::
-    ControlGet renamestatus,Visible,,Edit1,A
-    ControlGetFocus focused, A
-    If (renamestatus != 1 and (focused = "DirectUIHWND3" or focused = "SysTreeView321"))
-      SendInput {Alt Down}{Up}{Alt Up}
-    Else
-      Send {Backspace}
-  Return
-#IfWinActive
-
-; Global Volume controls on mouse side buttons
-$XButton1::
-While GetKeyState("XButton1","p"){
-  Send {Volume_Down}
-  Sleep 100
-}
-Return
-
-$XButton2::
-  While GetKeyState("XButton2","p"){
-  Send {Volume_Up}
-  Sleep 100
-}
-Return
-
 
 ; Accelerated scrolling in MPC
 ; https://autohotkey.com/board/topic/48426-accelerated-scrolling-script/?p=333222

@@ -142,51 +142,21 @@
 - [ ] Compare opacity approach vs `EVENT_OBJECT_LOCATIONCHANGE` snap-back (if needed)
 - [ ] Test edge cases: already-layered windows, rapid spawn/close, multi-monitor drag
 
-## Phase 10d: Activation Guard Regression Fix
+## Phase 10d: Activation Guard Regression Fix (SUPERSEDED by Phase 11)
+
+> **Note:** Phase 10d's 7-guard activation chain was replaced in Phase 11 by positive intent detection.
+> Retained here for historical reference. All test items are superseded.
+
 - [x] Fix guard #4 (destroy guard): foreground-only — skip `WS_LastDestroyTick` for background/transient windows
 - [x] Fix guard #2 (overlay re-activation): overlay flag + 3-band timing
-  - Replaced tick-only (can't detect overlay), cursor-monitor (cursor moves freely), and flag-only (blocks UWP internal + launches) approaches
-  - `WS_OverlayTick` records when non-taskbar non-movable window activates (Start menu, Action Center)
-  - Excluded for `Shell_TrayWnd`/`Shell_SecondaryTrayWnd` (taskbar clicks don't fire activation)
-  - Guard #2 three timing bands since overlay opened:
-    - `<50ms` — UWP internal CoreWindow activation → allow (not a real overlay)
-    - `50-2000ms` — quick overlay dismiss (Win key, Start menu close) → block (bounce-back)
-    - `>2000ms` — user launched from overlay (Start menu search/click) → allow (intentional)
-  - Debug logging: `OVERLAY` when flag set, `SKIP (overlay-bounce)` when guard blocks
 - [x] Fix guard #1 (overlay detection): source filtering for `WS_OverlayTick`
-  - Root cause: UWP activation fires 3 `HSHELL_WINDOWACTIVATED` events in sequence:
-    1. Empty-class infrastructure window (hwnd=592370) — ~1s before app frame
-    2. UWP app's `Windows.UI.Core.CoreWindow` (hwnd=328388) — ~100ms before app frame
-    3. `ApplicationFrameWindow` (the actual app) — movable, goes through guard #2
-  - All three were setting `WS_OverlayTick`, so #3 always fell in the 50-2000ms "block" band
-  - Fix v1 (PID check — FAILED): `_nmPID == _fgPID` to detect same-process CoreWindow.
-    Broken because UWP uses split-process: ApplicationFrameHost.exe owns the frame,
-    app.exe (e.g. SystemSettings.exe) owns the CoreWindow → PIDs always differ.
-  - Fix v2 (explorer.exe check — PARTIAL): Only `explorer.exe` CoreWindows classified as overlay.
-    UWP re-activation now works ✓ but Start menu bounce-back is broken ✗.
-    Start menu's CoreWindow apparently does NOT fire `HSHELL_WINDOWACTIVATED`.
-  - Empty-class windows (`_nmClass == ""`) → skip entirely (transient infrastructure)
-- [x] UWP re-activation test: Settings moves from different monitor ✓ (with explorer.exe check)
+- [x] UWP re-activation test: Settings moves from different monitor ✓
 - [x] **FIX:** Start menu open/close overlay detection — activation-based approach (Jan 30, 2026)
-  - Root cause: Start menu CoreWindow does NOT fire `HSHELL_WINDOWACTIVATED`
-  - Iteration 6 (`GetKeyState("LWin", "P")`) failed: doesn't work in shell hook `OnMessage` context
-  - Iteration 7 (`~LWin Up::` hotkey only) failed: sets tick on key RELEASE, UWP cascade fires on key DOWN
-  - **Iteration 8 (activation-based):** Empty-class infrastructure windows (class="") fire before every activation.
-    Guard #1 now sets `WS_OverlayTick` on these events instead of skipping them.
-    Guard #2's `lParam == WS_LastForegroundHwnd` check prevents false positives for different-window switches.
-    Removed <50ms timing exception (empty-class→re-activation fires at 0ms delta).
-  - Complementary signals: taskbar activation, explorer.exe/StartMenuExperienceHost.exe CoreWindow
-  - Guard #1b (`GetKeyState`) removed as non-functional
-  - Guard #2 simplified from 3-band to 2-band timing: 0-2000ms=block, >2000ms=allow
 - [x] **Iteration 9:** Replace `~LWin Up::` with direct Start menu detection (Jan 31, 2026)
-  - `~LWin Up::` removed: caused delays for Win+key hotkeys, didn't catch mouse Start clicks
-  - Guard #1: added `StartMenuExperienceHost.exe` to CoreWindow overlay sources (free, if shell hooks fire)
-  - Guard #2 Check B: direct `WinExist` + `DwmGetWindowAttribute(DWMWA_CLOAKED)` on `StartMenuExperienceHost.exe`
-  - Causality guarantee: Start menu must be visible when bounce-back fires (it caused the activation)
-- [ ] Test Start menu fix: keyboard Win key, mouse Start button, Win+combo pass-through
-- [ ] Test taskbar overlay tick safety: clicking different app via taskbar should still move
-- [ ] Test normal window switching: empty-class overlay tick should NOT block different-window activations
-- [ ] Test Win+key hotkey latency: Win+E, Win+R, Win+T should have no delay
+- [~] ~~Test Start menu fix~~ — superseded by Phase 11
+- [~] ~~Test taskbar overlay tick safety~~ — superseded by Phase 11
+- [~] ~~Test normal window switching~~ — superseded by Phase 11
+- [~] ~~Test Win+key hotkey latency~~ — superseded by Phase 11
 
 ## Phase 10d-2: Minimized Window Move Fix
 - [x] Fix `WS_MoveToMonitor` for `minMax == -1` — `GetWindowPlacement` for real dimensions (Jan 30, 2026)
@@ -196,10 +166,73 @@
 - [x] Add `MOVE-START` debug logging with dimensions and minMax state
 - [ ] Test minimized window move: Alt+Tab to minimized app on different monitor
 
-## Remaining / Future
-- [ ] Test Run dialog create-shell fix (owner-based sentinel) — look for `CREATE-SKIP-OWNER`
-- [ ] Remove diagnostic logging after confirming all fixes (keep `CREATE-SKIP-OWNER` as standard log)
+## Phase 11: Architectural Inversion — Positive Intent Detection (Feb 1, 2026)
+
+### Motivation
+
+The activation path had grown to 7 guards (default-move + guard-chain) over 10 phases of iteration.
+Each false-positive scenario required adding another guard, producing accretional complexity.
+The user's insight: **only move on activation when a process was actually launched** — inverting the
+logic to default-skip + positive-intent-detection.
+
+### 11a: Global Encapsulation
+- [x] Consolidate 12+ `WS_*` globals into single `WS := {}` object
+- [x] Every function now declares only `global WS` instead of listing individual globals
+- [x] Properties: `WS.Debug`, `WS.LogFile`, `WS.HookHwnd`, `WS.Pending`, `WS.PrePending`, `WS.Hidden`, etc.
+- [x] AHK v1.1 `FileDelete`/`FileAppend` fix: object property access (`WS.LogFile`) unreliable in command parameters — use local variable + `%var%` dereferencing
+
+### 11b: File Separation
+- [x] Move all window spawning code to `window-spawning.ahk` (separate from `AutoHotkey.ahk`)
+- [x] `#Include %A_ScriptDir%\window-spawning.ahk` at line 1021 of main script
+- [x] `GetCursorMonitor()` remains in main script (shared helper)
+- [x] `WS_Init()` called from main auto-execute section inside `If !IsRemoteSession()` guard
+
+### 11c: Two-Tier Positive Intent Detection (replaces 7-guard chain)
+
+**Architecture:** Default-skip — activated windows are NOT moved unless positive intent is detected.
+
+- [x] **Tier 1 — Brief-process detection** (Win32 single-instance re-launch)
+  - `HSHELL_WINDOWCREATED` → record `{exe, tick}` in `WS.RecentCreated`
+  - `HSHELL_WINDOWDESTROYED` → if window died within 3s, record exe in `WS.RecentExes`
+  - `HSHELL_WINDOWACTIVATED` → check if exe matches recent brief-process entry (<5s)
+  - Detects the brief-lived relay process that single-instance apps create on re-launch
+- [x] **Tier 2 — Overlay-launch detection** (UWP single-instance re-launch)
+  - UWP apps don't create a new process on re-launch (shell uses `IApplicationActivationManager`)
+  - If overlay (Start menu) was recently visible (`WS.OverlayTick` < 2s) AND a **different** window activates (`lParam != prevHwnd`), this is a launch
+  - `lParam != prevHwnd` distinguishes "user launched something" from "Start menu closed, same window bounced back"
+- [x] **Removed guards:** #2a (overlay bounce-back timing), #2b (Start menu DWM check), #3 (destroy fallback 500ms), #4 (minimize fallback)
+- [x] **Removed globals:** `WS_LastDestroyTick` (no longer needed)
+- [x] **Retained guards:** taskbar cursor check, same-monitor optimization
+- [x] **Retained:** `WS.OverlayTick` (repurposed for Tier 2), `WS.LastForegroundHwnd` (Tier 2 + overlay tracking)
+
+### 11d: Z-Order Fallback Protection
+- [x] Clear `WS.OverlayTick` when foreground window is destroyed (prevents Tier 2 false positive on Z-order fallback after close)
+- [x] Clear `WS.OverlayTick` when previous window was minimized (prevents Tier 2 false positive on Z-order fallback after minimize)
+- [x] These two lightweight clears replace the old Guards #3 and #4 (~40 lines → ~6 lines)
+
+### 11e: Cleanup
+- [x] Remove `~LWin Up::` hotkey (was causing Win+key delays)
+- [x] Remove `Win+Shift+M` manual hotkey (user does not use it)
+- [x] Stale entry cleanup in `WS_CleanPrePending` timer for `WS.RecentCreated` (>10s) and `WS.RecentExes` (>10s)
+
+### Net Result
+- **7 guards → 2** (non-movable filter + taskbar cursor)
+- **5 tracking globals → 3** (dropped `WS_LastDestroyTick`; `WS.OverlayTick` and `WS.LastForegroundHwnd` retained for Tier 2)
+- **~125 lines of activation logic → ~55 lines**
+- **12+ individual globals → single `WS` object**
+- Positive intent detection instead of negative filtering
+
+### Testing
+- [ ] **Tier 1 test:** Launch Win32 single-instance app (Notepad++, Sublime) from Start menu while already open on another monitor → look for `INTENT (brief-process)` + `MOVED (activate)` in log
+- [ ] **Tier 2 test:** Launch UWP Settings from Start menu while already open on another monitor → look for `INTENT (overlay-launch)` + `MOVED (activate)` in log
+- [ ] **False positive tests:** Close window, minimize window, Alt+Tab, click taskbar, open/close Start menu without launching → all should show `SKIP (no-intent)` in log
 - [ ] Test across apps: Sublime Text, Explorer, VS Code, Terminal, UWP Settings, dialogs
+- [ ] Test Run dialog create-shell fix (owner-based sentinel) — look for `CREATE-SKIP-OWNER`
+
+## Remaining / Future
+- [ ] Remove diagnostic logging after confirming all fixes
 - [ ] Evaluate if any additional classes need exclusion based on testing
 - [ ] Consider per-app exclusion list if certain apps fight the move
 - [ ] Consider `TaskbarCreated` message handler to re-register hook after explorer.exe restart
+- [ ] Compare opacity approach vs `EVENT_OBJECT_LOCATIONCHANGE` snap-back (if needed)
+- [ ] Test edge cases: already-layered windows, rapid spawn/close, multi-monitor drag
