@@ -1,79 +1,218 @@
 ; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ; ┃ === EXTENDED WINDOW SPY === ┃
 ; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-; Description: Persistent tooltip showing window info (active + under cursor)
-; Click tooltip or press #w again to freeze and show dialog for copying
+; Description: Persistent tooltip showing window info under cursor
+; Press #w to cycle: tooltip → dialog (frozen snapshot) → close
 ; Forum link: https://autohotkey.com/boards/viewtopic.php?f=6&t=43544
 ; Author: @rodboev
-; Version: 1.0
+; Version: 1.1
 #w::
-  Gui, WindowSpy:Destroy  ; Close dialog if open
-  WindowSpyToggle := !WindowSpyToggle
-  If (WindowSpyToggle) {
-    WindowSpyLastContent := ""  ; Clear cache to force first update
+  ; Cycle: Off(0) → Tooltip(1) → Dialog(2) → Off(0)
+  If (WindowSpyState = 0) {
+    WindowSpyState := 1
+    WindowSpyLastContent := ""
     SetTimer, WindowSpyUpdate, 800
-    GoSub, WindowSpyUpdate  ; Immediate first update
-  } Else {
+    GoSub, WindowSpyUpdate
+  } Else If (WindowSpyState = 1) {
     SetTimer, WindowSpyUpdate, Off
     ToolTip
+    WindowSpyState := 2
+    WindowSpyShowDialog()
+  } Else {
+    Gui, WindowSpy:Destroy
+    WindowSpyState := 0
   }
 Return
 
 $Esc::
-  ; Close WindowSpy dialog if open
-  If WinExist("Window Spy (Esc to close)") {
+  If (WindowSpyState = 2) {
     Gui, WindowSpy:Destroy
+    WindowSpyState := 0
     Return
   }
-  ; Close WindowSpy tooltip if active
-  If (WindowSpyToggle) {
+  If (WindowSpyState = 1) {
     SetTimer, WindowSpyUpdate, Off
     ToolTip
-    WindowSpyToggle := false
+    WindowSpyState := 0
     Return
   }
-  ; Pass Esc through to active window
   Send {Esc}
 Return
 
 ~LButton::
-  If (WindowSpyToggle) {
+  If (WindowSpyState = 1) {
     MouseGetPos,,, clickWin
     WinGetClass, clickClass, ahk_id %clickWin%
     If (clickClass = "tooltips_class32") {
       SetTimer, WindowSpyUpdate, Off
       ToolTip
-      WindowSpyToggle := false
+      WindowSpyState := 2
       WindowSpyShowDialog()
     }
   }
 Return
 
 WindowSpyShowDialog() {
-  global WindowSpyRawInfo, WindowSpyEdit
-  If (WindowSpyRawInfo = "")
+  global WindowSpyDisplayInfo, WindowSpyEdit
+  If (WindowSpyDisplayInfo = "")
     Return
-  ToolTip  ; Destroy tooltip when showing dialog
+  ToolTip
   Gui, WindowSpy:Destroy
   SysGet, Workspace, MonitorWorkArea
-  ; Count lines and calculate max dimensions based on workspace
-  StringReplace, _, WindowSpyRawInfo, `n, `n, UseErrorLevel
+  ; Dimensions from display content (same wrapping as tooltip)
+  StringReplace, _, WindowSpyDisplayInfo, `n, `n, UseErrorLevel
   lineCount := ErrorLevel + 1
-  maxHeight := WorkspaceBottom - WorkspaceTop - 50  ; Leave margin for title bar
+  maxHeight := WorkspaceBottom - WorkspaceTop - 50
   rowHeight := 22  ; Consolas 9pt + Edit control internal padding
   maxRows := Floor(maxHeight / rowHeight)
   rowCount := Min(lineCount, maxRows)
-  editWidth := Min(700, WorkspaceRight - WorkspaceLeft - 100)
+  _maxLineLen := 0
+  Loop, Parse, WindowSpyDisplayInfo, `n
+  {
+    If (StrLen(A_LoopField) > _maxLineLen)
+      _maxLineLen := StrLen(A_LoopField)
+  }
+  editWidth := Min(_maxLineLen * 7 + 30, WorkspaceRight - WorkspaceLeft - 100)
   Gui, WindowSpy:+AlwaysOnTop +Owner
   Gui, WindowSpy:Font, s9, Consolas
-  Gui, WindowSpy:Add, Edit, vWindowSpyEdit w%editWidth% r%rowCount% +Multi +ReadOnly, %WindowSpyRawInfo%
+  Gui, WindowSpy:Add, Edit, vWindowSpyEdit w%editWidth% r%rowCount% +Multi +ReadOnly, %WindowSpyDisplayInfo%
   ; Show first to render and get dimensions, then reposition flush to bottom-right
-  Gui, WindowSpy:Show,, Window Spy (Esc to close)
+  Gui, WindowSpy:Show,, Window Spy (#w or Esc to close)
   WinGetPos,,, GUIWidth, GUIHeight, A
   xPos := WorkspaceRight - GUIWidth
   yPos := WorkspaceBottom - GUIHeight
   WinMove, A,, %xPos%, %yPos%
 }
+
+; Collect all window info into an object for the given hwnd
+CollectWindowInfo(hwnd) {
+  _wt := "ahk_id " . hwnd
+  info := {}
+  info.hwnd := hwnd
+  WinGetTitle, _title, %_wt%
+  info.title := _title
+  WinGetClass, _class, %_wt%
+  info.class := _class
+  WinGet, _pid, PID, %_wt%
+  info.pid := _pid
+  WinGetPos, _x, _y, _w, _h, %_wt%
+  info.x := _x
+  info.y := _y
+  info.w := _w
+  info.h := _h
+  WinGet, _style, Style, %_wt%
+  info.style := _style
+  WinGet, _exStyle, ExStyle, %_wt%
+  info.exStyle := _exStyle
+  info.exe := GetExePath("ahk_id " . hwnd)
+  info.mon := GetMonitor("ahk_id " . hwnd)
+  info.elevated := IsProcessElevated(_pid)
+  info.cmdLine := ""
+  For _proc in ComObjGet("winmgmts:").ExecQuery("Select CommandLine from Win32_Process where ProcessId=" . _pid)
+    info.cmdLine := _proc.CommandLine
+  WinGetText, _winText, %_wt%
+  WinGet, _ctlList, ControlList, %_wt%
+  ; Format controls: comma-separated, filter >80 chars, sort alphabetically
+  _ctlRaw := SortList(FilterLongItems(RegExReplace(_ctlList, "\r?\n", ", ")))
+  info.controlsDisplay := WrapList(_ctlRaw, ",")
+  ; Format window text: comma-separated, clean non-ASCII, filter >80 chars, dedupe if long
+  _wtRaw := RTrim(FilterLongItems(CleanWindowText(RegExReplace(_winText, "\r?\n", ", "))), ", ")
+  info.winTextDisplay := WrapList(_wtRaw, ",")
+  Return info
+}
+
+; Get UIA element properties at screen coordinates via ElementFromPoint
+; Returns {name, type, autoId, className} for the element under the cursor
+GetUIAElementInfo(x, y) {
+  global G_UIA
+  result := {name: "", type: "", autoId: "", className: ""}
+  Try {
+    If (!G_UIA)
+      G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
+    _el := 0
+    ; IUIAutomation::ElementFromPoint (vtable 7)
+    DllCall(NumGet(NumGet(G_UIA+0) + 7*A_PtrSize), "Ptr", G_UIA, "Int64", x | (y << 32), "Ptr*", _el)
+    If (!_el)
+      Return result
+    ; Read properties via GetCurrentPropertyValue (vtable 10)
+    result.name := _GetUIAProp(_el, 30005)          ; UIA_NamePropertyId
+    result.type := _GetUIAProp(_el, 30004)           ; UIA_LocalizedControlTypePropertyId
+    result.autoId := _GetUIAProp(_el, 30011)         ; UIA_AutomationIdPropertyId
+    result.className := _GetUIAProp(_el, 30012)      ; UIA_ClassNamePropertyId
+    ObjRelease(_el)
+  }
+  Return result
+}
+
+; Read a BSTR property from a UIA element via GetCurrentPropertyValue (vtable 10)
+_GetUIAProp(el, propId) {
+  VarSetCapacity(_var, 24, 0)
+  DllCall(NumGet(NumGet(el+0) + 10*A_PtrSize), "Ptr", el, "Int", propId, "Ptr", &_var)
+  _vt := NumGet(_var, 0, "UShort")
+  _val := ""
+  If (_vt = 8) {  ; VT_BSTR
+    _bstr := NumGet(_var, 8, "Ptr")
+    If (_bstr)
+      _val := StrGet(_bstr, "UTF-16")
+  }
+  DllCall("OleAut32\VariantClear", "Ptr", &_var)
+  Return _val
+}
+
+; Format info object into display string
+FormatWindowInfo(info) {
+  s := ""
+  ; Identity group
+  s .= "Title: " . info.title . "`n"
+  s .= "ahk_exe: " . info.exe.path . "`n"
+  s .= "ahk_class: " . info.class . "`n"
+  s .= "ahk_id: " . info.hwnd . "`n"
+  If (info.HasKey("pointHwnd"))
+    s .= "Window handle (hWnd): " . info.pointHwnd . "`n"
+  s .= "`n"
+  ; Path/Process group
+  s .= "Folder: " . info.exe.dir . "`n"
+  s .= "Process command line: " . WrapList(info.cmdLine, " ") . "`n"
+  s .= "Process ID: " . info.pid . (info.elevated ? " (Elevated)" : "") . "`n"
+  s .= "`n"
+  ; Geometry group
+  s .= "Position: (" . info.x . ", " . info.y . ")`n"
+  s .= "Monitor: " . info.mon . "`n"
+  s .= "Size: " . info.w . " x " . info.h . "`n"
+  s .= "Style: " . info.style . "`n"
+  s .= "ExStyle: " . info.exStyle . "`n"
+  If (info.HasKey("scrollPattern"))
+    s .= "ScrollPattern: " . info.scrollPattern . "`n"
+  ; UIA element at cursor
+  If (info.HasKey("uia") && (info.uia.type != "" || info.uia.name != "")) {
+    _uiaLine := "UIA: "
+    If (info.uia.type != "")
+      _uiaLine .= info.uia.type
+    If (info.uia.name != "")
+      _uiaLine .= (info.uia.type != "" ? " " : "") . """" . info.uia.name . """"
+    s .= _uiaLine . "`n"
+    If (info.uia.autoId != "")
+      s .= "  AutomationId: " . info.uia.autoId . "`n"
+    If (info.uia.className != "")
+      s .= "  ClassName: " . info.uia.className . "`n"
+  }
+  s .= "`n"
+  ; Focus/Control group
+  If (info.HasKey("focusedControl"))
+    s .= "Focused Control: " . info.focusedControl . (info.focusedHwnd != "" ? "`nhWnd: " . info.focusedHwnd : "") . "`n"
+  If (info.HasKey("activeFocus"))
+    s .= "Active Focus: " . info.activeFocus . (info.activeFocusHwnd != "" ? "`n  hWnd: " . info.activeFocusHwnd : "") . "`n"
+  If (info.HasKey("control"))
+    s .= "Control: " . info.control . "`n"
+  s .= "`n"
+  ; Window Text
+  s .= "Window Text: " . info.winTextDisplay . "`n"
+  s .= "`n"
+  ; Controls
+  s .= "Controls: " . info.controlsDisplay
+  Return s
+}
+
 
 ; Wrap list items at ~100 chars, preserving whole items
 ; Input: comma-separated string like "item1, item2, item3"
@@ -161,6 +300,7 @@ SortList(text) {
 WindowSpyGuiEscape:
 WindowSpyGuiClose:
   Gui, WindowSpy:Destroy
+  WindowSpyState := 0
 Return
 
 WindowSpyUpdate:
@@ -177,167 +317,53 @@ WindowSpyUpdate:
 
   DetectHiddenText, On
 
-  ; === ACTIVE WINDOW ===
-  WinGet, ActiveWin, ID, A
-  WinGetTitle, ActiveTitle, ahk_id %ActiveWin%
-  WinGetClass, ActiveClass, ahk_id %ActiveWin%
-  WinGet, ActivePID, PID, ahk_id %ActiveWin%
-  WinGetPos, ActiveX, ActiveY, ActiveW, ActiveH, ahk_id %ActiveWin%
-  WinGet, ActiveStyle, Style, ahk_id %ActiveWin%
-  WinGet, ActiveExStyle, ExStyle, ahk_id %ActiveWin%
-  ControlGetFocus, ActiveFocusedControl, ahk_id %ActiveWin%
-  ActiveFocusedHwnd := ""
-  If (ActiveFocusedControl != "")
-    ControlGet, ActiveFocusedHwnd, Hwnd,, %ActiveFocusedControl%, ahk_id %ActiveWin%
-  activeExe := GetExePath("ahk_id " ActiveWin)
-  activeMon := GetMonitor("ahk_id " ActiveWin)
-  activeElevated := IsProcessElevated(ActivePID)
-  activeCmdLine := ""
-  For process in ComObjGet("winmgmts:").ExecQuery("Select CommandLine from Win32_Process where ProcessId=" . ActivePID)
-    activeCmdLine := process.CommandLine
-  WinGetText, ActiveWinText, ahk_id %ActiveWin%
-  WinGet, ActiveControls, ControlList, ahk_id %ActiveWin%
+  ; UIA element at cursor position
+  _uia := GetUIAElementInfo(CursorX, CursorY)
 
-  ; Format controls: comma-separated, filter >80 chars, sort alphabetically
-  StringReplace, ActiveControlsRaw, ActiveControls, `r`n, `, , All
-  StringReplace, ActiveControlsRaw, ActiveControlsRaw, `n, `, , All
-  ActiveControlsRaw := SortList(FilterLongItems(ActiveControlsRaw))
-  ActiveControlsDisplay := WrapList(ActiveControlsRaw, ",")
-  ; Format window text: comma-separated, clean non-ASCII, filter >80 chars, dedupe if long
-  StringReplace, ActiveWinTextRaw, ActiveWinText, `r`n, `, , All
-  StringReplace, ActiveWinTextRaw, ActiveWinTextRaw, `n, `, , All
-  ActiveWinTextRaw := RTrim(FilterLongItems(CleanWindowText(ActiveWinTextRaw)), ", ")
-  ActiveWinTextDisplay := WrapList(ActiveWinTextRaw, ",")
+  WinGet, activeHwnd, ID, A
+  sameWindow := (activeHwnd + 0 = CursorWin + 0)
 
-  ; UIA for active window - just show persistent object reference
-  ActiveUIA_Info := ""
-  Try {
-    global G_UIA
-    If (!G_UIA)
-      G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
-    ActiveUIA_Info := "UIA: " G_UIA
-  } catch e {
-    ActiveUIA_Info := "UIA: EXCEPTION - " e.Message
+  ; Active-window fields (always from the active window)
+  ControlGetFocus, _fc, % "ahk_id " . activeHwnd
+  _fh := ""
+  If (_fc != "")
+    ControlGet, _fh, Hwnd,, %_fc%, % "ahk_id " . activeHwnd
+
+  If (sameWindow) {
+    ; Same window — single collection with all fields merged
+    info := CollectWindowInfo(CursorWin)
+    info.pointHwnd := DllCall("WindowFromPoint", "int64", CursorX | (CursorY << 32), "Ptr")
+    info.control := ClassNN
+    info.focusedControl := _fc
+    info.focusedHwnd := _fh
+    info.scrollPattern := MB_ScrollPattern
+    info.uia := _uia
+    display := FormatWindowInfo(info)
+  } Else {
+    ; Different windows — cursor primary, inline active-only info
+    info := CollectWindowInfo(CursorWin)
+    info.pointHwnd := DllCall("WindowFromPoint", "int64", CursorX | (CursorY << 32), "Ptr")
+    info.control := ClassNN
+    info.scrollPattern := MB_ScrollPattern
+    info.uia := _uia
+    If (_fc != "") {
+      info.activeFocus := _fc
+      info.activeFocusHwnd := _fh
+    }
+    display := FormatWindowInfo(info)
   }
 
-  ; Build wrapped version for tooltip
-  ActiveInfo := "=== ACTIVE WINDOW ===`n"
-  ActiveInfo .= "Title: " ActiveTitle "`n"
-  ActiveInfo .= "ahk_id: " ActiveWin " | ahk_class: " ActiveClass "`n"
-  ActiveInfo .= "ahk_exe: " activeExe.path "`n"
-  ActiveInfo .= "Dir: " activeExe.dir "`n"
-  ActiveInfo .= "CmdLine: " WrapList(activeCmdLine, " ") "`n"
-  ActiveInfo .= "PID: " ActivePID (activeElevated ? " (Elevated)" : "") " | Monitor: " activeMon "`n"
-  ActiveInfo .= "Pos: (" ActiveX ", " ActiveY ") | Size: " ActiveW " x " ActiveH "`n"
-  ActiveInfo .= "Style: " ActiveStyle " | ExStyle: " ActiveExStyle "`n"
-  ActiveInfo .= "ScrollPattern: " MB_ScrollPattern "`n"
-  ActiveInfo .= "Focused Control: " ActiveFocusedControl (ActiveFocusedHwnd ? " | hWnd: " ActiveFocusedHwnd : "") "`n"
-  ActiveInfo .= ActiveUIA_Info "`n"
-  ActiveInfo .= "Window Text: " ActiveWinTextDisplay "`n"
-  ActiveInfo .= "Controls: " ActiveControlsDisplay "`n"
-
-  ; Build raw version for dialog
-  ActiveInfoRaw := "=== ACTIVE WINDOW ===`n"
-  ActiveInfoRaw .= "Title: " ActiveTitle "`n"
-  ActiveInfoRaw .= "ahk_id: " ActiveWin " | ahk_class: " ActiveClass "`n"
-  ActiveInfoRaw .= "ahk_exe: " activeExe.path "`n"
-  ActiveInfoRaw .= "Dir: " activeExe.dir "`n"
-  ActiveInfoRaw .= "CmdLine: " activeCmdLine "`n"
-  ActiveInfoRaw .= "PID: " ActivePID (activeElevated ? " (Elevated)" : "") " | Monitor: " activeMon "`n"
-  ActiveInfoRaw .= "Pos: (" ActiveX ", " ActiveY ") | Size: " ActiveW " x " ActiveH "`n"
-  ActiveInfoRaw .= "Style: " ActiveStyle " | ExStyle: " ActiveExStyle "`n"
-  ActiveInfoRaw .= "Focused Control: " ActiveFocusedControl (ActiveFocusedHwnd ? " | hWnd: " ActiveFocusedHwnd : "") "`n"
-  ActiveInfoRaw .= ActiveUIA_Info "`n"
-  ActiveInfoRaw .= "Window Text: " ActiveWinTextRaw "`n"
-  ActiveInfoRaw .= "Controls: " ActiveControlsRaw "`n"
-
-  ; === WINDOW UNDER CURSOR ===
-  WinGetTitle, CursorTitle, ahk_id %CursorWin%
-  WinGetClass, CursorClass, ahk_id %CursorWin%
-  WinGet, CursorPID, PID, ahk_id %CursorWin%
-  WinGetPos, CursorWinX, CursorWinY, CursorWinW, CursorWinH, ahk_id %CursorWin%
-  WinGet, CursorStyle, Style, ahk_id %CursorWin%
-  WinGet, CursorExStyle, ExStyle, ahk_id %CursorWin%
-  cursorExe := GetExePath("ahk_id " CursorWin)
-  cursorMon := GetMonitor("ahk_id " CursorWin)
-  cursorElevated := IsProcessElevated(CursorPID)
-  CursorHwnd := DllCall("WindowFromPoint", "int64", CursorX | (CursorY << 32), "Ptr")
-  cursorCmdLine := ""
-  For process in ComObjGet("winmgmts:").ExecQuery("Select CommandLine from Win32_Process where ProcessId=" . CursorPID)
-    cursorCmdLine := process.CommandLine
-  WinGetText, CursorWinText, ahk_id %CursorWin%
-  WinGet, CursorControls, ControlList, ahk_id %CursorWin%
-
-  ; Format controls: comma-separated, filter >80 chars, sort alphabetically
-  StringReplace, CursorControlsRaw, CursorControls, `r`n, `, , All
-  StringReplace, CursorControlsRaw, CursorControlsRaw, `n, `, , All
-  CursorControlsRaw := SortList(FilterLongItems(CursorControlsRaw))
-  CursorControlsDisplay := WrapList(CursorControlsRaw, ",")
-  ; Format window text: comma-separated, clean non-ASCII, filter >80 chars, dedupe if long
-  StringReplace, CursorWinTextRaw, CursorWinText, `r`n, `, , All
-  StringReplace, CursorWinTextRaw, CursorWinTextRaw, `n, `, , All
-  CursorWinTextRaw := RTrim(FilterLongItems(CleanWindowText(CursorWinTextRaw)), ", ")
-  CursorWinTextDisplay := WrapList(CursorWinTextRaw, ",")
-
-  ; Cursor position relative to window
-  CursorRelX := CursorX - CursorWinX
-  CursorRelY := CursorY - CursorWinY
-
-  ; UIA Element Info - just show if UIA is available
-  UIA_Info := ""
-  Try {
-    global G_UIA
-    If (!G_UIA)
-      G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
-    UIA_Info := "UIA: " G_UIA
-  } catch e {
-    UIA_Info := "UIA: EXCEPTION - " e.Message
-  }
-
-  ; Build wrapped version for tooltip
-  CursorInfo := "`n=== UNDER CURSOR ===`n"
-  CursorInfo .= "Title: " CursorTitle "`n"
-  CursorInfo .= "ahk_id: " CursorWin " | ahk_class: " CursorClass "`n"
-  CursorInfo .= "ahk_exe: " cursorExe.path "`n"
-  CursorInfo .= "Dir: " cursorExe.dir "`n"
-  CursorInfo .= "CmdLine: " WrapList(cursorCmdLine, " ") "`n"
-  CursorInfo .= "PID: " CursorPID (cursorElevated ? " (Elevated)" : "") " | Monitor: " cursorMon "`n"
-  CursorInfo .= "Pos: (" CursorWinX ", " CursorWinY ") | Size: " CursorWinW " x " CursorWinH "`n"
-  CursorInfo .= "Style: " CursorStyle " | ExStyle: " CursorExStyle "`n"
-  CursorInfo .= "Control: " ClassNN " | hWnd: " CursorHwnd "`n"
-  ; CursorInfo .= "Cursor: (" CursorX ", " CursorY ") | CursorRel: (" CursorRelX ", " CursorRelY ")`n"
-  CursorInfo .= UIA_Info "`n"
-  CursorInfo .= "Window Text: " CursorWinTextDisplay "`n"
-  CursorInfo .= "Controls: " CursorControlsDisplay
-
-  ; Build raw version for dialog
-  CursorInfoRaw := "`n=== UNDER CURSOR ===`n"
-  CursorInfoRaw .= "Title: " CursorTitle "`n"
-  CursorInfoRaw .= "ahk_id: " CursorWin " | ahk_class: " CursorClass "`n"
-  CursorInfoRaw .= "ahk_exe: " cursorExe.path "`n"
-  CursorInfoRaw .= "Dir: " cursorExe.dir "`n"
-  CursorInfoRaw .= "CmdLine: " cursorCmdLine "`n"
-  CursorInfoRaw .= "PID: " CursorPID (cursorElevated ? " (Elevated)" : "") " | Monitor: " cursorMon "`n"
-  CursorInfoRaw .= "Pos: (" CursorWinX ", " CursorWinY ") | Size: " CursorWinW " x " CursorWinH "`n"
-  CursorInfoRaw .= "Style: " CursorStyle " | ExStyle: " CursorExStyle "`n"
-  CursorInfoRaw .= "Control: " ClassNN " | hWnd: " CursorHwnd "`n"
-  ; CursorInfoRaw .= "Cursor: (" CursorX ", " CursorY ") | CursorRel: (" CursorRelX ", " CursorRelY ")`n"
-  CursorInfoRaw .= UIA_Info "`n"
-  CursorInfoRaw .= "Window Text: " CursorWinTextRaw "`n"
-  CursorInfoRaw .= "Controls: " CursorControlsRaw
-
-  ; Store for tooltip and dialog
-  global WindowSpyRawInfo, WindowSpyLastContent
-  WindowSpyRawInfo := ActiveInfoRaw . CursorInfoRaw
+  ; Store for dialog (frozen snapshot)
+  global WindowSpyDisplayInfo, WindowSpyLastContent
+  WindowSpyDisplayInfo := display
 
   ; Only update tooltip if content changed (reduces flicker)
-  newContent := ActiveInfo . CursorInfo
-  If (newContent = WindowSpyLastContent)
+  If (display = WindowSpyLastContent)
     Return
-  WindowSpyLastContent := newContent
+  WindowSpyLastContent := display
 
   ; Position tooltip in bottom-right corner
   SysGet, Workspace, MonitorWorkArea
-  tooltipHeader := "Window Spy (Click to copy, Esc or #w to close)`n`n"
-  ToolTip, %tooltipHeader%%newContent%, WorkspaceRight - 550, WorkspaceBottom - 620
+  tooltipHeader := "Window Spy (#w to freeze, Esc to close)`n`n"
+  ToolTip, %tooltipHeader%%display%, WorkspaceRight - 550, WorkspaceBottom - 620
 Return

@@ -234,7 +234,7 @@ Return
 
 
 ; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-; ┃ === PROCESS MANAGEMENT / PRIVELEGE ESCALATION === ┃
+; ┃ === PROCESS MANAGEMENT / PRIVILEGE ESCALATION === ┃
 ; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 ; [ Ctrl+Shift+` ] -> Open System Informer as SYSTEM with TI privileges
 ^+`::UserRun("elevate", "ti", "c:\Program Files\SystemInformer\SystemInformer.exe")

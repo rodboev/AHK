@@ -5,6 +5,9 @@
     ],
     "deny": [
       "Read(./includes/**)"
+    ],
+    "additionalDirectories": [
+      "c:\\Dropbox\\Projects\\AHK\\.claude"
     ]
   }
 }
