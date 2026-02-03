@@ -5,7 +5,7 @@
       "Bash(gemini:*)"
     ],
     "deny": [
-      "Read(./includes/**)"
+      "Read(./community-scripts/**)"
     ],
     "additionalDirectories": [
       "c:\\Dropbox\\Projects\\AHK\\.claude"
