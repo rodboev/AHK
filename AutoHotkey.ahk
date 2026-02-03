@@ -471,7 +471,8 @@ UserRun(Executable, Args*) {
 
   ; Run from Explorer For cleaner process trees
   If (needsPowerShell) {
-    quotedExe := InStr(Executable, " ") ? "'" Executable "'" : Executable
+    _safeExe := StrReplace(Executable, "'", "''")
+    quotedExe := InStr(Executable, " ") ? "'" _safeExe "'" : _safeExe
     psCmd := "& " quotedExe
     Loop % Args.Length() {
       arg := Args[A_Index]
@@ -479,11 +480,13 @@ UserRun(Executable, Args*) {
       If RegExMatch(arg, "(?i)^\s*-d\s+(.+)$", m) {
         rawPath := m1
         expanded := RegExReplace(rawPath, "(?i)%(.*?)%", "$env:$1")
-        path := (InStr(expanded, " ") ? "'" expanded "'" : expanded)
+        _safePath := StrReplace(expanded, "'", "''")
+        path := (InStr(expanded, " ") ? "'" _safePath "'" : _safePath)
         psCmd .= " -d " path
       } Else {
         expanded := RegExReplace(arg, "(?i)%(.*?)%", "$env:$1")
-        quotedArg := (InStr(expanded, " ") ? "'" expanded "'" : expanded)
+        _safeArg := StrReplace(expanded, "'", "''")
+        quotedArg := (InStr(expanded, " ") ? "'" _safeArg "'" : _safeArg)
         psCmd .= " " quotedArg
       }
     }
@@ -504,7 +507,9 @@ UserRun(Executable, Args*) {
     }
     If (elevate) {
       ; Use PowerShell Start-Process For elevation
-      full := "RunFromProcess-x64 explorer.exe conhost.exe --headless powershell -NoProfile -Command ""Start-Process '" Executable "' -ArgumentList '" argStr "' -Verb RunAs -WindowStyle Hidden"""
+      _safeExe2 := StrReplace(Executable, "'", "''")
+      _safeArgs2 := StrReplace(argStr, "'", "''")
+      full := "RunFromProcess-x64 explorer.exe conhost.exe --headless powershell -NoProfile -Command ""Start-Process '" _safeExe2 "' -ArgumentList '" _safeArgs2 "' -Verb RunAs -WindowStyle Hidden"""
     } Else {
       full := "RunFromProcess-x64 explorer.exe " Executable argStr
     }

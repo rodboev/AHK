@@ -9,6 +9,7 @@
 ; Version: 3.0
 
 MB_Debug := 0 ; MButton scroll debug tooltips (0=off, 1=on)
+OnExit("MB_Cleanup")
 
 ; Get vertical scroll position for a control (cross-process safe)
 GetScrollPos(hwnd) {
@@ -402,3 +403,20 @@ $*MButton Up::
     SendInput, {Blind}{MButton Up}
   }
 Return
+
+MB_Cleanup() {
+  global MB_ScrollPattern, MB_Element, G_UIA
+  SetTimer, MBScrollTimer, Off
+  If (MB_ScrollPattern) {
+    ObjRelease(MB_ScrollPattern)
+    MB_ScrollPattern := 0
+  }
+  If (MB_Element) {
+    ObjRelease(MB_Element)
+    MB_Element := 0
+  }
+  If (G_UIA) {
+    ObjRelease(G_UIA)
+    G_UIA := 0
+  }
+}

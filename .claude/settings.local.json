@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Read(//tmp/**)"
+      "Read(//tmp/**)",
+      "Bash(gemini:*)"
     ],
     "deny": [
       "Read(./includes/**)"
