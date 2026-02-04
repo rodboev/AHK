@@ -237,10 +237,10 @@ Return
 ; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ; ┃ === PROCESS MANAGEMENT / PRIVILEGE ESCALATION === ┃
 ; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-; [ Ctrl+Shift+` ] -> Open System Informer as SYSTEM with TI privileges
+; [ Ctrl + Shift + ` ] -> Open System Informer as SYSTEM with TI privileges
 ^+`::UserRun("elevate", "ti", "c:\Program Files\SystemInformer\SystemInformer.exe")
 
-; [ Win+Shift+E ] -> Alternate Explorer app in case of issues after Windows updates
+; [ Win + Shift + E ] -> Alternate Explorer app in case of issues after Windows updates
 #+e::
   WinGetClass, ahk_class, A
   path := GetExplorerPath()
@@ -258,7 +258,7 @@ Return
   }
 Return
 
-; Win+C: Copy command line of active window to clipboard
+; Win + C: Copy command line of active window to clipboard
 #c::
   cmdLine := GetActiveWindowCommandLine()
   If (cmdLine && cmdLine != "") {
@@ -280,23 +280,26 @@ Return
   }
 Return
 
-; Ctrl+Shift+Plus: Relaunch active window with TrustedInstaller (NT AUTHORITY/SYSTEM) privileges
+; Ctrl + Shift + Plus: Relaunch active window with TrustedInstaller (NT AUTHORITY/SYSTEM) privileges
 ^+=::
   WinGet, activePid, PID, A
-  WinGet, activeExe, ProcessName, A
   exe := GetExePath()
+  cmdLine := GetActiveWindowCommandLine(activePid)
 
-  If (exe.path) {
-    fullCmd := "ti.exe """ . exe.path . """"
-    MsgBox, 4, Command to run, %fullCmd%`n`nClick Yes to run, No to cancel
+  If (cmdLine && cmdLine != ".") {
+    ; Resolve exe to full path — SYSTEM context (ti.exe) lacks user PATH entries
+    If (exe.path)
+      cmdLine := RegExReplace(cmdLine, "^(""[^""]*""|\S+)", """" . exe.path . """")
+    fullCmd := "ti.exe " . cmdLine
+    MsgBox, 4, Command to run (PID %activePid%), %fullCmd%`n`nClick Yes to run, No to cancel
     IfMsgBox Yes
     {
       ; Store the original path for comparison
       originalPath := exe.path
-      
+
       ; Run the elevated command
       Run, %fullCmd%
-      
+
       ; Wait for new process to appear (up to 250ms)
       startTime := A_TickCount, newProcessFound := false
       While (!newProcessFound && A_TickCount - startTime <= 250) {
@@ -305,7 +308,7 @@ Return
             Break
         Sleep, 50
       }
-      
+
       ; If no new process appeared, close the original app and try again
       If (!newProcessFound) {
         WinClose, ahk_pid %activePid%
@@ -333,14 +336,6 @@ HasVal(arr, val) {
     For i, v in arr
         If (InStr(val, v))
             Return true
-    Return false
-}
-
-; ⇒ Check if string is a path
-isPath(str) {
-  If RegExMatch(str, "^[A-Za-z]:\\.*")
-    Return true
-  Else
     Return false
 }
 
@@ -415,17 +410,17 @@ GetCursorMonitor() {
   Return 1
 }
 
-; ⇒ Get CmdLine for any active window (for elevation)
-GetActiveWindowCommandLine() {
-  WinGet, pid, PID, A
-  WinGet, activeExe, ProcessName, A
-  
+; ⇒ Get CmdLine for a window (by PID, or active window if omitted)
+GetActiveWindowCommandLine(pid := "") {
+  If (pid = "")
+    WinGet, pid, PID, A
+
   If (pid) {
     ; Get command line using WMI
     cmdLine := ""
     For process in ComObjGet("winmgmts:").ExecQuery("Select CommandLine from Win32_Process where ProcessId=" . pid)
       cmdLine := process.CommandLine
-    
+
     If (cmdLine)
       Return cmdLine
     exe := GetExePath()
@@ -492,7 +487,9 @@ UserRun(Executable, Args*) {
       }
     }
     If (elevate) {
-      full := "RunFromProcess-x64 explorer.exe conhost.exe --headless powershell -NoProfile -Command ""Start-Process powershell -ArgumentList '-NoProfile -Command " psCmd "' -Verb RunAs -WindowStyle Hidden"""
+      ; Escape single quotes for embedding psCmd inside -ArgumentList '...'
+      _psCmdEsc := StrReplace(psCmd, "'", "''")
+      full := "RunFromProcess-x64 explorer.exe conhost.exe --headless powershell -NoProfile -Command ""Start-Process powershell -ArgumentList '-NoProfile -Command " _psCmdEsc "' -Verb RunAs -WindowStyle Hidden"""
     } Else {
       full := "RunFromProcess-x64 explorer.exe conhost.exe --headless powershell -NoProfile -Command """ psCmd """"
     }
@@ -542,9 +539,9 @@ Return
 ; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ; ┃ WINDOWS TERMINAL FROM ANYWHERE ┃
 ; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-; [ F10 ] -> Open Windows Terminal in current Explorer path
-; [ Shift+F10 ] -> Open with admin rights
-; [ Ctrl+Alt+Shift+F10 ] -> Open Windows Terminal with SYSTEM rights
+; [ F10 ] -> Open Windows Terminal as user in current active window path
+; [ Shift + F10] -> Open with admin rights
+; [ Ctrl + Alt + Shift + F10] -> Open with SYSTEM rights (edit any reg key!)
 F10::
   WinGetClass, ahk_class, A
   path := GetExplorerPath()
@@ -578,13 +575,26 @@ Return
   path := GetExplorerPath()
 
   If (ahk_class = "Progman")
-    UserRun("elevate", "ti", "wt", "-d " . A_Desktop)
+    _tiDir := A_Desktop
   Else If (ahk_class = "CabinetWClass" && path != "")
-    UserRun("elevate", "ti", "wt", "-d " . path)
+    _tiDir := path
   Else {
     exe := GetExePath()
-    UserRun("elevate", "ti", "wt", "-d " . (exe.dir ? exe.dir : A_UserProfile))
+    _tiDir := (exe.dir ? exe.dir : A_UserProfile)
   }
+  ; Resolve wt.exe to full path — SYSTEM context lacks user PATH entries
+  _wtPath := FindInPath("wt.exe")
+  If (!_wtPath) {
+    MsgBox, 16, TI Elevation, wt.exe not found in PATH
+    Return
+  }
+  ; Confirm before SYSTEM elevation — ti.exe needs admin via UserRun("elevate", ...)
+  _tiCmd := "ti " . _wtPath . " -d " . _tiDir
+  _displayCmd := StrReplace(_tiCmd, "&", "&&")
+  MsgBox, 4, TI Elevation, % "Constructed command:`n`n" . _displayCmd . "`n`nClick Yes to run, No to cancel"
+  IfMsgBox No
+    Return
+  UserRun("elevate", "ti", _wtPath, "-d " . _tiDir)
 Return
 
 ; === Module Includes ===

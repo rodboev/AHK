@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Language Requirement
 
-**AutoHotkey v1.1** — This codebase uses AHK v1.1 syntax exclusively. Do NOT use v2.0 syntax. Key differences:
+**AutoHotkey v1.1.14+** — This codebase uses AHK v1.1 syntax exclusively, with `#Requires AutoHotkey v1.1.14+` enforced. Do NOT use v2.0 syntax. Key differences:
 - Commands use `Command, Param1, Param2` syntax (not function calls)
 - Variables use `%var%` for dereferencing in commands
 - Legacy `#IfWinActive` directives (not `#HotIf`)
+- `Try/Finally` blocks are available (added in v1.1.14)
 
 ## Architecture
 
@@ -20,22 +21,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `mbutton-scroll.ahk` | MButton smooth scroll (hotkeys, timer, scroll methods) |
 | `window-spawning.ahk` | Shell hook window spawning (WS_Init, hooks, move logic, Alt+Tab) |
 
-The `includes/` directory contains reference libraries (loosely coupled, mostly for inspiration).
+The `community-scripts/` directory contains reference libraries (loosely coupled, mostly for inspiration).
 
 ### Key Regions in AutoHotkey.ahk
-- **Lines 1-25**: Configuration directives, remote session guard, `WS_Init()` call
-- **Lines 27-233**: Bindings/remaps (script control, editor-specific, global hotkeys, scroll accel)
-- **Lines 236-320**: Process management / privilege escalation hotkeys
-- **Lines 322-443**: Helper functions (`GetExePath`, `GetMonitor`, `HasVal`, `FindInPath`, etc.)
-- **Lines 445-535**: `UserRun()` + `IsProcessElevated()` (safe run / elevation)
-- **Lines 540-588**: Windows Terminal and elevation hotkeys (F10 variants)
-- **Lines 589-591**: `#Include` directives for module files
+- **Lines 1-26**: Configuration directives (`#Requires`, `#SingleInstance`, etc.), remote session guard, `WS_Init()` call
+- **Lines 28-234**: Bindings/remaps (script control, editor-specific, global hotkeys, scroll accel)
+- **Lines 237-324**: Process management / privilege escalation hotkeys
+- **Lines 326-439**: Helper functions (`GetExePath`, `GetMonitor`, `HasVal`, `FindInPath`, etc.)
+- **Lines 441-533**: `UserRun()` + `IsProcessElevated()` (safe run / elevation)
+- **Lines 539-598**: Windows Terminal and elevation hotkeys (F10 variants)
+- **Lines 600-603**: `#Include` directives for module files
 
 ### Core Features
 1. **Explorer Smooth Scroll** (`MButton + drag`) — 4-method system: UIA, WHEEL, WHEEL_CTRL, VSCROLL — in `mbutton-scroll.ahk`
 2. **Window Spawning** — Shell hook + WinEvent hooks move new windows to cursor's monitor — in `window-spawning.ahk`
 3. **Extended Window Spy** (`Win+W`) — Persistent tooltip with window/control info — in `extended-spy.ahk`
-4. **Terminal/Elevation** (`F10`, `Shift+F10`, `Ctrl+Shift+F10`) — Context-aware terminal launching
+4. **Terminal/Elevation** (`F10`, `Shift+F10`, `Ctrl+Alt+Shift+F10`, `Ctrl+Shift+Plus`) — Context-aware terminal launching and privilege escalation
 
 ## Running & Debugging
 
@@ -85,10 +86,39 @@ Return
 
 **Why both:** `Critical` in the timer prevents the hotkey from interrupting mid-DllCall. `Critical` in the hotkey prevents a queued timer tick from firing between `SetTimer, Off` and the `ObjRelease`. The null guard catches the edge case of a timer tick already queued in the message loop.
 
+### COM Resource Cleanup with Try/Finally
+
+When acquiring COM pointers (UIA elements, ScrollPatterns), always release in a `Finally` block to prevent leaks if property reads throw (e.g., stale element from closed window):
+
+```autohotkey
+; ✅ CORRECT - Guaranteed cleanup even on access violation
+Try {
+  result.name := _GetUIAProp(_el, 30005)
+  result.type := _GetUIAProp(_el, 30004)
+} Finally {
+  ObjRelease(_el)
+}
+
+; ❌ RISKY - Exception skips ObjRelease, leaking COM reference
+Try {
+  result.name := _GetUIAProp(_el, 30005)
+  result.type := _GetUIAProp(_el, 30004)
+}
+ObjRelease(_el)
+```
+
+**Why:** `_el` may point to a destroyed UI element (e.g., mouse moved over a closing window). Dereferencing a stale vtable pointer causes an access violation, which AHK catches as a thrown exception — skipping any code after the `Try` block.
+
 ### UserRun Helper
 Use `UserRun(Executable, Args*)` for all process execution—handles elevation, env var expansion, and PowerShell argument parsing consistently.
 
-**Argument quoting**: All arguments are unconditionally quoted — single-quoted in PowerShell paths (with `'` escaped as `''`), double-quoted in direct execution paths. This prevents command injection via metacharacters (`&`, `;`, `$`, `|`) regardless of whether the argument contains spaces.
+**Argument quoting**: All arguments are unconditionally quoted — single-quoted in PowerShell paths (with `'` escaped as `''`), double-quoted in direct execution paths. The executable path is also quoted in the direct execution branch. This prevents command injection via metacharacters (`&`, `;`, `$`, `|`) regardless of whether the argument contains spaces.
+
+**Shell operators**: `UserRun` is a single-executable runner. Shell operators like `&&`, `||`, `|` are not interpreted. To chain commands, route through `cmd`: `UserRun("cmd", "/c", "command1 && command2")`.
+
+**Elevated quoting (CRITICAL)**: The PowerShell elevated path wraps `psCmd` inside `-ArgumentList '...'` (single-quoted). Since `psCmd` itself contains single-quoted arguments, the inner quotes MUST be escaped (`'` → `''`) before embedding. Without this, inner `'wt'` terminates the outer `-ArgumentList` string early, silently breaking the command.
+
+**SYSTEM PATH resolution (CRITICAL)**: When `ti.exe` runs a command as `NT AUTHORITY\SYSTEM`, the SYSTEM account's PATH is minimal (`%SystemRoot%\system32` and a few others) — user-installed programs like Windows Terminal are not included. Any executable passed to `ti.exe` must be resolved to its **full absolute path** before launching. Use `FindInPath()` (which runs in AHK's admin context with the user's full PATH) or `GetExePath()` + regex replacement on WMI command lines to resolve short names like `wt` to their full paths (e.g., `C:\Program Files\WindowsTerminalPreview\wt.exe`).
 
 ### Message Synthesis
 Scroll methods use `PostMessage`/`SendMessage` for WM_MOUSEWHEEL (0x20A), WM_VSCROLL (0x115). UIA uses COM `SetScrollPercent`.
@@ -147,7 +177,9 @@ No automated tests. Manual verification required:
 2. **Window spawning**: Open a new window — should appear on cursor's monitor
 3. **Window Spy**: Press `Win+W`, hover different windows, click tooltip to copy
 4. **Terminal hotkeys**: Test `F10` from Explorer, Desktop, and applications
-5. **Alt+Tab**: Press `Alt+Tab` — switcher should appear on cursor's monitor
+5. **TI elevation**: `Ctrl+Alt+Shift+F10` → MsgBox with full wt.exe path → Terminal opens as SYSTEM
+6. **TI relaunch**: Focus any app → `Ctrl+Shift+Plus` → MsgBox with full exe path → relaunches as SYSTEM
+7. **Alt+Tab**: Press `Alt+Tab` — switcher should appear on cursor's monitor
 
 ## Key Helper Functions
 
@@ -157,9 +189,10 @@ No automated tests. Manual verification required:
 | `GetMonitor(winTitle)` | `AutoHotkey.ahk` | Returns 1-based monitor number |
 | `GetCursorMonitor()` | `AutoHotkey.ahk` | Returns 1-based monitor index for cursor |
 | `IsProcessElevated(pid)` | `AutoHotkey.ahk` | Checks admin privileges via token |
-| `UserRun(exe, args*)` | `AutoHotkey.ahk` | Smart process execution with elevation |
+| `UserRun(exe, args*)` | `AutoHotkey.ahk` | Smart process execution with elevation and quoting |
 | `HasVal(arr, val)` | `AutoHotkey.ahk` | Check if array contains value (partial match) |
 | `ProcessExistsByCommandLine(cmdLine)` | `AutoHotkey.ahk` | Find PID by command line match via WMI |
+| `GetUIAElementInfo(x, y)` | `extended-spy.ahk` | UIA element properties at screen coordinates |
 | `GetScrollPos(hwnd)` | `mbutton-scroll.ahk` | Win32 vertical scroll position |
 | `HasWin32Scrollbar(hwnd)` | `mbutton-scroll.ahk` | Checks if Win32 scrollbar exists |
 | `WrapList(text, delim, maxLen)` | `extended-spy.ahk` | Wraps delimited text preserving items |
@@ -248,12 +281,14 @@ No hardcoded app exclusion list is needed. Only excluded **controls** (toolbars,
 
 Persistent tooltip showing Active Window + Window Under Cursor info. Toggled with `Win+W`.
 
+- `#w` is always global (unconditional toggle); `Esc` and `LButton` are scoped with `#If WindowSpyState` (only active while spy is running)
 - 800ms update interval with content-change detection (reduces flicker)
 - Hover-to-pause: hovering over tooltip pauses updates
 - Click tooltip to open dialog for copying text
-- Dialog auto-sizes to fit content, positions flush to bottom-right corner
+- Dialog auto-sizes to fit content, positions flush to bottom-right of cursor's monitor (uses `GetCursorMonitor()`)
+- UIA element info retrieved via `ElementFromPoint` with `Try/Finally` for guaranteed `ObjRelease` on stale pointers
 - Controls sorted alphabetically, items >80 chars filtered out
-- Comprehensive info: title, ahk_id, ahk_class, ahk_exe, dir, cmdline, PID (elevated indicator), monitor, pos, size, style, exstyle, focused control with hWnd, UIA pointer, window text, controls
+- Comprehensive info: title, ahk_id, ahk_class, ahk_exe, dir, cmdline, PID (elevated indicator), monitor, pos, size, style, exstyle, focused control with hWnd, UIA element (type, name, AutomationId, ClassName), window text, controls
 
 ---
 

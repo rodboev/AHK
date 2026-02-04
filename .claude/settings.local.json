@@ -2,7 +2,18 @@
   "permissions": {
     "allow": [
       "Read(//tmp/**)",
-      "Bash(gemini:*)"
+      "Bash(gemini:*)",
+      "Bash(powershell:*)",
+      "Bash(cmd.exe /c \"C:\\\\Users\\\\Rod\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\scratchpad\\\\test_pipeline.cmd\")",
+      "Bash(cmd.exe /c \"if exist %TEMP%\\\\pscmdesc_pipeline_test.txt \\(type %TEMP%\\\\pscmdesc_pipeline_test.txt\\) else \\(echo FILE_NOT_FOUND\\)\")",
+      "Bash(cmd.exe:*)",
+      "Bash(for:*)",
+      "Bash(do echo -n \"$f: \")",
+      "Bash(if [ -f \"C:\\\\Users\\\\Rod\\\\AppData\\\\Local\\\\Temp\\\\$f\" ])",
+      "Bash(then cat \"C:\\\\Users\\\\Rod\\\\AppData\\\\Local\\\\Temp\\\\$f\")",
+      "Bash(else echo \"NOT FOUND\")",
+      "Bash(fi)",
+      "Bash(done)"
     ],
     "deny": [
       "Read(./community-scripts/**)"

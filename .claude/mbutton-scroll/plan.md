@@ -7,7 +7,7 @@ Replace the whitelist-based app selection with a **default-on model**: MButton s
 Currently, `ShouldScroll` requires apps to be in `MB_EnabledApps` OR match content heuristics. Phase 5 inverts this: all apps get custom scroll unless explicitly excluded.
 
 ## File Modified
-- `AutoHotkey.ahk` — lines 1053-1065 (ShouldScroll logic) and 1089-1119 (method selection)
+- `mbutton-scroll.ahk` (formerly inline in `AutoHotkey.ahk`)
 
 ---
 

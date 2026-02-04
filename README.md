@@ -9,22 +9,17 @@
 <br />
 
 ```asciidoc
- ┏━━━━━━━━━━━━━━━━━━━━━━━━┓
- ┃ EXPLORER SMOOTH SCROLL ┃
- ┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+ ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+ ┃ MIDDLE-BUTTON SMOOTH-SCROLL ┃
+ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
- [ MButton + drag ] -> Scroll like a king (or in Chrome)
+ [ MButton + drag ] -> Invoke smooth scrolling on any app; release to stop.
 ```
 <br />
 
-- Super-smooth fractional scrolling in Explorer (and more) on middle mouse button drag, similar to Chrome
-- Robust Scrolling System: A new, 4-layered comprehensive MButton drag-scroll feature provides custom scrolling in any window of your choosing
-- Select from one of four methods (UI Automation, WHEEL, WHEEL_CTRL, VSCROLL), each designed to provide the best possible smooth-scroll experience based on application.
-
-### *New in v2.4*
-- **Universal app support** — smooth scroll works in ALL apps automatically, no configuration needed
-- **Native scroll auto-detection** — apps with built-in MButton drag-scroll (like Chrome) are detected at runtime and left alone
-- **Auto-fallback chain** — UIA → WHEEL → WHEEL_CTRL → VSCROLL, probed per app on first drag
+- Universal Smooth, fractional scrolling in Explorer (and other capable apps system-wide) on middle mouse button drag
+- Robust four-layered fallback mechanism ensures smooth-scrolling across all apps, mimicking Chrome as closely as possible
+- Auto-detects and skips windows that already have native middle-button scroll implementations
 
 <br />
 
@@ -33,13 +28,13 @@
 <br />
 
 ```asciidoc
-┏━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃ WINDOWS TERMINAL HOTKEY ┃
-┗━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ WINDOWS TERMINAL FROM ANYWHERE ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
-[ F10 ] -> Open Windows Terminal as user (auto de-escalation if running in privileged user context)
-[ Shift+F10] -> ... with user admin rights
-[ Ctrl+ShiftF10] -> ... with TrustedInstaller (NT AUTHORITY/SYSTEM) privileges (edit any reg key!)
+[ F10 ] -> Open Windows Terminal as user in current active window path
+[ Shift + F10] -> Open with admin rights
+[ Ctrl + Alt + Shift + F10] -> Open with SYSTEM rights (edit any reg key!)
 ```
 
 <br />
@@ -61,7 +56,7 @@
  ┃ SPAWN WINDOWS ON CURRENT MONITOR ┃
  ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
  
- New and activated windows appear where your cursor is
+ New and activated windows appear where your cursor is.
 ```
 
 <br />
@@ -73,18 +68,12 @@
 
 ### Positive intent detection
 
-Activated windows are **not** moved by default — only when the system detects you intentionally launched something:
+Activated windows moved only when the system detects you **intentionally** activated a window by launching something:
 
 | Tier | Signal | Detects |
 |------|--------|---------|
 | 1 | **Brief-process** | Win32 single-instance re-launch (relay process lives <3s) |
 | 2 | **Overlay-launch** | UWP re-launch via Start menu (overlay was recently visible) |
-
-Retained guards: `WS_IsMovable` filter, taskbar cursor check, same-monitor skip.
-
-### Zero-flash window spawning
-
-New windows are hidden via opacity (`WS_EX_LAYERED` + alpha 0) at `EVENT_OBJECT_CREATE` time — 55-77ms before the shell hook fires. After `WS_MoveToMonitor` places the window on the correct monitor, full opacity is restored. No visual flash on the wrong monitor.
 
 <br />
 
@@ -97,7 +86,9 @@ New windows are hidden via opacity (`WS_EX_LAYERED` + alpha 0) at `EVENT_OBJECT_
  ┃ EXTENDED WINDOW SPY ┃
  ┗━━━━━━━━━━━━━━━━━━━━━┛
 
- [ Win+W ] -> Toggle persistent tooltip showing window info (active + under cursor)
+ [ Win + W ] -> Toggle tooltip showing window info under cursor
+ -> Repeat to freeze as a dialog for copy/paste
+ -> Repeat again to close dialog
 ```
 
 <br />
@@ -141,6 +132,19 @@ New windows are hidden via opacity (`WS_EX_LAYERED` + alpha 0) at `EVENT_OBJECT_
 <br />
 
 ---
+
+## Release notes (v3.1)
+
+### *Peer Review Hardening*
+
+- **`#Requires AutoHotkey v1.1.14+`** — minimum version now enforced, enabling `Try/Finally` blocks
+- **UserRun() executable quoting** — direct-execution path now quotes the executable, preventing breakage on paths with spaces (e.g., `C:\Program Files\Everything 1.5a\Everything.exe`)
+- **Explorer restart via `cmd /c`** — chained `taskkill && start explorer.exe` routed through `cmd` so `&&` is interpreted as a shell operator
+- **Elevated PowerShell quoting fix** — `psCmd` single quotes are now escaped (`''`) before embedding in `-ArgumentList '...'`, fixing Shift+F10 and Ctrl+Alt+Shift+F10 broken by unconditional quoting
+- **SYSTEM PATH resolution** — `ti.exe` SYSTEM context lacks user PATH entries; executables are now resolved to full absolute paths before launching (via `FindInPath` for `^!+F10` and regex replacement of WMI command lines for `^+=`)
+- **UIA element cleanup** — `ObjRelease(_el)` moved to `Finally` block for guaranteed COM pointer release on stale element access violations
+- **Window Spy multi-monitor** — dialog now positions on cursor's monitor via `GetCursorMonitor()` instead of inheriting a stale tooltip monitor reference
+- **Window Spy hotkey scoping** — `Esc` and `LButton` hotkeys scoped with `#If WindowSpyState` to only activate while spy is running
 
 ## Release notes (v3.0)
 
@@ -205,7 +209,6 @@ New windows are hidden via opacity (`WS_EX_LAYERED` + alpha 0) at `EVENT_OBJECT_
 - `FilterLongItems(text, maxLen)` - Removes items exceeding maxLen from comma-separated list
 - `SortList(text)` - Sorts comma-separated items alphabetically
 - `HasVal(arr, val)` - Simplify condition checks. Check iIf array contains a value (allow partial match)
-- `isPath(str)` - Check if string is a path
 - `UserRun(str)` - Improved to better handle process execution, elevation, and argument parsing, especially for PowerShell and Windows Terminal.
 - `FindInPath(exe)` - Search for executable in PATH
 

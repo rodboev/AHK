@@ -1,7 +1,7 @@
 ; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ; ┃ === EXTENDED WINDOW SPY === ┃
 ; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-; Description: Persistent tooltip showing window info under cursor
+; Description: Toggle tooltip showing window info under cursor
 ; Press #w to cycle: tooltip → dialog (frozen snapshot) → close
 ; Forum link: https://autohotkey.com/boards/viewtopic.php?f=6&t=43544
 ; Author: @rodboev

@@ -22,6 +22,7 @@ HasWin32Scrollbar(hwnd) {
   Return (scrollMax > scrollMin)
 }
 
+; -> [ MButton + drag ] -> Invoke smooth scrolling on any app; release to stop.
 $*MButton::
   global MBScroll_X1, MBScroll_Y1, MBScroll_Win, MBScroll_CtrlClassNN, MBScroll_Triggered
   global G_UIA, MB_ScrollPattern := 0, MB_Element := 0, MBScroll_Ctrl

@@ -6,7 +6,7 @@ Make new windows automatically appear on the monitor where the cursor is located
 
 ## Context
 
-- **Codebase**: Monolithic AHK v1.1 script (`AutoHotkey.ahk`, ~1800 lines with this feature)
+- **Codebase**: AHK v1.1.14+ multi-file script (~2100 lines across 4 files)
 - **Existing foundation**: `GetMonitor(winTitle)` — determines which monitor a window is on by center point
 - **New helper**: `GetCursorMonitor()` — determines which monitor the cursor is on
 - **Shell hooks**: `RegisterShellHookWindow` + `OnMessage` for `HSHELL_WINDOWCREATED`, `HSHELL_WINDOWACTIVATED`, `HSHELL_WINDOWDESTROYED`
@@ -55,31 +55,33 @@ WinEvent   → SHOW/UNCLOAK → hwnd in pending? → ready+movable? → move it
 ## Architecture (B — Event-Driven, current)
 
 ```
-Auto-Execute (lines 20-31)
-  ├── WS_Debug := 0
-  ├── #If (RDP/Hyper-V/VMWare)
-  ├── If !(RDP/Hyper-V/VMWare) → WS_Init()
+Auto-Execute (AutoHotkey.ahk, lines 1-26)
+  ├── #Requires AutoHotkey v1.1.14+
+  ├── #If IsRemoteSession() guard
+  ├── If !IsRemoteSession() → WS_Init()
   └── Return
 
-WS_Init()
-  ├── Globals: WS_Pending, WS_PendingAltTab, WS_ExcludedClasses, etc.
+WS_Init()  (window-spawning.ahk)
+  ├── Single WS := {} object for all state
   ├── Shell hook: RegisterShellHookWindow + OnMessage → WS_OnShellHook
   ├── WinEvent hooks:
-  │   ├── SetWinEventHook(EVENT_OBJECT_SHOW)    → WS_OnWinEvent
-  │   └── SetWinEventHook(EVENT_OBJECT_UNCLOAKED) → WS_OnWinEvent
+  │   ├── SetWinEventHook(EVENT_OBJECT_SHOW)     → WS_OnWinEvent
+  │   ├── SetWinEventHook(EVENT_OBJECT_UNCLOAKED) → WS_OnWinEvent
+  │   └── SetWinEventHook(EVENT_OBJECT_CREATE)    → WS_OnWinEvent
   └── OnExit → WS_Cleanup
 
 WS_OnShellHook(wParam, lParam, msg, hwnd)
-  ├── DESTROYED → record WS_LastDestroyTick
-  ├── ACTIVATED → activation guard chain (7 checks) → move
+  ├── DESTROYED → brief-process detection (Tier 1) + cleanup
+  ├── ACTIVATED → positive intent check (Tier 1 brief-process, Tier 2 overlay-launch) → move
   └── CREATED:
        ├── ready + movable → instant move
-       ├── ready + has title + not movable → skip (permanently excluded)
-       └── not ready OR no title → WS_Pending[hwnd] + backup poll + timeout
+       ├── ready + has title + not movable → skip
+       └── not ready OR no title → WS.Pending[hwnd] + backup poll + timeout
 
 WS_OnWinEvent(hHook, event, hwnd, ...)  [7-param WinEventProc callback]
   ├── 32-bit mask idObject/idChild (x64 register junk fix)
   ├── Filter: OBJID_WINDOW only (idObject=0, idChild=0)
+  ├── CREATE: pre-register in WS.PrePending + hide via opacity (zero-flash)
   ├── Pending creation: ready+movable → consume+move
   │                     ready+titled+excluded → discard
   │                     not ready → leave for next event
@@ -122,7 +124,7 @@ When a pending window becomes ready (`WS_IsReady` true) but has a title and fail
 Old approach: `WinWait` blocked the hotkey thread for up to 300ms. New approach: sets `WS_PendingAltTab` and returns immediately. `WS_OnWinEvent` catches the SHOW event for `XamlExplorerHostIslandWindow` and moves it. 500ms timeout clears stale state.
 
 ### 10. Global declaration discipline
-AHK v1.1 functions default to local scope. `WS_Init()` uses bare `global` (assume-global mode). All other WS_* functions explicitly declare `global WS_Pending, WS_Debug, ...`. Missing a single variable (as happened with `WS_Pending` in `WS_OnShellHook`) causes silent failures.
+AHK v1.1 functions default to local scope. All WS_* functions declare `global WS` — a single object containing all state (replaces 12+ individual globals from earlier phases). This eliminates the class of bugs where a missing global declaration causes silent failures.
 
 ---
 
@@ -155,35 +157,22 @@ AHK v1.1 functions default to local scope. `WS_Init()` uses bare `global` (assum
 
 ---
 
-## Future: Win32 Zero-Flash (Phase 10)
+## Win32 Zero-Flash (Phase 10 — Implemented)
 
-Win32 apps using the shell hook instant path still exhibit a brief flash on the wrong monitor. The window is painted by the compositor **before** any user-mode notification fires. `EVENT_OBJECT_SHOW` fires at the same `A_TickCount` as the shell hook — no timing advantage.
-
-### Potential approaches
-
-| Approach | Mechanism | Feasibility |
-|----------|-----------|-------------|
-| **EVENT_OBJECT_CREATE** | Hook 0x8000, fires before SHOW. Pre-register hwnd + cursor monitor, then SHOW moves instantly | Medium — CREATE fires for ALL objects (very chatty), window may lack dimensions |
-| **WH_CBT + HCBT_CREATEWND** | CBT hook intercepts before window is shown, can modify `CREATESTRUCT` position | Low from AHK — requires DLL injection for global hook |
-| **EVENT_OBJECT_LOCATIONCHANGE** | Hook 0x800B, fires on every move/resize. Snap window back if on wrong monitor | Medium — very chatty, but narrow filter (only pending hwnds) |
-| **Pre-move at SHOW** | Process SHOW events for ALL top-level windows (not just pending), check cursor vs window monitor | Medium — need to distinguish new windows from restored/unhidden |
-| **DeferWindowPos** | Batch position changes to avoid intermediate paint | Low — requires per-window setup before creation |
-
-### Recommended exploration: CREATE + SHOW pipeline
+Win32 zero-flash is now implemented using the CREATE + SHOW pipeline with opacity hiding:
 
 ```
-EVENT_OBJECT_CREATE → WS_PrePending[hwnd] := {mon: GetCursorMonitor(), tick}
-EVENT_OBJECT_SHOW   → hwnd in PrePending? → move immediately (before first paint)
-Shell Hook          → backup for anything missed
+EVENT_OBJECT_CREATE → WS.PrePending[hwnd] := {mon, tick, qpc}
+                    → Hide via WS_EX_LAYERED + alpha 0
+Shell Hook / SHOW   → WS_MoveToMonitor() → restore opacity
 ```
 
-This eliminates the shell hook as the creation detector. CREATE fires earlier than the shell hook (before visibility). SHOW fires at the exact visibility moment. By having the target monitor recorded from CREATE time, SHOW can reposition before the compositor paints.
-
-**Challenges:**
-- CREATE fires for child controls, menus, etc. — need strict top-level filtering
-- Must track known hwnds to avoid moving restored/unhidden windows
-- CREATE may fire with incomplete window state (no class, no title)
-- Testing needed to verify CREATE actually precedes first paint
+**Key details:**
+- CREATE fires 55-77ms before the shell hook — enough time to hide the window before first paint
+- Opacity approach (not pre-positioning) avoids coordinate mapping issues with unknown origin monitors
+- Owner-based sentinel (`WS.OwnerSentinel`) prevents sibling dialogs from being re-hidden
+- Sentinel mechanism (`WS.Hidden[hwnd] := -1`) prevents duplicate CREATE events from re-hiding moved windows
+- Debug mode uses alpha 128 (50% visibility) instead of alpha 0 for easier troubleshooting
 
 ---
 
