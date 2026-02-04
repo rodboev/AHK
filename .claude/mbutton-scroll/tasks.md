@@ -31,8 +31,8 @@
 - [x] If no native scroll → engage custom scroll with UIA-first fallback chain
 - [x] TreeView → direct VSCROLL (skip probe, never has native MButton scroll)
 - [x] Keep `MB_ExcludedControls` for toolbars, edit boxes, headers
-- [ ] Test across apps: Explorer, VS Code, SystemInformer, mmc.exe, 7zFM, Chrome, etc.
-- [ ] Set `MB_Debug := 0` after verification
+- [x] Test across apps: Explorer, VS Code, SystemInformer, mmc.exe, 7zFM, Chrome, etc.
+- [x] Set `MB_Debug := 0` after verification
 
 ## Phase 6: Deferred MButton Down for Explorer ✅
 - [x] Defer `SendInput, {Blind}{MButton Down}` for Explorer (`CabinetWClass`)

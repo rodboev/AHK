@@ -13,7 +13,7 @@ Currently, `ShouldScroll` requires apps to be in `MB_EnabledApps` OR match conte
 
 ## Changes
 
-### 1. Replace App Lists (lines 1053-1056)
+### 1. Replace App Lists (now in mbutton-scroll.ahk)
 
 **Before:**
 ```autohotkey
@@ -31,7 +31,7 @@ MB_ExcludedControls := ["ToolbarWindow", "ReBarWindow", "Edit", "AddressBandRoot
 - `MB_PassthroughApps` → renamed to `MB_ExcludedApps` (consistent with `MB_ExcludedControls`)
 - `MB_EnabledApps` → **deleted entirely** (no longer needed)
 
-### 2. Simplify ShouldScroll Logic (lines 1058-1065)
+### 2. Simplify ShouldScroll Logic (now in mbutton-scroll.ahk)
 
 **Before:**
 ```autohotkey
@@ -56,7 +56,7 @@ ShouldScroll := !IsExcludedApp and !IsExcludedRegion
 - `IsAllowedApp` — no longer needed (all apps allowed by default)
 - `IsAllowedContent` — no longer needed (content heuristics were a workaround for the whitelist)
 
-### 3. Method Selection (lines 1089-1119) — NO CHANGES
+### 3. Method Selection (now in mbutton-scroll.ahk) — NO CHANGES
 
 The existing method selection from Phase 4 is **unchanged**. All non-TreeView apps try UIA first:
 
@@ -67,7 +67,7 @@ Else → Try UIA → fall to WHEEL on failure
 
 The UIA probe is cheap (one COM call at MButton-down) and the two-tick verification handles failures gracefully (~20ms cascade). Every app benefits from trying UIA first — apps like mmc.exe get fractional % scrolling, and apps that don't support UIA fall through to WHEEL automatically.
 
-### 4. Remove `WinGetText` and `ControlList` Queries (lines 1050-1051)
+### 4. Remove `WinGetText` and `ControlList` Queries (now in mbutton-scroll.ahk)
 
 ```autohotkey
 ; REMOVE — only needed for IsAllowedContent heuristics
@@ -120,5 +120,5 @@ The method selection logic is identical to Phase 4. The only Phase 5 change is r
 8. **Chrome**: MButton drag → passthrough (excluded, native scroll)
 9. **Excluded controls**: Toolbar, address bar, etc. → passthrough (unchanged)
 
-Enable `MB_Debug := 1` (line 19) to see method selection and fallback transitions.
+Enable `MB_Debug := 1` to see method selection and fallback transitions.
 After verification, set `MB_Debug := 0`.

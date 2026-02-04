@@ -118,7 +118,7 @@
 - [x] **CREATE-SKIP logging:** debug log when sentinel blocks duplicate CREATE events
 - [x] **Timer race fix:** removed sentinel cleanup from `WS_CleanPrePending` timer (was deleting `-1` entries every 1s, causing race with async CREATE callbacks); sentinels now cleaned only by `HSHELL_WINDOWDESTROYED`
 - [x] **TEST:** Chrome ✓ (`CREATE-SKIP`), Registry Workshop ✓ (`CREATE-SKIP`), Everything ✓, Run dialog (instant path) ✓ (`CREATE-SKIP`), Run dialog (create-shell path) ✗ partial — see remaining issue below
-- [ ] **EVALUATE:** Flash eliminated for most apps. Run dialog fix (owner-based sentinel) needs testing.
+- [x] **EVALUATE:** Flash eliminated for most apps. Owner-based sentinel confirmed working for Run dialog.
 
 ### Stage B Remaining Issue: Run Dialog Create-Shell Sentinel Failure
 
@@ -136,10 +136,10 @@
 - [x] **Orphan sweep:** `WS_CleanPrePending` timer reveals windows stuck in WS_Hidden that aren't tracked by PrePending/Pending
 - [x] **Owner sentinel TTL:** 2s sweep in `WS_CleanPrePending`; reset in `WS_Cleanup()`
 
-**Status:** Awaiting test. Run `WS_Debug := 1`, reproduce Win+R from non-primary monitor, check `%TEMP%\WS_Debug.log` for `CREATE-SKIP-OWNER` or `CREATE-DIAG` entries.
+**Status:** Confirmed working. Owner-based sentinel produces `CREATE-SKIP-OWNER` entries in debug log.
 
-### Stage C: Evaluation (pending)
-- [ ] Compare opacity approach vs `EVENT_OBJECT_LOCATIONCHANGE` snap-back (if needed)
+### Stage C: Evaluation (complete)
+- [x] Compare opacity approach vs `EVENT_OBJECT_LOCATIONCHANGE` snap-back — opacity approach chosen and deployed
 - [ ] Test edge cases: already-layered windows, rapid spawn/close, multi-monitor drag
 
 ## Phase 10d: Activation Guard Regression Fix (SUPERSEDED by Phase 11)
@@ -164,7 +164,7 @@
   - `GetWindowPlacement.rcNormalPosition` always returns correct restored size
   - Window restored, then moved with correct dimensions, centered on target monitor
 - [x] Add `MOVE-START` debug logging with dimensions and minMax state
-- [ ] Test minimized window move: Alt+Tab to minimized app on different monitor
+- [x] Test minimized window move: Alt+Tab to minimized app on different monitor — `GetWindowPlacement` fix confirmed
 
 ## Phase 11: Architectural Inversion — Positive Intent Detection (Feb 1, 2026)
 
@@ -183,7 +183,7 @@ logic to default-skip + positive-intent-detection.
 
 ### 11b: File Separation
 - [x] Move all window spawning code to `window-spawning.ahk` (separate from `AutoHotkey.ahk`)
-- [x] `#Include %A_ScriptDir%\window-spawning.ahk` at line 1021 of main script
+- [x] `#Include %A_ScriptDir%\window-spawning.ahk` at line 603 of main script
 - [x] `GetCursorMonitor()` remains in main script (shared helper)
 - [x] `WS_Init()` called from main auto-execute section inside `If !IsRemoteSession()` guard
 
@@ -223,16 +223,15 @@ logic to default-skip + positive-intent-detection.
 - Positive intent detection instead of negative filtering
 
 ### Testing
-- [ ] **Tier 1 test:** Launch Win32 single-instance app (Notepad++, Sublime) from Start menu while already open on another monitor → look for `INTENT (brief-process)` + `MOVED (activate)` in log
-- [ ] **Tier 2 test:** Launch UWP Settings from Start menu while already open on another monitor → look for `INTENT (overlay-launch)` + `MOVED (activate)` in log
-- [ ] **False positive tests:** Close window, minimize window, Alt+Tab, click taskbar, open/close Start menu without launching → all should show `SKIP (no-intent)` in log
-- [ ] Test across apps: Sublime Text, Explorer, VS Code, Terminal, UWP Settings, dialogs
-- [ ] Test Run dialog create-shell fix (owner-based sentinel) — look for `CREATE-SKIP-OWNER`
+- [x] **Tier 1 test:** Launch Win32 single-instance app from Start menu while already open on another monitor → `INTENT (brief-process)` + `MOVED (activate)` confirmed
+- [x] **Tier 2 test:** Launch UWP Settings from Start menu while already open on another monitor → `INTENT (overlay-launch)` + `MOVED (activate)` confirmed
+- [x] **False positive tests:** Close window, minimize window, Alt+Tab, click taskbar, open/close Start menu without launching → `SKIP (no-intent)` confirmed
+- [x] Test across apps: Sublime Text, Explorer, VS Code, Terminal, UWP Settings, dialogs
+- [x] Test Run dialog create-shell fix (owner-based sentinel) → `CREATE-SKIP-OWNER` confirmed
 
 ## Remaining / Future
 - [ ] Remove diagnostic logging after confirming all fixes
 - [ ] Evaluate if any additional classes need exclusion based on testing
 - [ ] Consider per-app exclusion list if certain apps fight the move
 - [ ] Consider `TaskbarCreated` message handler to re-register hook after explorer.exe restart
-- [ ] Compare opacity approach vs `EVENT_OBJECT_LOCATIONCHANGE` snap-back (if needed)
 - [ ] Test edge cases: already-layered windows, rapid spawn/close, multi-monitor drag
