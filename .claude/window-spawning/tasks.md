@@ -183,7 +183,7 @@ logic to default-skip + positive-intent-detection.
 
 ### 11b: File Separation
 - [x] Move all window spawning code to `window-spawning.ahk` (separate from `AutoHotkey.ahk`)
-- [x] `#Include %A_ScriptDir%\window-spawning.ahk` at line 603 of main script
+- [x] `#Include %A_ScriptDir%\window-spawning.ahk` in main script includes section
 - [x] `GetCursorMonitor()` remains in main script (shared helper)
 - [x] `WS_Init()` called from main auto-execute section inside `If !IsRemoteSession()` guard
 

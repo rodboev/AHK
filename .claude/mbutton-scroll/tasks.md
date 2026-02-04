@@ -20,7 +20,7 @@
 - [x] Implement WHEEL → WHEEL_CTRL fallback detection (GetScrollPos before/after)
 - [x] Remove hardcoded `ForceUIA`, `UseWheel`, `UseWheelCtrl`, `UseVScroll` flags
 - [x] Add `HasWin32Scrollbar()` helper function
-- [x] Fix MB_Debug placement (moved to auto-execute section, line 19)
+- [x] Fix MB_Debug placement (moved to auto-execute section)
 
 ## Phase 5: Universal App Support ✅
 - [x] Remove `MB_EnabledApps` whitelist and `MB_PassthroughApps` — no hardcoded app lists

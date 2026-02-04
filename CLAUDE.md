@@ -12,11 +12,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Architecture
 
-`AutoHotkey.ahk` is the parent entrypoint. It `#Include`s three module files at the bottom:
+`AutoHotkey.ahk` is the parent entrypoint. It `#Include`s four module files at the bottom:
 
 | File | Purpose |
 |------|---------|
 | `AutoHotkey.ahk` | Parent: config directives, helpers, bindings, misc hotkeys |
+| `terminal-anywhere.ahk` | Windows Terminal from anywhere (`F10` variants) — user/admin/SYSTEM |
 | `extended-spy.ahk` | Extended Window Spy (`#w`) — tooltip/dialog with window/control info |
 | `mbutton-scroll.ahk` | MButton smooth scroll (hotkeys, timer, scroll methods) |
 | `window-spawning.ahk` | Shell hook window spawning (WS_Init, hooks, move logic, Alt+Tab) |
@@ -24,19 +25,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 The `community-scripts/` directory contains reference libraries (loosely coupled, mostly for inspiration).
 
 ### Key Regions in AutoHotkey.ahk
-- **Lines 1-26**: Configuration directives (`#Requires`, `#SingleInstance`, etc.), remote session guard, `WS_Init()` call
-- **Lines 28-234**: Bindings/remaps (script control, editor-specific, global hotkeys, scroll accel)
-- **Lines 237-324**: Process management / privilege escalation hotkeys
-- **Lines 326-439**: Helper functions (`GetExePath`, `GetMonitor`, `HasVal`, `FindInPath`, etc.)
-- **Lines 441-533**: `UserRun()` + `IsProcessElevated()` (safe run / elevation)
-- **Lines 539-598**: Windows Terminal and elevation hotkeys (F10 variants)
-- **Lines 600-603**: `#Include` directives for module files
+- **Configuration directives**: `#Requires`, `#SingleInstance`, etc., remote session guard, `WS_Init()` call
+- **Bindings / remaps**: Script control, editor-specific, global hotkeys, scroll accel
+- **Process management / privilege escalation**: `^+\``, `#+e`, `#c`, `^+=` hotkeys
+- **Helper functions**: `GetExePath`, `GetMonitor`, `HasVal`, `FindInPath`, etc.
+- **Safe run / elevation**: `UserRun()` + `IsProcessElevated()`
+- **Module includes**: `#Include` directives for the four module files
 
 ### Core Features
 1. **Explorer Smooth Scroll** (`MButton + drag`) — 4-method system: UIA, WHEEL, WHEEL_CTRL, VSCROLL — in `mbutton-scroll.ahk`
 2. **Window Spawning** — Shell hook + WinEvent hooks move new windows to cursor's monitor — in `window-spawning.ahk`
 3. **Extended Window Spy** (`Win+W`) — Persistent tooltip with window/control info — in `extended-spy.ahk`
-4. **Terminal/Elevation** (`F10`, `Shift+F10`, `Ctrl+Alt+Shift+F10`, `Ctrl+Shift+Plus`) — Context-aware terminal launching and privilege escalation
+4. **Terminal/Elevation** (`F10`, `Shift+F10`, `Ctrl+Alt+Shift+F10`, `Ctrl+Shift+Plus`) — Context-aware terminal launching and privilege escalation — in `terminal-anywhere.ahk` (F10 variants) and `AutoHotkey.ahk` (`Ctrl+Shift+Plus`)
 
 ## Running & Debugging
 
@@ -411,4 +411,5 @@ This architecture is relevant to:
 ## Related Documentation
 
 - `README.md` — Feature showcase and release notes
+- `.claude/terminal-anywhere/` — Terminal-anywhere architecture and task tracking
 - `.claude/window-spawning/` — Window spawning design documents and task tracking
