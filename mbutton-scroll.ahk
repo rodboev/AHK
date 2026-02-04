@@ -110,6 +110,7 @@ $*MButton::
 Return
 
 MBScrollTimer:
+  Critical ; Prevent MButton Up from interrupting mid-DllCall (race condition safety)
   global MB_AccumPct, MB_Method, MB_ViewSize, MBScroll_Ctrl, MB_FallbackChecked
   global MB_NativeProbe, MB_InitScrollPos, MB_InitScrollPct, MB_InitHCursor
   ; Safety check: if MButton released, stop immediately
@@ -221,6 +222,10 @@ MBScrollTimer:
       ; Fallback: UIA → WHEEL if scroll is non-functional
       ; Two-tick verification: tick 1 captures before-state, tick 2 cross-validates
       ; ===========================================
+      If (!MB_ScrollPattern) {
+        SetTimer, MBScrollTimer, Off
+        Return
+      }
       If (MB_AccumPct < 0) {
         DllCall(NumGet(NumGet(MB_ScrollPattern+0)+6*A_PtrSize), "Ptr", MB_ScrollPattern, "Double*", MB_AccumPct)
       }
@@ -377,6 +382,7 @@ MBScrollTimer:
 Return
 
 $*MButton Up::
+  Critical ; Prevent timer from firing during cleanup (race condition safety)
   global MB_Disabled, MB_DeferredDown, MBScroll_Triggered, MBScroll_Win, MB_ScrollPattern, MB_Element
   SetTimer, MBScrollTimer, Off
   If (MB_Debug)

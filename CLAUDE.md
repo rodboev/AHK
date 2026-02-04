@@ -24,11 +24,12 @@ The `includes/` directory contains reference libraries (loosely coupled, mostly 
 
 ### Key Regions in AutoHotkey.ahk
 - **Lines 1-25**: Configuration directives, remote session guard, `WS_Init()` call
-- **Lines 27-80**: Script control, editor-specific, and global hotkey bindings
-- **Lines 82-196**: Helper functions (`GetExePath`, `GetMonitor`, `HasVal`, etc.)
-- **Lines 198-268**: `UserRun()` + `IsProcessElevated()` (safe run / elevation)
-- **Lines 286-415**: Windows Terminal and elevation hotkeys (F10 variants)
-- **Lines 585-589**: `#Include` directives for module files
+- **Lines 27-233**: Bindings/remaps (script control, editor-specific, global hotkeys, scroll accel)
+- **Lines 236-320**: Process management / privilege escalation hotkeys
+- **Lines 322-443**: Helper functions (`GetExePath`, `GetMonitor`, `HasVal`, `FindInPath`, etc.)
+- **Lines 445-535**: `UserRun()` + `IsProcessElevated()` (safe run / elevation)
+- **Lines 540-588**: Windows Terminal and elevation hotkeys (F10 variants)
+- **Lines 589-591**: `#Include` directives for module files
 
 ### Core Features
 1. **Explorer Smooth Scroll** (`MButton + drag`) — 4-method system: UIA, WHEEL, WHEEL_CTRL, VSCROLL — in `mbutton-scroll.ahk`
@@ -61,8 +62,33 @@ MyTimer:
 Return
 ```
 
+### Timer/Hotkey Race Conditions (CRITICAL)
+
+AHK v1.1 pseudo-threads allow hotkey threads to interrupt timer threads at any command boundary. When a timer uses COM pointers or shared state that a hotkey cleans up, use `Critical` in **both** the timer and the cleanup hotkey:
+
+```autohotkey
+; ✅ CORRECT - Timer is uninterruptible, cleanup is atomic
+MyTimer:
+  Critical
+  If (!sharedPointer)  ; null guard (belt-and-suspenders)
+    Return
+  DllCall(NumGet(NumGet(sharedPointer+0)+N*A_PtrSize), ...)
+Return
+
+$Key Up::
+  Critical
+  SetTimer, MyTimer, Off
+  ObjRelease(sharedPointer)
+  sharedPointer := 0
+Return
+```
+
+**Why both:** `Critical` in the timer prevents the hotkey from interrupting mid-DllCall. `Critical` in the hotkey prevents a queued timer tick from firing between `SetTimer, Off` and the `ObjRelease`. The null guard catches the edge case of a timer tick already queued in the message loop.
+
 ### UserRun Helper
 Use `UserRun(Executable, Args*)` for all process execution—handles elevation, env var expansion, and PowerShell argument parsing consistently.
+
+**Argument quoting**: All arguments are unconditionally quoted — single-quoted in PowerShell paths (with `'` escaped as `''`), double-quoted in direct execution paths. This prevents command injection via metacharacters (`&`, `;`, `$`, `|`) regardless of whether the argument contains spaces.
 
 ### Message Synthesis
 Scroll methods use `PostMessage`/`SendMessage` for WM_MOUSEWHEEL (0x20A), WM_VSCROLL (0x115). UIA uses COM `SetScrollPercent`.

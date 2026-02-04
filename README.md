@@ -71,19 +71,20 @@
 - **Alt+Tab switcher moves too** — the task switching overlay appears on whichever monitor your cursor is on
 - **Smart filtering** — dialogs stay with their parent, system overlays are ignored, and clicking directly on a window never triggers a move
 
-### Guard chain
+### Positive intent detection
 
-Seven checks prevent unintended moves:
+Activated windows are **not** moved by default — only when the system detects you intentionally launched something:
 
-| # | Guard | Purpose |
-|---|-------|---------|
-| 1 | `WS_IsMovable` | Filter system windows, tool windows, dialogs |
-| 2 | Same-window check | Skip overlay re-activation (Start menu dismissed) |
-| 3 | Foreground tracker | Save previous window, update to current |
-| 4 | Destroy tick (500ms) | Skip Z-order fallback after window **close** |
-| 5 | MinMax == -1 check | Skip Z-order fallback after window **minimize** |
-| 6 | Cursor over taskbar | Skip taskbar button clicks |
-| 7 | Same monitor | No move needed if already on cursor's monitor |
+| Tier | Signal | Detects |
+|------|--------|---------|
+| 1 | **Brief-process** | Win32 single-instance re-launch (relay process lives <3s) |
+| 2 | **Overlay-launch** | UWP re-launch via Start menu (overlay was recently visible) |
+
+Retained guards: `WS_IsMovable` filter, taskbar cursor check, same-monitor skip.
+
+### Zero-flash window spawning
+
+New windows are hidden via opacity (`WS_EX_LAYERED` + alpha 0) at `EVENT_OBJECT_CREATE` time — 55-77ms before the shell hook fires. After `WS_MoveToMonitor` places the window on the correct monitor, full opacity is restored. No visual flash on the wrong monitor.
 
 <br />
 
@@ -141,19 +142,33 @@ Seven checks prevent unintended moves:
 
 ---
 
+## Release notes (v3.0)
+
+### *Security & Stability Hardening*
+
+- **UserRun() injection fix** — all arguments are now unconditionally quoted (single-quoted for PowerShell, double-quoted for direct execution) with proper internal-quote escaping. Prevents command injection via metacharacters (`&`, `;`, `$`, `|`) regardless of argument content
+- **MButton timer race condition fix** — `Critical` sections in both `MBScrollTimer` and `MButton Up` prevent pseudo-thread interruption during COM DllCalls. Null guard for `MB_ScrollPattern` provides belt-and-suspenders protection against Access Violations
+
+### *Architecture Improvements*
+
+- **Positive intent detection** (Phase 11) — activation path inverted from 7-guard default-move to 2-tier default-skip. Brief-process detection (Tier 1) catches Win32 single-instance re-launches; overlay-launch detection (Tier 2) catches UWP re-launches via Start menu. Net result: ~125 lines → ~55 lines, 12+ globals → single `WS` object
+- **Zero-flash opacity** (Phase 10) — `EVENT_OBJECT_CREATE` hook hides windows 55-77ms before shell hook fires, eliminating visual flash on wrong monitor
+- **File separation** — window spawning code moved to `window-spawning.ahk` (was inline in `AutoHotkey.ahk`)
+- **Global encapsulation** — all window spawning state consolidated into single `WS := {}` object
+
+<br />
+
 ## Release notes (v2.5)
 
 ### *Window Spawning on Current Monitor*
 
-- **Shell hook architecture** — uses `RegisterShellHookWindow` to intercept `HSHELL_WINDOWCREATED`, `HSHELL_WINDOWACTIVATED`, and `HSHELL_WINDOWDESTROYED` events
-- **Instant-first, defer-second** — tries to move the window immediately in the shell hook callback; only defers to a BoundFunc timer (10ms → 20ms → 50ms → 150ms) if the window isn't ready yet
-- **BoundFunc per window** — each window gets its own timer, so rapid window creation has no race conditions
+- **Shell hook + WinEvent architecture** — `RegisterShellHookWindow` for creation/activation/destroy + `SetWinEventHook` for SHOW/UNCLOAKED events
+- **Event-driven UWP detection** — deferred processing via WinEvent hooks for instant UWP window moves (~62ms)
 - **Relative position mapping** — windows maintain their proportional position when moved between monitors of different sizes
 - **Maximized window handling** — restore → move → re-maximize to land correctly on the target monitor
 - **Smart owner filtering** — owned windows with a visible parent are skipped (real dialogs); owned windows with a hidden owner are allowed (Win+R Run dialog)
-- **Alt+Tab passthrough hotkey** — `~!Tab::` fires a 20ms timer to find and move the DWM-hosted Task Switching overlay
-- **7-guard activation chain** — overlay dismissal, window close, window minimize, taskbar click, and same-monitor checks prevent unintended moves
-- **Minimize guard** — when the previous foreground window is minimized (`MinMax == -1`), the system Z-order fallback activation is suppressed
+- **Alt+Tab passthrough hotkey** — `~!Tab::` with non-blocking WinEvent detection moves the DWM-hosted switcher overlay
+- **Activation guards** — overlay dismissal, taskbar click, and same-monitor checks prevent unintended moves
 
 ### *New Helper Functions*
 

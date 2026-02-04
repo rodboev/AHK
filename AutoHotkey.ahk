@@ -472,7 +472,7 @@ UserRun(Executable, Args*) {
   ; Run from Explorer For cleaner process trees
   If (needsPowerShell) {
     _safeExe := StrReplace(Executable, "'", "''")
-    quotedExe := InStr(Executable, " ") ? "'" _safeExe "'" : _safeExe
+    quotedExe := "'" _safeExe "'"
     psCmd := "& " quotedExe
     Loop % Args.Length() {
       arg := Args[A_Index]
@@ -481,12 +481,12 @@ UserRun(Executable, Args*) {
         rawPath := m1
         expanded := RegExReplace(rawPath, "(?i)%(.*?)%", "$env:$1")
         _safePath := StrReplace(expanded, "'", "''")
-        path := (InStr(expanded, " ") ? "'" _safePath "'" : _safePath)
+        path := "'" _safePath "'"
         psCmd .= " -d " path
       } Else {
         expanded := RegExReplace(arg, "(?i)%(.*?)%", "$env:$1")
         _safeArg := StrReplace(expanded, "'", "''")
-        quotedArg := (InStr(expanded, " ") ? "'" _safeArg "'" : _safeArg)
+        quotedArg := "'" _safeArg "'"
         psCmd .= " " quotedArg
       }
     }
@@ -500,10 +500,8 @@ UserRun(Executable, Args*) {
     argStr := ""
     Loop % Args.Length() {
       arg := Args[A_Index]
-      If (InStr(arg, " "))
-        argStr .= " """ arg """"
-      Else
-        argStr .= " " arg
+      _safeArg := StrReplace(arg, """", """""")
+      argStr .= " """ _safeArg """"
     }
     If (elevate) {
       ; Use PowerShell Start-Process For elevation
