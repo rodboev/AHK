@@ -24,19 +24,16 @@
   }
 Return
 
+#If WindowSpyState
 $Esc::
   If (WindowSpyState = 2) {
     Gui, WindowSpy:Destroy
     WindowSpyState := 0
     Return
   }
-  If (WindowSpyState = 1) {
-    SetTimer, WindowSpyUpdate, Off
-    ToolTip
-    WindowSpyState := 0
-    Return
-  }
-  Send {Esc}
+  SetTimer, WindowSpyUpdate, Off
+  ToolTip
+  WindowSpyState := 0
 Return
 
 ~LButton::
@@ -51,6 +48,7 @@ Return
     }
   }
 Return
+#If
 
 WindowSpyShowDialog() {
   global WindowSpyDisplayInfo, WindowSpyEdit
@@ -58,7 +56,8 @@ WindowSpyShowDialog() {
     Return
   ToolTip
   Gui, WindowSpy:Destroy
-  SysGet, Workspace, MonitorWorkArea
+  _curMon := GetCursorMonitor()
+  SysGet, Workspace, MonitorWorkArea, %_curMon%
   ; Dimensions from display content (same wrapping as tooltip)
   StringReplace, _, WindowSpyDisplayInfo, `n, `n, UseErrorLevel
   lineCount := ErrorLevel + 1
@@ -135,11 +134,14 @@ GetUIAElementInfo(x, y) {
     If (!_el)
       Return result
     ; Read properties via GetCurrentPropertyValue (vtable 10)
-    result.name := _GetUIAProp(_el, 30005)          ; UIA_NamePropertyId
-    result.type := _GetUIAProp(_el, 30004)           ; UIA_LocalizedControlTypePropertyId
-    result.autoId := _GetUIAProp(_el, 30011)         ; UIA_AutomationIdPropertyId
-    result.className := _GetUIAProp(_el, 30012)      ; UIA_ClassNamePropertyId
-    ObjRelease(_el)
+    Try {
+      result.name := _GetUIAProp(_el, 30005)        ; UIA_NamePropertyId
+      result.type := _GetUIAProp(_el, 30004)         ; UIA_LocalizedControlTypePropertyId
+      result.autoId := _GetUIAProp(_el, 30011)       ; UIA_AutomationIdPropertyId
+      result.className := _GetUIAProp(_el, 30012)    ; UIA_ClassNamePropertyId
+    } Finally {
+      ObjRelease(_el)
+    }
   }
   Return result
 }
@@ -363,7 +365,8 @@ WindowSpyUpdate:
   WindowSpyLastContent := display
 
   ; Position tooltip in bottom-right corner
-  SysGet, Workspace, MonitorWorkArea
+  _curMon := GetCursorMonitor()
+  SysGet, Workspace, MonitorWorkArea, %_curMon%
   tooltipHeader := "Window Spy (#w to freeze, Esc to close)`n`n"
   ToolTip, %tooltipHeader%%display%, WorkspaceRight - 550, WorkspaceBottom - 620
 Return

@@ -5,6 +5,7 @@
 ; +   Shift
 ; +!  Shift+Alt
 
+#Requires AutoHotkey v1.1.14+
 #SingleInstance Force
 #NoEnv
 #Persistent
@@ -73,7 +74,7 @@ Return
       UserRun("Rexplorer_x64.exe")
     }
     Else {
-      UserRun("taskkill", "/f /im explorer.exe && start explorer.exe")
+      UserRun("cmd", "/c", "taskkill /f /im explorer.exe && start explorer.exe")
     }
   }
   Else {
@@ -509,7 +510,8 @@ UserRun(Executable, Args*) {
       _safeArgs2 := StrReplace(argStr, "'", "''")
       full := "RunFromProcess-x64 explorer.exe conhost.exe --headless powershell -NoProfile -Command ""Start-Process '" _safeExe2 "' -ArgumentList '" _safeArgs2 "' -Verb RunAs -WindowStyle Hidden"""
     } Else {
-      full := "RunFromProcess-x64 explorer.exe " Executable argStr
+      _safeExeD := StrReplace(Executable, """", """""")
+      full := "RunFromProcess-x64 explorer.exe """ _safeExeD """" argStr
     }
   }
 
