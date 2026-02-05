@@ -12,7 +12,7 @@
 WS_Init() {
   global WS
   WS := {}
-  WS.Debug := 1                    ; Debug logging (0=off, 1=on)
+  WS.Debug := 0                    ; Debug logging (0=off, 1=on)
   WS.LogFile := A_Temp . "\WS_Debug.log"
   WS.LastForegroundHwnd := 0
   WS.OverlayTick := 0              ; A_TickCount when non-movable overlay activated
@@ -74,6 +74,7 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
   isDestroyed := (wParam == 2)
   if (!isCreated && !isActivated && !isDestroyed)
     return
+  Critical
   SetWinDelay, -1
 
   ; --- Destruction: clean up tracking, detect brief processes (Tier 1) ---
@@ -289,6 +290,7 @@ WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTim
   idChild := idChild & 0xFFFFFFFF
   if (idObject != 0 || idChild != 0 || !hwnd)  ; OBJID_WINDOW = 0
     return
+  Critical
   SetWinDelay, -1
   hwnd := hwnd + 0  ; Ensure numeric type for consistent object key lookup
 
@@ -321,29 +323,21 @@ WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTim
       if (_ppOwnerStyle & 0x10000000)  ; Owner is WS_VISIBLE → real dialog, skip
         return
     }
+    ; Hide FIRST — minimize latency before next VSYNC paints the window
+    _ppExStyle := DllCall("GetWindowLong", "Ptr", hwnd, "Int", -20)  ; GWL_EXSTYLE
+    _hadLayered := !!(_ppExStyle & 0x80000)  ; WS_EX_LAYERED
+    if (!_hadLayered)
+      DllCall("SetWindowLong", "Ptr", hwnd, "Int", -20, "Ptr", _ppExStyle | 0x80000)
+    DllCall("SetLayeredWindowAttributes", "Ptr", hwnd, "UInt", 0
+      , "UChar", WS.Debug ? 128 : 0, "UInt", 0x2)  ; LWA_ALPHA
+    WS.Hidden[hwnd] := _hadLayered
+    ; Now capture cursor/monitor (safe to do after hide)
     cursorMon := GetCursorMonitor()
     windowMon := GetMonitor("ahk_id " . hwnd)
     WS.PrePending[hwnd] := {mon: cursorMon, tick: A_TickCount, qpc: WS_QPC()}
-    ; Hide window via opacity until shell hook moves it (zero-flash approach)
-    _ppDidHide := false
-    if (windowMon && windowMon != cursorMon) {
-      VarSetCapacity(_ppCloaked, 4, 0)
-      DllCall("dwmapi\DwmGetWindowAttribute", "Ptr", hwnd, "UInt", 14, "Ptr", &_ppCloaked, "UInt", 4)
-      if (!NumGet(_ppCloaked, 0, "UInt")) {
-        _ppExStyle := DllCall("GetWindowLong", "Ptr", hwnd, "Int", -20)  ; GWL_EXSTYLE
-        _hadLayered := !!(_ppExStyle & 0x80000)  ; WS_EX_LAYERED
-        if (!_hadLayered)
-          DllCall("SetWindowLong", "Ptr", hwnd, "Int", -20, "Ptr", _ppExStyle | 0x80000)
-        DllCall("SetLayeredWindowAttributes", "Ptr", hwnd, "UInt", 0
-          , "UChar", WS.Debug ? 128 : 0, "UInt", 0x2)  ; LWA_ALPHA
-        WS.Hidden[hwnd] := _hadLayered
-        _ppDidHide := true
-      }
-    }
     if (WS.Debug) {
       WinGetClass, _dbgClass, ahk_id %hwnd%
-      _hideLabel := _ppDidHide ? " hide" : ""
-      WS_Log("CREATE: hwnd=" . hwnd . " class=" . _dbgClass . _hideLabel . " mon " . cursorMon
+      WS_Log("CREATE: hwnd=" . hwnd . " class=" . _dbgClass . " hide mon " . cursorMon
         . (windowMon && windowMon != cursorMon ? " (from " . windowMon . ")" : ""))
     }
     return
@@ -562,6 +556,10 @@ WS_IsMovable(hwnd) {
 WS_MoveToMonitor(hwnd, srcMon, tgtMon) {
   global WS
   hwnd := hwnd + 0
+  if !WinExist("ahk_id " . hwnd) {
+    WS.Hidden.Delete(hwnd)
+    return
+  }
   ; Pre-set sentinel BEFORE WinMove (prevents race with synchronous CREATE callbacks)
   _wasHidden := false
   _hadLayered := 0
@@ -649,6 +647,8 @@ WS_Reveal(hwnd) {
   if (_hadLayered == -1)
     return
   WS.Hidden[hwnd] := -1
+  if !WinExist("ahk_id " . hwnd)
+    return
   DllCall("SetLayeredWindowAttributes", "Ptr", hwnd, "UInt", 0, "UChar", 255, "UInt", 0x2)
   if (!_hadLayered)
     WinSet, ExStyle, -0x80000, ahk_id %hwnd%
