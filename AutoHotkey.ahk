@@ -121,12 +121,13 @@ Return
 #IfWinActive
 
 ; Ctrl+E: Edit selected file (in Explorer or file dialog)
+#If WinActive("ahk_class CabinetWClass") || WinActive("ahk_class #32770")
 ^e::
   selected := ""
   If WinActive("ahk_class #32770") { ; File dialog active
     ControlGetText, selected, Edit1, A ; Selected file's path
   }
-  Else If WinActive("ahk_class CabinetWClass") { ; Explorer window active
+  Else { ; Explorer window active
     For window in ComObjCreate("Shell.Application").Windows {
       If (window.hwnd == WinActive("A")) {
         selected := window.Document.SelectedItems.Item(0).Path
@@ -143,6 +144,7 @@ Return
     }
   }
 Return
+#If
 
 ; Alt+Shift+S = Run or activate Everything
 ~+!s::
