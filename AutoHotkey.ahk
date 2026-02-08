@@ -106,15 +106,8 @@ Return
 
 ; Shift+Alt+L: Turn off monitor
 +!l::
-  UserRun("nircmd", "cmdwait", "200", "monitor", "off")
-  SendMessage, 0x112, 0xF140, 0,, Program Manager
-  Sleep 3000
-  VarSetCapacity(screen_saver_active,4,0)
-  SPI_GETSCREENSAVERRUNNING = 0x0072
-  result := DllCall( "user32.dll\SystemParametersInfo", "uint", SPI_GETSCREENSAVERRUNNING, "uint", 0, "uint*", screen_saver_active, "uint", 0 )
-  WinGetActiveTitle, Title
-  If (Title = "")
-    SendMessage, 0x112, 0xF170, 2,, Program Manager ; Shut off monitor
+  Sleep 200
+  SendMessage, 0x112, 0xF170, 2,, Program Manager
 Return
 
 ; Alt+D: Focus address bar in Open dialog
