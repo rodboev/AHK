@@ -9,30 +9,12 @@
 ; [ Ctrl + Shift + F10 ]        -> Open claude in current path as admin (force WSL)
 ; [ Ctrl + Alt + Shift + F10 ]  -> Open current path as SYSTEM
 
-F10:: ; -> Open current path (auto-detect WSL)
-  OpenTerminal()
-Return
-
-!F10:: ; [ Alt + F10 ] -> Open current path (force WSL)
-  OpenTerminal({wsl: "force"})
-Return
-
-+F10:: ; [ Shift + F10 ] -> Open current path as admin (auto-detect WSL)
-  OpenTerminal({elevate: true})
-Return
-
-!+F10:: ; [ Alt + Shift + F10 ] -> Open current path as admin (force WSL)
-  OpenTerminal({wsl: "force", elevate: true})
-Return
-
-^F10:: ; [ Ctrl + F10 ] -> Open claude in current path (force WSL)
-  OpenTerminal({wsl: "force", claude: true})
-Return
-
-^+F10:: ; [ Ctrl + Shift + F10 ] -> Open claude in current path as admin (force WSL)
-  OpenTerminal({wsl: "force", elevate: true, claude: true})
-Return
-
+F10::OpenTerminal()
+!F10::OpenTerminal({wsl: "force"})
++F10::OpenTerminal({elevate: true})
+!+F10::OpenTerminal({wsl: "force", elevate: true})
+^F10::OpenTerminal({wsl: "force", claude: true})
+^+F10::OpenTerminal({wsl: "force", elevate: true, claude: true})
 ^!+F10:: ; [ Ctrl + Alt + Shift + F10 ] -> Open current path as SYSTEM
   _dir := GetTerminalDir()
   ; Resolve wt.exe to full path — SYSTEM context lacks user PATH entries
