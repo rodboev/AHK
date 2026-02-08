@@ -370,7 +370,7 @@ GetExplorerPath() {
     If (window.hwnd = hwnd) {
       Try {
         _path := window.Document.Folder.Self.Path
-        Return RegExMatch(_path, "^[A-Za-z]:\\|^\\\\") ? _path : ""
+        Return RegExMatch(_path, "^[A-Za-z]:\\|^\\\\") && !InStr(_path, "::") ? _path : ""
       }
       Catch {
         Return ""  ; not a filesystem view

@@ -78,6 +78,7 @@ _TerminalInit() {
 
 ; ⇒ Resolve working directory from active window context
 _GetTerminalDir() {
+  global G_UserProfile
   WinGetClass, _class, A
   If (_class = "Progman")
     Return A_Desktop
