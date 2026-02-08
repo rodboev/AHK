@@ -1,11 +1,10 @@
-# AutoHotkey.ahk  [[ ⇨ ]](https://github.com/rodboev/AHK/blob/master/AutoHotkey.ahk)
+# AutoHotkey.ahk  [[⇨]](https://github.com/rodboev/AHK/blob/master/AutoHotkey.ahk)
 
->
-><i>"Get your Windows groove back!"</i>\
->--  @rodboev
-<br />
+> A full set of power-user tools not found elsewhere in the AHK community
+> <br />
 
 ---
+
 <br />
 
 ```asciidoc
@@ -15,13 +14,10 @@
 
  [ MButton + drag ] -> Invoke smooth scrolling on any app; release to stop.
 ```
-<br />
 
 - Universal Smooth, fractional scrolling in Explorer (and other capable apps system-wide) on middle mouse button drag
 - Robust four-layered fallback mechanism ensures smooth-scrolling across all apps, mimicking Chrome as closely as possible
 - Auto-detects and skips windows that already have native middle-button scroll implementations
-
-<br />
 
 ---
 
@@ -37,15 +33,11 @@
 [ Ctrl + Alt + Shift + F10] -> Open with SYSTEM rights (edit any reg key!)
 ```
 
-<br />
-
 - **Works everywhere**
-  - Any Explorer window (including virtual folders) opens current folder open
+  - Any Explorer window (including virtual folders like Desktop) opens current folder open
   - Any application (opens its home folder)
 - Highly extensible with robust envvar handling
-- Safe fallbacks to user profile or desktop if no path found
-
-<br />
+- Safe fallbacks to user profile if no path found
 
 ---
 
@@ -55,27 +47,21 @@
  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
  ┃ SPAWN WINDOWS ON CURRENT MONITOR ┃
  ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
- 
+
  New and activated windows appear where your cursor is.
 ```
-
-<br />
 
 - **New windows spawn on your cursor's monitor** — no more hunting for windows that opened on the wrong screen
 - **Activated windows follow your cursor** — re-launching an already-running app from Start Menu or taskbar moves it to you
 - **Alt+Tab switcher moves too** — the task switching overlay appears on whichever monitor your cursor is on
+- **Cursor-centered popups** — titleless windows (Share dialog, store dialogs) appear at your cursor instead of a default corner
 - **Smart filtering** — dialogs stay with their parent, system overlays are ignored, and clicking directly on a window never triggers a move
+- **Positive intent detection** - Activated windows moved only when the system detects an intentional launch:
 
-### Positive intent detection
-
-Activated windows moved only when the system detects you **intentionally** activated a window by launching something:
-
-| Tier | Signal | Detects |
-|------|--------|---------|
-| 1 | **Brief-process** | Win32 single-instance re-launch (relay process lives <3s) |
-| 2 | **Overlay-launch** | UWP re-launch via Start menu (overlay was recently visible) |
-
-<br />
+  | Tier | Signal             | Detects                                                     |
+  | ---- | ------------------ | ----------------------------------------------------------- |
+  | 1    | **Process-start**  | Win32 single-instance re-launch (relay process lives <3s)   |
+  | 2    | **Overlay-launch** | UWP re-launch via Start menu (overlay was recently visible) |
 
 ---
 
@@ -90,8 +76,6 @@ Activated windows moved only when the system detects you **intentionally** activ
  -> Repeat to freeze as a dialog for copy/paste
  -> Repeat again to close dialog
 ```
-
-<br />
 
 - Auto updated info for active window and window under cursor, for both windows and controls
 - Manipulate any window with more info than AHK Extended Window Spy at your fingertips
@@ -127,16 +111,18 @@ Activated windows moved only when the system detects you **intentionally** activ
           SizeableRebar1, Static1, Static2, SysHeader321, SysListView321, SysTreeView321,
           SysTreeView322, ToolbarWindow321, ToolbarWindow32
 
- You can target any combination of these to manipulate any window or control using AutoHotkey.
-
-<br />
+You can target any combination of these to manipulate any window or control using AutoHotkey.
 
 ---
 
+<br />
+
 ## Release notes (v3.1)
 
-### *Peer Review Hardening*
+### _Peer Review Hardening_
 
+- **UserRun() injection fix** — all arguments are now unconditionally quoted (single-quoted for PowerShell, double-quoted for direct execution) with proper internal-quote escaping. Prevents command injection via metacharacters (`&`, `;`, `$`, `|`) regardless of argument content
+- **MButton timer race condition fix** — `Critical` sections in both `MBScrollTimer` and `MButton Up` prevent pseudo-thread interruption during COM DllCalls. Null guard for `MB_ScrollPattern` provides belt-and-suspenders protection against Access Violations
 - **`#Requires AutoHotkey v1.1.14+`** — minimum version now enforced, enabling `Try/Finally` blocks
 - **UserRun() executable quoting** — direct-execution path now quotes the executable, preventing breakage on paths with spaces (e.g., `C:\Program Files\Everything 1.5a\Everything.exe`)
 - **Explorer restart via `cmd /c`** — chained `taskkill && start explorer.exe` routed through `cmd` so `&&` is interpreted as a shell operator
@@ -148,12 +134,7 @@ Activated windows moved only when the system detects you **intentionally** activ
 
 ## Release notes (v3.0)
 
-### *Security & Stability Hardening*
-
-- **UserRun() injection fix** — all arguments are now unconditionally quoted (single-quoted for PowerShell, double-quoted for direct execution) with proper internal-quote escaping. Prevents command injection via metacharacters (`&`, `;`, `$`, `|`) regardless of argument content
-- **MButton timer race condition fix** — `Critical` sections in both `MBScrollTimer` and `MButton Up` prevent pseudo-thread interruption during COM DllCalls. Null guard for `MB_ScrollPattern` provides belt-and-suspenders protection against Access Violations
-
-### *Architecture Improvements*
+### _Architecture Improvements_
 
 - **Positive intent detection** (Phase 11) — activation path inverted from 7-guard default-move to 2-tier default-skip. Brief-process detection (Tier 1) catches Win32 single-instance re-launches; overlay-launch detection (Tier 2) catches UWP re-launches via Start menu. Net result: ~125 lines → ~55 lines, 12+ globals → single `WS` object
 - **Zero-flash opacity** (Phase 10) — `EVENT_OBJECT_CREATE` hook hides windows 55-77ms before shell hook fires, eliminating visual flash on wrong monitor
@@ -162,9 +143,9 @@ Activated windows moved only when the system detects you **intentionally** activ
 
 <br />
 
-## Release notes (v2.5)
+## Release notes (v2.4)
 
-### *Window Spawning on Current Monitor*
+### _Window Spawning on Current Monitor_
 
 - **Shell hook + WinEvent architecture** — `RegisterShellHookWindow` for creation/activation/destroy + `SetWinEventHook` for SHOW/UNCLOAKED events
 - **Event-driven UWP detection** — deferred processing via WinEvent hooks for instant UWP window moves (~62ms)
@@ -174,27 +155,22 @@ Activated windows moved only when the system detects you **intentionally** activ
 - **Alt+Tab passthrough hotkey** — `~!Tab::` with non-blocking WinEvent detection moves the DWM-hosted switcher overlay
 - **Activation guards** — overlay dismissal, taskbar click, and same-monitor checks prevent unintended moves
 
-### *New Helper Functions*
-
-- `GetCursorMonitor()` — returns which monitor (1-based) the mouse cursor is on
-- `IsRemoteSession()` — detects RDP, Hyper-V, and VMWare sessions to disable the feature
-
 <br />
 
 ## Release notes (v2.3)
 
-### *Explorer Smooth Scroll*
+### _Explorer Smooth Scroll_
 
 - No dependencies, self-contained, all-new code
   - The script is self-contained and does not introduce new external dependencies.
   - This is a complete replacement of any previous MButton scrolling logic.
 - Behavioral Changes
   - Users will experience significantly enhanced and more adaptable MButton drag-scrolling across various applications.
-  -The fallback logic makes scrolling smoother in applications that normally exhibit jerky behavior with wheel messages.
+    -The fallback logic makes scrolling smoother in applications that normally exhibit jerky behavior with wheel messages.
 - Performance Implications: `GetScrollPos` fallback introduces two DllCalls and a brief Sleep on the first scroll event for the WHEEL_CTRL method, which may introduce negligible latency designed to be imperceptible to the user.
 - Documentation: Added extensive architectural documentation
 
-### *Extended Window Spy*
+### _Extended Window Spy_
 
 - **Controls sorted alphabetically** for easier scanning
 - **Items >80 chars filtered out** from Controls and Window Text (reduces noise from long GUIDs/paths)
@@ -204,21 +180,13 @@ Activated windows moved only when the system detects you **intentionally** activ
 - **Reduced flicker** - Cursor position line commented out, UIA simplified to persistent reference only
 - **Faster updates** - 800ms refresh (down from 1500ms)
 
-### *New Helper Functions*
-
-- `FilterLongItems(text, maxLen)` - Removes items exceeding maxLen from comma-separated list
-- `SortList(text)` - Sorts comma-separated items alphabetically
-- `HasVal(arr, val)` - Simplify condition checks. Check iIf array contains a value (allow partial match)
-- `UserRun(str)` - Improved to better handle process execution, elevation, and argument parsing, especially for PowerShell and Windows Terminal.
-- `FindInPath(exe)` - Search for executable in PATH
-
 <br />
 
-## Release notes (v2.2)
+## Release notes (v2.1)
 
 Extended Window Spy (`#w`) with comprehensive window information display.
 
-### *Extended Window Spy*
+### _Extended Window Spy_
 
 - **Persistent tooltip** showing real-time info for both Active Window and Window Under Cursor
 - **Hover-to-freeze**: Hover over tooltip to freeze or press `#w` again to close
@@ -233,23 +201,9 @@ Extended Window Spy (`#w`) with comprehensive window information display.
   - Window text, controls (comma-separated, wrapped at 100 chars)
 - **Dialog features**: auto-sized, bottom-right positioned
 
-### *New Helper Functions*
-
-- `GetExePath(winTitle)` - Returns `{path, dir}` for window's process
-- `GetMonitor(winTitle)` - Returns which monitor (1-based) a window is on
-- `IsProcessElevated(pid)` - Checks if process is running elevated
-- `WrapList(text, delimiter, maxLen)` - Wraps text at delimiter boundaries
-
-### *Other Changes*
-
-- `ProcessExistsByCommandLine(cmdLine)` - Find process by command line substring
-- Activate-or-launch pattern for `#e` (e++), `+!e` (VS Code), `^e` (Sublime Text)
-- F10 hotkeys now use `A_Desktop`/`A_UserProfile` instead of env vars
-- Standardized on `GetExePath()` helper across codebase
-
 <br />
 
-## Release notes (v2.1)
+## Release notes (v2.0)
 
 Major refactoring of AutoHotkey.ahk with advanced multi-method smooth, trackpad-like, and (where possible) fractional scrolling on middle mouse button down, similar to Chrome's implementation.
 
@@ -268,32 +222,3 @@ Even without fractional scrolling, the default 3-line per scroll is reduced to a
         +------------+----------------------------------------------------+----------------------------------+
 
 All methods employ acceleration curves and dynamic timers to minimize the janky default scroll behavior in Windows.
-
-- ### App Configuration
-    For now, apps and controls are configured via arrays at the top of the scroll section:
-
-        MB_PassthroughApps := ["chrome.exe", "everything64.exe", "VmConnect.exe"]
-        MB_EnabledApps := ["mmc.exe", "7zFM.exe", "code.exe", "SystemInformer.exe"]
-        MB_ExcludedControls := ["ToolbarWindow", "ReBarWindow", "Edit", "SysHeader"]
-
-### *Changes*
-
-- Implemented advanced multi-method MButton drag-scrolling (`lines 837-1117`) with dynamic timer-based acceleration, intelligently selecting between UIA, WHEEL, WHEEL_CTRL, and VSCROLL methods based on the active application and control.
-- Added `GetScrollPos`-based fallback detection: WHEEL_CTRL auto-switches to VSCROLL if the control scrolls >1 line per message, reverting the jump invisibly.
-- Consolidated configuration into arrays (`MB_PassthroughApps`, `MB_EnabledApps`, `MB_ExcludedControls`) with `HasVal` helper for easy customization.
-- Extended the `UserRun` function to support flexible process execution, including elevation with `RunFromProcess-x64` and dynamic argument parsing/escaping for PowerShell and Windows Terminal environments.
-- Introduced new hotkeys for launching and elevating Windows Terminal (`F10`, `+F10`, `^!+F10`) and System Informer (`^+`).
-- Added hotkeys for copying the current Explorer path (`#c`) and the active window's full command line (`+#c`) to the clipboard.
-- Refactored and simplified existing hotkeys for Sublime Text, global volume control, Explorer navigation (Backspace to go up), Everything search, and Media Player Classic scrolling.
-- Added several community AHK libraries in `includes/` for reference:
-            
-            `_Struct.ahk`, `Acc.ahk`, `sizeof.ahk`, `TT.ahk`
-            `ini.ahk` (utility/frameworks), `Dock.ahk` (window docking)
-            `HoverScroll.ahk` (hover-based scrolling)
-            `FindText.ahk` (screen image OCR)
-            `EitherMouse.ahk` (multi-mouse support)
-            `NiftyWindows.ahk` (advanced window management like AOT and roll-up)
-            `WindowDraggingResizing.ahk` (advanced window manipulation with snapping)
-
-- Technical `.claude/summary.md` document detailing the architecture and rationale.\
-  Designed for context transfer across AI models.
