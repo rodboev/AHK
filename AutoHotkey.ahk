@@ -23,7 +23,7 @@ EnvGet, G_UserProfile, USERPROFILE
 #If IsRemoteSession()
   If !IsRemoteSession()
     WS_Init() ; Init window spawning
-    _TerminalInit()
+    TerminalInit()
   Return
 #If
 

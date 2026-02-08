@@ -1,87 +1,40 @@
 ; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ; ┃ WINDOWS TERMINAL FROM ANYWHERE ┃
 ; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-F10:: ; -> Open in current path, use WSL profile for WSL paths
-  _dir := _GetTerminalDir()
-  ; WSL UNC path (\\wsl.localhost\distro\...)
-  _wsl := _ParseWSLPath(_dir)
-  If (IsObject(_wsl)) {
-    UserRun("wt", "-p", _wsl.distro, "-d " . _dir)
-    Return
-  }
-  ; Auto-open in WSL profile for configured path prefix
-  If (G_WSLDistro && G_WSLAutoPath && InStr(_dir, G_WSLAutoPath) = 1) {
-    UserRun("wt", "-p", G_WSLDistro, "-d " . _dir)
-    Return
-  }
-  UserRun("wt", "-d " . _dir)
+; [ F10 ]                       -> Open current path (auto-detect WSL)
+; [ Alt + F10 ]                 -> Open current path (force WSL)
+; [ Shift + F10 ]               -> Open current path as admin (auto-detect WSL)
+; [ Alt + Shift + F10 ]         -> Open current path as admin (force WSL)
+; [ Ctrl + F10 ]                -> Open claude in current path (force WSL)
+; [ Ctrl + Shift + F10 ]        -> Open claude in current path as admin (force WSL)
+; [ Ctrl + Alt + Shift + F10 ]  -> Open current path as SYSTEM
+
+F10:: ; -> Open current path (auto-detect WSL)
+  OpenTerminal()
 Return
 
-!F10:: ; [ Alt + F10 ] -> Open WSL profile from any path
-  _dir := _GetTerminalDir()
-  ; WSL UNC path already has distro info
-  _wsl := _ParseWSLPath(_dir)
-  If (IsObject(_wsl)) {
-    UserRun("wt", "-p", _wsl.distro, "-d " . _dir)
-    Return
-  }
-  ; Any drive letter path → open in WSL profile
-  If (G_WSLDistro && RegExMatch(_dir, "^[A-Za-z]:\\")) {
-    UserRun("wt", "-p", G_WSLDistro, "-d " . _dir)
-    Return
-  }
-  UserRun("wt", "-d " . _dir)
+!F10:: ; [ Alt + F10 ] -> Open current path (force WSL)
+  OpenTerminal({wsl: "force"})
 Return
 
-!+F10:: ; [ Alt + Shift + F10 ] -> Open WSL profile from any path (elevated)
-  _dir := _GetTerminalDir()
-  _wsl := _ParseWSLPath(_dir)
-  If (IsObject(_wsl)) {
-    UserRun("elevate", "wt", "-p", _wsl.distro, "-d " . _dir)
-    Return
-  }
-  If (G_WSLDistro && RegExMatch(_dir, "^[A-Za-z]:\\")) {
-    UserRun("elevate", "wt", "-p", G_WSLDistro, "-d " . _dir)
-    Return
-  }
-  UserRun("elevate", "wt", "-d " . _dir)
++F10:: ; [ Shift + F10 ] -> Open current path as admin (auto-detect WSL)
+  OpenTerminal({elevate: true})
 Return
 
-^F10:: ; [ Ctrl + F10 ] -> Open WSL profile + launch claude
-  _dir := _GetTerminalDir()
-  _distro := ""
-  _wsl := _ParseWSLPath(_dir)
-  If (IsObject(_wsl))
-    _distro := _wsl.distro
-  Else If (G_WSLDistro && RegExMatch(_dir, "^[A-Za-z]:\\"))
-    _distro := G_WSLDistro
-  If (_distro)
-    UserRun("wt", "-p", _distro, "-d " . _dir, "--", "bash", "-lic", """claude --dangerously-skip-permissions""")
-  Else
-    UserRun("wt", "-d " . _dir)
+!+F10:: ; [ Alt + Shift + F10 ] -> Open current path as admin (force WSL)
+  OpenTerminal({wsl: "force", elevate: true})
 Return
 
-^+F10:: ; [ Ctrl + Shift + F10 ] -> Open WSL profile + launch claude (elevated)
-  _dir := _GetTerminalDir()
-  _distro := ""
-  _wsl := _ParseWSLPath(_dir)
-  If (IsObject(_wsl))
-    _distro := _wsl.distro
-  Else If (G_WSLDistro && RegExMatch(_dir, "^[A-Za-z]:\\"))
-    _distro := G_WSLDistro
-  If (_distro)
-    UserRun("elevate", "wt", "-p", _distro, "-d " . _dir, "--", "bash", "-lic", """claude --dangerously-skip-permissions""")
-  Else
-    UserRun("elevate", "wt", "-d " . _dir)
+^F10:: ; [ Ctrl + F10 ] -> Open claude in current path (force WSL)
+  OpenTerminal({wsl: "force", claude: true})
 Return
 
-+F10:: ; [ Shift + F10 ] -> Open with admin rights
-  _dir := _GetTerminalDir()
-  UserRun("elevate", "wt", "-d " . _dir)
+^+F10:: ; [ Ctrl + Shift + F10 ] -> Open claude in current path as admin (force WSL)
+  OpenTerminal({wsl: "force", elevate: true, claude: true})
 Return
 
-^!+F10:: ; [ Ctrl + Alt + Shift + F10 ] -> Open as SYSTEM
-  _dir := _GetTerminalDir()
+^!+F10:: ; [ Ctrl + Alt + Shift + F10 ] -> Open current path as SYSTEM
+  _dir := GetTerminalDir()
   ; Resolve wt.exe to full path — SYSTEM context lacks user PATH entries
   _wtPath := FindInPath("wt.exe")
   If (!_wtPath) {
@@ -98,14 +51,66 @@ Return
 Return
 
 ; ⇒ Initialize terminal-anywhere config (called from auto-execute section)
-_TerminalInit() {
-  global G_WSLDistro, G_WSLAutoPath
+TerminalInit() {
+  global G_WSLDistro, G_WSLAutoPaths
   G_WSLDistro := "Ubuntu-24.04"
-  G_WSLAutoPath := "C:\Dropbox\Projects"
+  G_WSLAutoPaths := ["C:\Dropbox\Projects", "C:\Users\Rod\Documents"]
+}
+
+; ⇒ Open Windows Terminal with optional WSL profile, elevation, and Claude
+OpenTerminal(opts := "") {
+  ; OpenTerminal({wsl: "auto|force|off", elevate: bool, claude: bool})
+  ;   wsl      "auto"  = WSL for UNC paths + paths under G_WSLAutoPaths (default)
+  ;            "force" = WSL for UNC paths + any Windows drive letter
+  ;            "off"   = plain Windows Terminal, no WSL
+  ;   elevate  true    = run as Administrator (UAC prompt)
+  ;   claude   true    = launch Claude CLI in WSL (needs distro)
+  ;
+  ; Missing keys default to: wsl="auto", elevate=false, claude=false
+
+  global G_WSLDistro, G_WSLAutoPaths
+  _dir := GetTerminalDir()
+  _distro := ""
+  _wslMode := opts.wsl ? opts.wsl : "auto"
+
+  ; Resolve WSL distro name (if any)
+  If (_wslMode != "off") {
+    ; Check for WSL UNC path first (\\wsl.localhost\distro\... or \\wsl$\distro\...)
+    _wsl := ParseWSLPath(_dir)
+    If (IsObject(_wsl))
+      _distro := _wsl.distro
+    Else If (G_WSLDistro) {
+      ; "force": any Windows drive letter → WSL profile
+      If (_wslMode = "force" && RegExMatch(_dir, "^[A-Za-z]:\\"))
+        _distro := G_WSLDistro
+      ; "auto": path starts with any configured prefix → WSL profile
+      Else If (_wslMode = "auto") {
+        For _, _prefix in G_WSLAutoPaths {
+          If (InStr(_dir, _prefix) = 1) {
+            _distro := G_WSLDistro
+            Break
+          }
+        }
+      }
+    }
+  }
+
+  ; --- Build UserRun arguments ---
+  _args := []
+  If (opts.elevate)
+    _args.Push("elevate")
+  _args.Push("wt")
+  If (_distro)
+    _args.Push("-p", _distro)
+  _args.Push("-d " . _dir)
+  If (opts.claude && _distro)
+    _args.Push("--", "bash", "-lic", """claude --dangerously-skip-permissions""")
+
+  UserRun(_args*)
 }
 
 ; ⇒ Resolve working directory from active window context
-_GetTerminalDir() {
+GetTerminalDir() {
   global G_UserProfile
   WinGetClass, _class, A
   If (_class = "Progman")
@@ -121,7 +126,7 @@ _GetTerminalDir() {
 ; ⇒ Parse WSL UNC path into distro name
 ; Input:  \\wsl.localhost\Ubuntu-24.04\home\rod  or  \\wsl$\Ubuntu-24.04\home\rod
 ; Output: {distro: "Ubuntu-24.04"} or "" if not a WSL path
-_ParseWSLPath(path) {
+ParseWSLPath(path) {
   If (!RegExMatch(path, "i)^\\\\wsl(?:\.localhost|\$)\\([^\\]+)", m))
     Return ""
   Return {distro: m1}
