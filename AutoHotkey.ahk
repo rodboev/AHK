@@ -104,9 +104,9 @@ Return
   $*MButton::Send n
 #IfWinActive
 
-; Ctrl+ShIft+L: Turn off monitor
+; Shift+Alt+L: Turn off monitor
 +!l::
-  UserRun("nircmd", "cmdwait 200 monitor off")
+  UserRun("nircmd", "cmdwait", "200", "monitor", "off")
   SendMessage, 0x112, 0xF140, 0,, Program Manager
   Sleep 3000
   VarSetCapacity(screen_saver_active,4,0)
