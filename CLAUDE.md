@@ -304,8 +304,8 @@ Design documents at `.claude/window-spawning/`.
 | `WS_OnShellHook()` | Handle DESTROYED (brief-process detection + cleanup), ACTIVATED (positive intent detection), CREATED (exe recording + pre-pending + deferred move) |
 | `WS_OnWinEvent()` | Handle EVENT_OBJECT_SHOW, UNCLOAKED, CREATE (opacity hiding, deferred window processing) |
 | `WS_IsReady()` | Timing gate: visible, sized, uncloaked |
-| `WS_IsMovable()` | Policy gate: skip tool windows, cloaked, no-title, excluded classes, visible-owner |
-| `WS_MoveToMonitor()` | Relative position mapping across monitors with taskbar-aware clamping, maximized/minimized handling, inline opacity reveal |
+| `WS_IsMovable()` | Policy gate: skip tool windows, excluded classes, no-title (except `ApplicationFrameWindow`), visible-owner |
+| `WS_MoveToMonitor()` | Position mapping across monitors (relative or cursor-centered), taskbar-aware clamping, maximized/minimized handling, inline opacity reveal |
 | `WS_Reveal()` | Idempotent opacity restore + sentinel set |
 | `WS_Log()` | Debug logging to `%TEMP%\WS_Debug.log` |
 | `WS_CleanPrePending` | Timer: stale entry cleanup for PrePending, Hidden, OwnerSentinel, RecentCreated, RecentExes |
@@ -358,6 +358,23 @@ If overlay (Start menu) was recently visible (`WS.OverlayTick` < 2s) AND a **dif
 
 **Owner-based sentinel** (`WS.OwnerSentinel`): When `WS_MoveToMonitor` processes a window, it records the window's owner hwnd with a timestamp. The CREATE handler checks if a new window's owner has a recent sentinel (<200ms) and skips hiding. This protects sibling `#32770` windows (e.g., Run dialog).
 
+### Window Positioning Modes
+
+`WS_MoveToMonitor` uses two positioning strategies depending on the window type:
+
+| Mode | Condition | Behavior |
+|------|-----------|----------|
+| **Relative mapping** | Window has a title | Maps relative position from source to target monitor (window at 25% across monitor A → 25% across monitor B) |
+| **Cursor-centered** | Window has no title | Centers window on cursor position, clamped to work area |
+
+**Why two modes**: Application windows (titled) have meaningful positions — the user or app placed them intentionally, so preserving relative position across monitors makes sense. Titleless windows (popups, dialogs, share sheets) spawn at system-default positions (often 0,0) with no user intent. Centering on the cursor places them where the user is looking and interacting.
+
+**Example**: Explorer's Share dialog (`ApplicationFrameWindow` with empty title) spawns at (0,0) on whatever monitor Windows chooses. Relative mapping would place it at (0,0) on the cursor's monitor. Cursor-centering places it directly under the cursor where the user right-clicked.
+
+**`ApplicationFrameWindow` exception**: `WS_IsMovable()` normally rejects titleless windows (infrastructure/phantom windows). `ApplicationFrameWindow` is exempted because it's always a real UWP frame, even when the title bar text is empty (e.g., Share popup, Windows Store dialogs).
+
+**`RAIL_WINDOW` exclusion**: WSLg GUI apps (`msrdc.exe` RAIL windows) are excluded from window spawning entirely. Their RDP-based cursor rendering is disrupted by `WS_EX_LAYERED` opacity manipulation.
+
 ### WS Object Properties
 
 | Property | Purpose |
@@ -367,7 +384,7 @@ If overlay (Start menu) was recently visible (`WS.OverlayTick` < 2s) AND a **dif
 | `WS.HookHwnd` | Hidden GUI window for shell hook |
 | `WS.Pending` | Deferred hwnd → `{mon, tick}` |
 | `WS.PendingAltTab` | Alt+Tab state: `{mon, tick}` or `""` |
-| `WS.ExcludedClasses` | Array of window classes to skip |
+| `WS.ExcludedClasses` | Array of window classes to skip (includes `RAIL_WINDOW` for WSLg) |
 | `WS.PrePending` | CREATE-registered hwnd → `{mon, tick, qpc}` |
 | `WS.Hidden` | Opacity-hidden hwnd → `hadLayered` (bool), or `-1` (sentinel) |
 | `WS.OwnerSentinel` | Owner hwnd → `A_TickCount` (sibling CREATE suppression, 200ms) |

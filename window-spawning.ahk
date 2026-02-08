@@ -25,7 +25,8 @@ WS_Init() {
   WS.OwnerSentinel := {}           ; Owner hwnd -> A_TickCount (sibling CREATE suppression)
   WS.ExcludedClasses := ["tooltips_class32", "NotifyIconOverflowWindow"
     , "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Progman", "WorkerW"
-    , "MultitaskingViewFrame", "Windows.UI.Core.CoreWindow", "ForegroundStaging"]
+    , "MultitaskingViewFrame", "Windows.UI.Core.CoreWindow", "ForegroundStaging"
+    , "RAIL_WINDOW"]
   DllCall("QueryPerformanceFrequency", "Int64*", _qpcFreq)
   WS.QPCFreq := _qpcFreq
 
@@ -535,8 +536,11 @@ WS_IsReady(hwnd) {
 
 WS_IsMovable(hwnd) {
   global WS
+  WinGetClass, _cls, ahk_id %hwnd%
+  if HasVal(WS.ExcludedClasses, _cls)
+    return false
   WinGetTitle, _title, ahk_id %hwnd%
-  if (_title == "")
+  if (_title == "" && _cls != "ApplicationFrameWindow")
     return false
   _owner := DllCall("GetWindow", "Ptr", hwnd, "UInt", 4, "Ptr")  ; GW_OWNER=4
   if (_owner) {
@@ -546,9 +550,6 @@ WS_IsMovable(hwnd) {
   }
   WinGet, _exStyle, ExStyle, ahk_id %hwnd%
   if (_exStyle & 0x80)  ; WS_EX_TOOLWINDOW
-    return false
-  WinGetClass, _cls, ahk_id %hwnd%
-  if HasVal(WS.ExcludedClasses, _cls)
     return false
   return true
 }
@@ -612,10 +613,19 @@ WS_MoveToMonitor(hwnd, srcMon, tgtMon) {
       winW := tgtW
     if (winH > tgtH)
       winH := tgtH
-    _relX := (winX - srcLeft) / srcW
-    _relY := (winY - srcTop) / srcH
-    newX := Round(tgtLeft + _relX * tgtW)
-    newY := Round(tgtTop + _relY * tgtH)
+    ; Titleless windows (popups/dialogs): center on cursor instead of relative mapping
+    WinGetTitle, _moveTitle, ahk_id %hwnd%
+    if (_moveTitle == "") {
+      CoordMode, Mouse, Screen
+      MouseGetPos, _mx, _my
+      newX := _mx - winW // 2
+      newY := _my - winH // 2
+    } else {
+      _relX := (winX - srcLeft) / srcW
+      _relY := (winY - srcTop) / srcH
+      newX := Round(tgtLeft + _relX * tgtW)
+      newY := Round(tgtTop + _relY * tgtH)
+    }
     if (newX < tgtLeft)
       newX := tgtLeft
     if (newY < tgtTop)

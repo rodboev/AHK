@@ -17,11 +17,13 @@
 SendMode, Input
 SetWorkingDir, %A_ScriptDir%
 SetTitleMatchMode, 2
+EnvGet, G_UserProfile, USERPROFILE
 
 ; Disable hotkeys inside remote sessions (RDP, Hyper-V, VMWare)
 #If IsRemoteSession()
   If !IsRemoteSession()
     WS_Init() ; Init window spawning
+    _TerminalInit()
   Return
 #If
 
@@ -249,7 +251,7 @@ Return
   If (ahk_class = "Progman")
     path := A_Desktop
   Else If (ahk_class != "CabinetWClass" || path = "")
-    path := A_UserProfile
+    path := G_UserProfile
 
   ; Activate existing e++ window for this path, or open new
   pid := ProcessExistsByCommandLine("files-stable.exe"" " . path)
@@ -367,7 +369,8 @@ GetExplorerPath() {
   For window in shell.Windows {
     If (window.hwnd = hwnd) {
       Try {
-        Return window.Document.Folder.Self.Path
+        _path := window.Document.Folder.Self.Path
+        Return RegExMatch(_path, "^[A-Za-z]:\\|^\\\\") ? _path : ""
       }
       Catch {
         Return ""  ; not a filesystem view
