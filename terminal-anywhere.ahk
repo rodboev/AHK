@@ -33,6 +33,20 @@ Return
   UserRun("wt", "-d " . _dir)
 Return
 
+!+F10:: ; [ Alt + Shift + F10 ] -> Open WSL profile from any path (elevated)
+  _dir := _GetTerminalDir()
+  _wsl := _ParseWSLPath(_dir)
+  If (IsObject(_wsl)) {
+    UserRun("elevate", "wt", "-p", _wsl.distro, "-d " . _dir)
+    Return
+  }
+  If (G_WSLDistro && RegExMatch(_dir, "^[A-Za-z]:\\")) {
+    UserRun("elevate", "wt", "-p", G_WSLDistro, "-d " . _dir)
+    Return
+  }
+  UserRun("elevate", "wt", "-d " . _dir)
+Return
+
 ^F10:: ; [ Ctrl + F10 ] -> Open WSL profile + launch claude
   _dir := _GetTerminalDir()
   _distro := ""
@@ -45,6 +59,20 @@ Return
     UserRun("wt", "-p", _distro, "-d " . _dir, "--", "bash", "-lic", """claude --dangerously-skip-permissions""")
   Else
     UserRun("wt", "-d " . _dir)
+Return
+
+^+F10:: ; [ Ctrl + Shift + F10 ] -> Open WSL profile + launch claude (elevated)
+  _dir := _GetTerminalDir()
+  _distro := ""
+  _wsl := _ParseWSLPath(_dir)
+  If (IsObject(_wsl))
+    _distro := _wsl.distro
+  Else If (G_WSLDistro && RegExMatch(_dir, "^[A-Za-z]:\\"))
+    _distro := G_WSLDistro
+  If (_distro)
+    UserRun("elevate", "wt", "-p", _distro, "-d " . _dir, "--", "bash", "-lic", """claude --dangerously-skip-permissions""")
+  Else
+    UserRun("elevate", "wt", "-d " . _dir)
 Return
 
 +F10:: ; [ Shift + F10 ] -> Open with admin rights
