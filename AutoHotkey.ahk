@@ -167,8 +167,9 @@ Esc::
 Return
 #IfWinActive
 
-; Up one level in Explorer unless renaming or in tree view
+; Explorer navigation overrides
 #IfWinActive, ahk_class CabinetWClass
+  !d::SendInput {Alt Up}{F4} ; [ Alt+D ] -> Focus address bar
   Backspace::
     ControlGet renamestatus,Visible,,Edit1,A
     ControlGetFocus focused, A
