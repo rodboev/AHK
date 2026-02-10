@@ -124,7 +124,7 @@ CollectWindowInfo(hwnd) {
 ; Returns {name, type, autoId, className} for the element under the cursor
 GetUIAElementInfo(x, y) {
   global G_UIA
-  result := {name: "", type: "", autoId: "", className: ""}
+  result := {name: "", type: "", autoId: "", className: "", pid: 0}
   Try {
     If (!G_UIA)
       G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
@@ -139,6 +139,7 @@ GetUIAElementInfo(x, y) {
       result.type := _GetUIAProp(_el, 30004)         ; UIA_LocalizedControlTypePropertyId
       result.autoId := _GetUIAProp(_el, 30011)       ; UIA_AutomationIdPropertyId
       result.className := _GetUIAProp(_el, 30012)    ; UIA_ClassNamePropertyId
+      result.pid := _GetUIAProp(_el, 30002)          ; UIA_ProcessIdPropertyId
     } Finally {
       ObjRelease(_el)
     }
@@ -146,13 +147,15 @@ GetUIAElementInfo(x, y) {
   Return result
 }
 
-; Read a BSTR property from a UIA element via GetCurrentPropertyValue (vtable 10)
+; Read a property (VT_I4 or VT_BSTR) from a UIA element via GetCurrentPropertyValue (vtable 10)
 _GetUIAProp(el, propId) {
   VarSetCapacity(_var, 24, 0)
   DllCall(NumGet(NumGet(el+0) + 10*A_PtrSize), "Ptr", el, "Int", propId, "Ptr", &_var)
   _vt := NumGet(_var, 0, "UShort")
   _val := ""
-  If (_vt = 8) {  ; VT_BSTR
+  If (_vt = 3) {  ; VT_I4
+    _val := NumGet(_var, 8, "Int")
+  } Else If (_vt = 8) {  ; VT_BSTR
     _bstr := NumGet(_var, 8, "Ptr")
     If (_bstr)
       _val := StrGet(_bstr, "UTF-16")
@@ -174,8 +177,13 @@ FormatWindowInfo(info) {
   s .= "`n"
   ; Path/Process group
   s .= "Folder: " . info.exe.dir . "`n"
-  s .= "Process command line: " . WrapList(info.cmdLine, " ") . "`n"
-  s .= "Process ID: " . info.pid . (info.elevated ? " (Elevated)" : "") . "`n"
+  s .= "Command line: " . WrapList(info.cmdLine, " ") . "`n"
+  _pidLine := "Process ID: " . info.pid
+  If (info.HasKey("hostPid"))
+    _pidLine .= " (host: " . info.hostPid . ")"
+  If (info.elevated)
+    _pidLine .= " (Elevated)"
+  s .= _pidLine . "`n"
   s .= "`n"
   ; Geometry group
   s .= "Position: (" . info.x . ", " . info.y . ")`n"
@@ -219,7 +227,9 @@ FormatWindowInfo(info) {
 ; Wrap list items at ~100 chars, preserving whole items
 ; Input: comma-separated string like "item1, item2, item3"
 ; Output: same items wrapped to fit maxLen, with continuation lines indented
-WrapList(text, delimiter := ",", maxLen := 100) {
+WrapList(text, delimiter := ",", maxLen := 100, joiner := "") {
+  If (joiner = "")
+    joiner := delimiter = " " ? " " : delimiter . " "
   result := ""
   currentLine := ""
   Loop, Parse, text, %delimiter%
@@ -228,7 +238,7 @@ WrapList(text, delimiter := ",", maxLen := 100) {
     If (item = "")
       Continue
     ; Calculate what this line would look like with the new item
-    testLine := currentLine = "" ? item : currentLine . ", " . item
+    testLine := currentLine = "" ? item : currentLine . joiner . item
     If (StrLen(testLine) > maxLen && currentLine != "") {
       ; Line would be too long, start a new line
       result .= (result = "" ? "" : "`n  ") . currentLine
@@ -340,7 +350,6 @@ WindowSpyUpdate:
     info.focusedHwnd := _fh
     info.scrollPattern := MB_ScrollPattern
     info.uia := _uia
-    display := FormatWindowInfo(info)
   } Else {
     ; Different windows — cursor primary, inline active-only info
     info := CollectWindowInfo(CursorWin)
@@ -352,8 +361,20 @@ WindowSpyUpdate:
       info.activeFocus := _fc
       info.activeFocusHwnd := _fh
     }
-    display := FormatWindowInfo(info)
   }
+
+  ; UIA PID override: use content process when it differs from host
+  _contentPid := GetUIAProcessId(CursorWin)
+  If (_contentPid && _contentPid != info.pid) {
+    info.hostPid := info.pid
+    info.pid := _contentPid
+    info.elevated := IsProcessElevated(_contentPid)
+    info.cmdLine := ""
+    For _proc in ComObjGet("winmgmts:").ExecQuery("Select CommandLine from Win32_Process where ProcessId=" . _contentPid)
+      info.cmdLine := _proc.CommandLine
+  }
+
+  display := FormatWindowInfo(info)
 
   ; Store for dialog (frozen snapshot)
   global WindowSpyDisplayInfo, WindowSpyLastContent

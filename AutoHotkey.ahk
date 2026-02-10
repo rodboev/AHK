@@ -432,6 +432,36 @@ GetCursorMonitor() {
   Return 1
 }
 
+; ⇒ Get the UIA content process PID for a window (resolves host vs content for UWP/Electron)
+; Returns content PID if different from window PID, otherwise returns window PID
+GetUIAProcessId(hwnd) {
+  global G_UIA
+  WinGet, _winPid, PID, ahk_id %hwnd%
+  If (!_winPid)
+    Return 0
+  Try {
+    If (!G_UIA)
+      G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
+    _el := 0
+    ; IUIAutomation::ElementFromHandle (vtable 6)
+    DllCall(NumGet(NumGet(G_UIA+0) + 6*A_PtrSize), "Ptr", G_UIA, "Ptr", hwnd, "Ptr*", _el)
+    If (!_el)
+      Return _winPid
+    Try {
+      VarSetCapacity(_var, 24, 0)
+      ; IUIAutomationElement::GetCurrentPropertyValue (vtable 10)
+      DllCall(NumGet(NumGet(_el+0) + 10*A_PtrSize), "Ptr", _el, "Int", 30002, "Ptr", &_var)
+      _vt := NumGet(_var, 0, "UShort")
+      _uiaPid := (_vt = 3) ? NumGet(_var, 8, "Int") : 0
+      DllCall("OleAut32\VariantClear", "Ptr", &_var)
+    } Finally {
+      ObjRelease(_el)
+    }
+    Return _uiaPid ? _uiaPid : _winPid
+  }
+  Return _winPid
+}
+
 ; ⇒ Get CmdLine for a window (by PID, or active window if omitted)
 GetActiveWindowCommandLine(pid := "") {
   If (pid = "")
