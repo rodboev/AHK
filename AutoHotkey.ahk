@@ -69,18 +69,12 @@ Return
 +!0::Send {U+2022} ; [ ShIft+Alt+0] -> Bullet: •
 ~RWin::Send {AppsKey} ; [RWin] -> Apps/context menu
 ~#t::Run explorer shell:::{3080F90E-D7AD-11D9-BD98-0000947B0257} ; Win+T -> Task View
-+!x:: ; [ ShIft+Alt+X ] -> Refresh Explorer
-^+!x:: ; [ Ctrl+ShIft+Alt+X ] -> Restart Explorer
-  If (FindInPath("Rexplorer_x64.exe")) {
-    If GetKeyState("Ctrl", "P") {
-      UserRun("Rexplorer_x64.exe")
-    }
-    Else {
-      UserRun("cmd", "/c", "taskkill /f /im explorer.exe && start explorer.exe")
-    }
+  If (FindInPath("rexplorer_x64.exe")) {
+    +!x::UserRun("rexplorer_x64.exe", "/f") ; [ ShIft+Alt+X ] -> Refresh Explorer
+    ^+!x::UserRun("rexplorer_x64.exe") ; [ Ctrl+ShIft+Alt+X ] -> Restart Explorer
   }
   Else {
-    UserRun("Rexplorer_x64.exe", "/f")
+    UserRun("cmd", "/c", "taskkill /f /im explorer.exe && start explorer.exe")
   }
 Return
 
@@ -98,6 +92,15 @@ $XButton2::
   Sleep 100
 }
 Return
+
+#IfWinActive ahk_exe JPEGView.exe
+  Enter::
+    WinGet, active_id, ID, A
+    Send w
+    WinClose, ahk_id %active_id%
+  Return
+  $MButton::SendInput {F11}
+#IfWinActive
 
 ; VLC binding to go to next file on mouse middle button press
 #IfWinActive ahk_class QWidget
@@ -356,19 +359,39 @@ FindInPath(exe) {
   Return ""
 }
 
-; ⇒ Get current path of active Explorer window
+; ⇒ Get current path of active Explorer window (tab-aware for Win11 22H2+)
 GetExplorerPath() {
   static shell := ComObjCreate("Shell.Application")
   WinGet, hwnd, ID, A
+  ; ShellTabWindowClass1 = active tab (ClassNN 1 = highest z-order)
+  activeTab := 0
+  Try ControlGet, activeTab, Hwnd,, ShellTabWindowClass1, ahk_id %hwnd%
   For window in shell.Windows {
-    If (window.hwnd = hwnd) {
+    If (window.hwnd != hwnd)
+      Continue
+    If (activeTab) {
+      ; IOleWindow::GetWindow (vtable 3) returns each tab's HWND
+      shellBrowser := ComObjQuery(window
+        , "{000214E2-0000-0000-C000-000000000046}"
+        , "{000214E2-0000-0000-C000-000000000046}")
+      If (!shellBrowser)
+        Continue
+      thisTab := 0
       Try {
-        _path := window.Document.Folder.Self.Path
-        Return RegExMatch(_path, "^[A-Za-z]:\\|^\\\\") && !InStr(_path, "::") ? _path : ""
+        DllCall(NumGet(NumGet(shellBrowser+0)+3*A_PtrSize)
+          , "Ptr", shellBrowser, "UInt*", thisTab)
+      } Finally {
+        ObjRelease(shellBrowser)
       }
-      Catch {
-        Return ""  ; not a filesystem view
-      }
+      If (thisTab != activeTab)
+        Continue
+    }
+    Try {
+      _path := window.Document.Folder.Self.Path
+      Return RegExMatch(_path, "^[A-Za-z]:\\|^\\\\") && !InStr(_path, "::") ? _path : ""
+    }
+    Catch {
+      Return ""  ; not a filesystem view
     }
   }
   Return ""

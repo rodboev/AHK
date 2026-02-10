@@ -36,7 +36,7 @@ Return
 TerminalInit() {
   global G_WSLDistro, G_WSLAutoPaths
   G_WSLDistro := "Ubuntu-24.04"
-  G_WSLAutoPaths := ["C:\Dropbox\Projects", "C:\Users\Rod\Documents"]
+  G_WSLAutoPaths := ["C:\Dropbox\Projects"] ; "C:\Users\Rod\Documents"
 }
 
 ; ⇒ Open Windows Terminal with optional WSL profile, elevation, and Claude
