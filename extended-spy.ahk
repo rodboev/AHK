@@ -8,75 +8,75 @@
 ; Version: 1.1
 #w::
   ; Cycle: Off(0) → Tooltip(1) → Dialog(2) → Off(0)
-  If (WindowSpyState = 0) {
-    WindowSpyState := 1
-    WindowSpyLastContent := ""
-    SetTimer, WindowSpyUpdate, 800
-    GoSub, WindowSpyUpdate
-  } Else If (WindowSpyState = 1) {
-    SetTimer, WindowSpyUpdate, Off
+  If (!ExtendedSpyState) {
+    ExtendedSpyState := 1
+    ExtendedSpyLastContent := ""
+    SetTimer, ExtendedSpyUpdate, 800
+    GoSub, ExtendedSpyUpdate
+  } Else If (ExtendedSpyState = 1) {
+    SetTimer, ExtendedSpyUpdate, Off
     ToolTip
-    WindowSpyState := 2
-    WindowSpyShowDialog()
+    ExtendedSpyState := 2
+    ExtendedSpyShowDialog()
   } Else {
-    Gui, WindowSpy:Destroy
-    WindowSpyState := 0
+    Gui, ExtendedSpy:Destroy
+    ExtendedSpyState := 0
   }
 Return
 
-#If WindowSpyState
+#If ExtendedSpyState
 $Esc::
-  If (WindowSpyState = 2) {
-    Gui, WindowSpy:Destroy
-    WindowSpyState := 0
+  If (ExtendedSpyState = 2) {
+    Gui, ExtendedSpy:Destroy
+    ExtendedSpyState := 0
     Return
   }
-  SetTimer, WindowSpyUpdate, Off
+  SetTimer, ExtendedSpyUpdate, Off
   ToolTip
-  WindowSpyState := 0
+  ExtendedSpyState := 0
 Return
 
 ~LButton::
-  If (WindowSpyState = 1) {
+  If (ExtendedSpyState = 1) {
     MouseGetPos,,, clickWin
     WinGetClass, clickClass, ahk_id %clickWin%
     If (clickClass = "tooltips_class32") {
-      SetTimer, WindowSpyUpdate, Off
+      SetTimer, ExtendedSpyUpdate, Off
       ToolTip
-      WindowSpyState := 2
-      WindowSpyShowDialog()
+      ExtendedSpyState := 2
+      ExtendedSpyShowDialog()
     }
   }
 Return
 #If
 
-WindowSpyShowDialog() {
-  global WindowSpyDisplayInfo, WindowSpyEdit
-  If (WindowSpyDisplayInfo = "")
+ExtendedSpyShowDialog() {
+  global ExtendedSpyDisplayInfo, ExtendedSpyEdit
+  If (ExtendedSpyDisplayInfo = "")
     Return
   ToolTip
-  Gui, WindowSpy:Destroy
+  Gui, ExtendedSpy:Destroy
   _curMon := GetCursorMonitor()
   SysGet, Workspace, MonitorWorkArea, %_curMon%
   ; Dimensions from display content (same wrapping as tooltip)
-  StringReplace, _, WindowSpyDisplayInfo, `n, `n, UseErrorLevel
+  StringReplace, _, ExtendedSpyDisplayInfo, `n, `n, UseErrorLevel
   lineCount := ErrorLevel + 1
   maxHeight := WorkspaceBottom - WorkspaceTop - 50
   rowHeight := 22  ; Consolas 9pt + Edit control internal padding
   maxRows := Floor(maxHeight / rowHeight)
   rowCount := Min(lineCount, maxRows)
   _maxLineLen := 0
-  Loop, Parse, WindowSpyDisplayInfo, `n
+  Loop, Parse, ExtendedSpyDisplayInfo, `n
   {
     If (StrLen(A_LoopField) > _maxLineLen)
       _maxLineLen := StrLen(A_LoopField)
   }
   editWidth := Min(_maxLineLen * 7 + 30, WorkspaceRight - WorkspaceLeft - 100)
-  Gui, WindowSpy:+AlwaysOnTop +Owner
-  Gui, WindowSpy:Font, s9, Consolas
-  Gui, WindowSpy:Add, Edit, vWindowSpyEdit w%editWidth% r%rowCount% +Multi +ReadOnly, %WindowSpyDisplayInfo%
+  Gui, ExtendedSpy:+AlwaysOnTop +Owner
+  Gui, ExtendedSpy:Font, s9, Consolas
+  Gui, ExtendedSpy:Add, Edit, vExtendedSpyEdit w%editWidth% r%rowCount% +Multi +ReadOnly, %ExtendedSpyDisplayInfo%
   ; Show first to render and get dimensions, then reposition flush to bottom-right
-  Gui, WindowSpy:Show,, Window Spy (#w or Esc to close)
+  Gui, ExtendedSpy:Show,, Extended Spy (#w or Esc to close)
   WinGetPos,,, GUIWidth, GUIHeight, A
   xPos := WorkspaceRight - GUIWidth
   yPos := WorkspaceBottom - GUIHeight
@@ -150,10 +150,12 @@ GetUIAElementInfo(x, y) {
 ; Read a property (VT_I4 or VT_BSTR) from a UIA element via GetCurrentPropertyValue (vtable 10)
 _GetUIAProp(el, propId) {
   VarSetCapacity(_var, 24, 0)
+  DllCall("OleAut32\VariantInit", "Ptr", &_var)
   DllCall(NumGet(NumGet(el+0) + 10*A_PtrSize), "Ptr", el, "Int", propId, "Ptr", &_var)
   _vt := NumGet(_var, 0, "UShort")
   _val := ""
-  If (_vt = 3) {  ; VT_I4
+  If (_vt = 0) {  ; VT_EMPTY — property not supported
+  } Else If (_vt = 3) {  ; VT_I4
     _val := NumGet(_var, 8, "Int")
   } Else If (_vt = 8) {  ; VT_BSTR
     _bstr := NumGet(_var, 8, "Ptr")
@@ -309,13 +311,13 @@ SortList(text) {
   Return result
 }
 
-WindowSpyGuiEscape:
-WindowSpyGuiClose:
-  Gui, WindowSpy:Destroy
-  WindowSpyState := 0
+ExtendedSpyGuiEscape:
+ExtendedSpyGuiClose:
+  Gui, ExtendedSpy:Destroy
+  ExtendedSpyState := 0
 Return
 
-WindowSpyUpdate:
+ExtendedSpyUpdate:
   CoordMode, Mouse, Screen
   CoordMode, ToolTip, Screen
   CoordMode, Pixel, Screen
@@ -377,17 +379,17 @@ WindowSpyUpdate:
   display := FormatWindowInfo(info)
 
   ; Store for dialog (frozen snapshot)
-  global WindowSpyDisplayInfo, WindowSpyLastContent
-  WindowSpyDisplayInfo := display
+  global ExtendedSpyDisplayInfo, ExtendedSpyLastContent
+  ExtendedSpyDisplayInfo := display
 
   ; Only update tooltip if content changed (reduces flicker)
-  If (display = WindowSpyLastContent)
+  If (display = ExtendedSpyLastContent)
     Return
-  WindowSpyLastContent := display
+  ExtendedSpyLastContent := display
 
   ; Position tooltip in bottom-right corner
   _curMon := GetCursorMonitor()
   SysGet, Workspace, MonitorWorkArea, %_curMon%
-  tooltipHeader := "Window Spy (#w to freeze, Esc to close)`n`n"
+  tooltipHeader := "Extended Spy (#w to freeze, Esc to close)`n`n"
   ToolTip, %tooltipHeader%%display%, WorkspaceRight - 550, WorkspaceBottom - 620
 Return
