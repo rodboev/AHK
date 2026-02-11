@@ -192,6 +192,9 @@ No automated tests. Manual verification required:
 | `UserRun(exe, args*)` | `AutoHotkey.ahk` | Smart process execution with elevation and quoting |
 | `HasVal(arr, val)` | `AutoHotkey.ahk` | Check if array contains value (partial match) |
 | `ProcessExistsByCommandLine(cmdLine)` | `AutoHotkey.ahk` | Find PID by command line match via WMI |
+| `GetUIAProcessId(hwnd)` | `AutoHotkey.ahk` | UIA content process PID (resolves UWP/Electron host) |
+| `_WTGetScrollPct()` | `AutoHotkey.ahk` | WT vertical scroll percent via UIA (-1=NoScroll, 0-100) |
+| `_WTSetScrollPct(pct)` | `AutoHotkey.ahk` | Set WT vertical scroll percent via UIA ScrollPattern |
 | `GetUIAElementInfo(x, y)` | `extended-spy.ahk` | UIA element properties at screen coordinates |
 | `GetScrollPos(hwnd)` | `mbutton-scroll.ahk` | Win32 vertical scroll position |
 | `HasWin32Scrollbar(hwnd)` | `mbutton-scroll.ahk` | Checks if Win32 scrollbar exists |
