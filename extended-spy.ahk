@@ -157,6 +157,8 @@ _GetUIAProp(el, propId) {
   If (_vt = 0) {  ; VT_EMPTY — property not supported
   } Else If (_vt = 3) {  ; VT_I4
     _val := NumGet(_var, 8, "Int")
+  } Else If (_vt = 5) {  ; VT_R8 (Double)
+    _val := NumGet(_var, 8, "Double")
   } Else If (_vt = 8) {  ; VT_BSTR
     _bstr := NumGet(_var, 8, "Ptr")
     If (_bstr)
@@ -195,6 +197,14 @@ FormatWindowInfo(info) {
   s .= "ExStyle: " . info.exStyle . "`n"
   If (info.HasKey("scrollPattern"))
     s .= "ScrollPattern: " . info.scrollPattern . "`n"
+  ; WT Scroll position
+  If (info.HasKey("wtScroll")) {
+    If (info.wtScroll.pct != -1) {
+      _tag := info.wtScroll.status != "" ? " [" . info.wtScroll.status . "]" : ""
+      s .= "WT Scroll: " . Round(info.wtScroll.pct, 1) . "%" . _tag . "`n"
+    } Else
+      s .= "WT Scroll: (no scroll)`n"
+  }
   ; UIA element at cursor
   If (info.HasKey("uia") && (info.uia.type != "" || info.uia.name != "")) {
     _uiaLine := "UIA: "
@@ -363,6 +373,11 @@ ExtendedSpyUpdate:
       info.activeFocus := _fc
       info.activeFocusHwnd := _fh
     }
+  }
+
+  ; WT Scroll position (uses cached value from guard timer to avoid COM reentrancy)
+  If (info.exe.path ~= "i)WindowsTerminal") {
+    info.wtScroll := {pct: G_WTScrollLastPct, status: G_WTScrollStatus}
   }
 
   ; UIA PID override: use content process when it differs from host

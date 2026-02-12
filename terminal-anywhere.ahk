@@ -2,25 +2,19 @@
 ; ┃ WINDOWS TERMINAL FROM ANYWHERE ┃
 ; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 ; [ F10 ]                       -> Open current path (auto-detect WSL)
-; [ Alt + F10 ]                 -> Open current path (force WSL)
-; [ Shift + F10 ]               -> Open current path as admin (auto-detect WSL)
-; [ Alt + Shift + F10 ]         -> Open current path as admin (force WSL)
-; [ Ctrl + F10 ]                -> Open claude in current path (force WSL)
-; [ Ctrl + Shift + F10 ]        -> Open claude in current path as admin (force WSL)
+; [ Alt + F10 ]                 -> Open current path, force WSL
+; [ Shift + F10 ]               -> Open current path as admin
+; [ Alt + Shift + F10 ]         -> Open current path as admin, force WSL
+; [ Ctrl + F10 ]                -> Open claude in current path
+; [ Ctrl + Shift + F10 ]        -> Open claude in current path as admin
 ; [ Ctrl + Alt + Shift + F10 ]  -> Open current path as SYSTEM
 
-; #  Win            ^
-; +  Shift          ! Alt
-; !  Alt
-; +  Shift
-; +  Shift+Alt
-
-F10::OpenTerminal()
-!F10::OpenTerminal({wsl: "force"})
-+F10::OpenTerminal({elevate: true})
-!+F10::OpenTerminal({wsl: "force", elevate: true})
-^F10::OpenTerminal({wsl: "force", claude: true})
-^+F10::OpenTerminal({wsl: "force", elevate: true, claude: true})
+F10::OpenTerminal(   {elevate: false, claude: false})
+!F10::OpenTerminal(  {elevate: false, claude: false, wsl: true})
++F10::OpenTerminal(  {elevate: true,  claude: false})
+!+F10::OpenTerminal( {elevate: true,  claude: false, wsl: true})
+^F10::OpenTerminal(  {elevate: false, claude: true})
+^+F10::OpenTerminal( {elevate: true,  claude: true})
 ^!+F10:: ; [ Ctrl + Alt + Shift + F10 ] -> Open current path as SYSTEM
   _dir := GetTerminalDir()
   ; Resolve wt.exe to full path — SYSTEM context lacks user PATH entries
@@ -48,62 +42,47 @@ Return
 TerminalInit() {
   global TA
   TA := {}
-  TA.WSLDistro := "Ubuntu-24.04"
-  TA.WSLAutoPaths := ["C:\Users\Rod\Projects"] ; "C:\Users\Rod\Documents"
-  TA.WTProfile := "" ; Profile name for non-WSL launches. Blank = first non-hidden profile from settings.json
+  TA.WSLDistro := GetDefaultWSLDistro()
+  TA.WTProfile := ""
   If (!TA.WTProfile)
     TA.WTProfile := GetWTFirstProfile()
 }
 
 ; ⇒ Open Windows Terminal with optional WSL profile, elevation, and Claude
-OpenTerminal(opts := "") {
-  ; OpenTerminal({wsl: "auto|force|off", elevate: bool, claude: bool})
-  ;   wsl      "auto"  = WSL for UNC paths + paths under TA.WSLAutoPaths (default)
-  ;            "force" = WSL for UNC paths + any Windows drive letter
-  ;            "off"   = plain Windows Terminal, no WSL
-  ;   elevate  true    = run as Administrator (UAC prompt)
-  ;   claude   true    = launch Claude CLI in WSL (needs distro)
-  ;
-  ; Missing keys default to: wsl="auto", elevate=false, claude=false
+OpenTerminal(opts) {
+  ; opts := {elevate: bool, claude: bool, wsl: bool}
+  ;   elevate  true  = run as Administrator (UAC prompt)
+  ;   claude   true  = launch Claude CLI in WSL
+  ;   wsl      true  = force WSL even from Windows paths (Alt variants)
+  ;   Missing wsl key = auto-detect from path only
 
   global TA
-  _dir := GetTerminalDir()
-  _distro := ""
-  _wslMode := opts.wsl ? opts.wsl : "auto"
+  _winDir := GetTerminalDir()
+  _wsl := ParseWSLPath(_winDir)
 
-  ; Resolve WSL distro name (if any)
-  If (_wslMode != "off") {
-    ; Check for WSL UNC path first (\\wsl.localhost\distro\... or \\wsl$\distro\...)
-    _wsl := ParseWSLPath(_dir)
-    If (IsObject(_wsl))
-      _distro := _wsl.distro
-    Else If (TA.WSLDistro) {
-      ; "force": any Windows drive letter → WSL profile
-      If (_wslMode = "force" && RegExMatch(_dir, "^[A-Za-z]:\\"))
-        _distro := TA.WSLDistro
-      ; "auto": path starts with any configured prefix → WSL profile
-      Else If (_wslMode = "auto") {
-        For _, _prefix in TA.WSLAutoPaths {
-          If (InStr(_dir, _prefix) = 1) {
-            _distro := TA.WSLDistro
-            Break
-          }
-        }
-      }
-    }
+  If (IsObject(_wsl)) {
+    ; UNC path — WSL detected from path
+    _profile := _wsl.distro
+  } Else If (opts.wsl && TA.WSLDistro) {
+    ; Force WSL — Windows path stays as-is, WT translates to /mnt/ internally
+    _profile := TA.WSLDistro
+  } Else {
+    ; Windows path — use configured WT profile
+    _profile := TA.WTProfile
   }
 
-  ; --- Build UserRun arguments ---
+  ; Build wt command — always pass original Windows/UNC path to -d
+  ; WT handles path translation for WSL profiles internally
   _args := []
   If (opts.elevate)
     _args.Push("elevate")
   _args.Push("wt")
-  _profile := _distro ? _distro : TA.WTProfile
   If (_profile)
     _args.Push("-p", _profile)
-  _args.Push("-d " . _dir)
-  If (opts.claude && _distro)
-    _args.Push("--", "bash", "-lic", """claude --dangerously-skip-permissions""")
+  _args.Push("-d " . _winDir)
+  _isWSL := IsObject(_wsl) || (opts.wsl && TA.WSLDistro)
+  If (opts.claude && _isWSL)
+    _args.Push("--", "bash", "-lic", "claude")
 
   UserRun(_args*)
 }
@@ -120,6 +99,15 @@ GetTerminalDir() {
   }
   _exe := GetExePath()
   Return _exe.dir ? _exe.dir : G_UserProfile
+}
+
+; ⇒ Read default WSL distro name from registry
+GetDefaultWSLDistro() {
+  RegRead, _guid, HKCU, Software\Microsoft\Windows\CurrentVersion\Lxss, DefaultDistribution
+  If (ErrorLevel || !_guid)
+    Return ""
+  RegRead, _name, HKCU, Software\Microsoft\Windows\CurrentVersion\Lxss\%_guid%, DistributionName
+  Return ErrorLevel ? "" : _name
 }
 
 ; ⇒ Read first non-hidden profile name from Windows Terminal settings.json
@@ -154,11 +142,22 @@ GetWTFirstProfile() {
   Return ""
 }
 
-; ⇒ Parse WSL UNC path into distro name
-; Input:  \\wsl.localhost\Ubuntu-24.04\home\rod  or  \\wsl$\Ubuntu-24.04\home\rod
-; Output: {distro: "Ubuntu-24.04"} or "" if not a WSL path
+; ⇒ Parse WSL UNC path into distro name and Linux directory
+; Input:  \\wsl.localhost\Ubuntu-24.04\home\rod\chats  or  \\wsl$\Ubuntu-24.04\home\rod
+; Output: {distro: "Ubuntu-24.04", dir: "/home/rod/chats"} or "" if not a WSL path
 ParseWSLPath(path) {
-  If (!RegExMatch(path, "i)^\\\\wsl(?:\.localhost|\$)\\([^\\]+)", m))
+  If (!RegExMatch(path, "i)^\\\\wsl(?:\.localhost|\$)\\([^\\]+)\\?(.*)", m))
     Return ""
-  Return {distro: m1}
+  _dir := m2 ? ("/" . StrReplace(m2, "\", "/")) : "/"
+  Return {distro: m1, dir: _dir}
+}
+
+; ⇒ Convert Windows drive path to WSL /mnt/ path
+; Input:  C:\Users\Rod\AppData
+; Output: /mnt/c/Users/Rod/AppData
+WinToWSLPath(path) {
+  If (!RegExMatch(path, "^([A-Za-z]):\\(.*)", m))
+    Return path
+  _drive := Format("{:L}", m1)
+  Return "/mnt/" . _drive . "/" . StrReplace(m2, "\", "/")
 }

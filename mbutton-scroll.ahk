@@ -108,7 +108,7 @@ $*MButton::
   ; Start timer in native probe mode
   MB_NativeProbe := 1
   SetTimer, MBScrollTimer, 10
-Return
+Return 
 
 MBScrollTimer:
   Critical ; Prevent MButton Up from interrupting mid-DllCall (race condition safety)

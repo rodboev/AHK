@@ -24,6 +24,7 @@ EnvGet, G_UserProfile, USERPROFILE
   If !IsRemoteSession()
     WS_Init() ; Init window spawning
     TerminalInit()
+    WTScrollInit()
   Return
 #If
 
@@ -58,54 +59,6 @@ Return
 #If (WinActive("ahk_exe code.exe") or WinActive("ahk_exe cursor.exe") or WinActive("ahk_exe antigravity.exe") or WinActive("ahk_exe vscodium.exe"))
   ^w::Send {Alt Down}z{AltUp} ; [ Ctrl+W ] -> Toggle word wrap
 #If
-
-; ⇒ Windows Terminal
-#IfWinActive ahk_exe WindowsTerminal.exe
-  ^n::Send ^+t ; [ Ctrl+N] -> New tab
-
-  ~LButton::
-    Critical
-    G_WTScrollLastPct := _WTGetScrollPct()
-    If (G_WTScrollLastPct = -1) ; NoScroll — nothing to guard
-      Return
-    G_WTScrollGuardActive := true
-    G_WTScrollUpTick := 0
-    SetTimer, _WTScrollGuard, 50
-  Return
-
-  ~LButton Up::
-    Critical
-    G_WTScrollUpTick := A_TickCount
-  Return
-#IfWinActive
-
-_WTScrollGuard:
-  Critical
-  If (!G_WTScrollGuardActive) {
-    SetTimer, _WTScrollGuard, Off
-    Return
-  }
-  If (!WinActive("ahk_exe WindowsTerminal.exe")
-      || (G_WTScrollUpTick && A_TickCount - G_WTScrollUpTick > 2000)) {
-    G_WTScrollGuardActive := false
-    SetTimer, _WTScrollGuard, Off
-    Return
-  }
-  _pct := _WTGetScrollPct()
-  If (_pct = -1) {
-    G_WTScrollGuardActive := false
-    SetTimer, _WTScrollGuard, Off
-    Return
-  }
-  _delta := Abs(_pct - G_WTScrollLastPct)
-  _isExtreme := (_pct < 1 || _pct > 99)
-  _wasMiddle := (G_WTScrollLastPct > 5 && G_WTScrollLastPct < 95)
-  If (_isExtreme && _wasMiddle && _delta > 30) {
-    _WTSetScrollPct(G_WTScrollLastPct)
-  } Else {
-    G_WTScrollLastPct := _pct
-  }
-Return
 
 ; ⇒ Other global bindings
 +!-::Send {U+2014} ; [ ShIft+Alt+Minus ] -> Em-dash
@@ -531,68 +484,6 @@ GetUIAProcessId(hwnd) {
   Return _winPid
 }
 
-; ⇒ Get WT vertical scroll percent via UIA ScrollPattern
-; Returns Double: -1 = NoScroll (content fits viewport), 0-100 = position
-_WTGetScrollPct() {
-  global G_UIA
-  CoordMode, Mouse, Screen
-  MouseGetPos, _mx, _my
-  Try {
-    If (!G_UIA)
-      G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
-    _el := 0
-    DllCall(NumGet(NumGet(G_UIA+0) + 7*A_PtrSize), "Ptr", G_UIA, "Int64", _mx | (_my << 32), "Ptr*", _el)
-    If (!_el)
-      Return -1
-    _pat := 0
-    Try {
-      DllCall(NumGet(NumGet(_el+0) + 16*A_PtrSize), "Ptr", _el, "Int", 10004, "Ptr*", _pat)
-    } Finally {
-      ObjRelease(_el)
-    }
-    If (!_pat)
-      Return -1
-    _pct := 0.0
-    Try {
-      DllCall(NumGet(NumGet(_pat+0) + 6*A_PtrSize), "Ptr", _pat, "Double*", _pct)
-    } Finally {
-      ObjRelease(_pat)
-    }
-    Return _pct
-  }
-  Return -1
-}
-
-; ⇒ Set WT vertical scroll percent via UIA ScrollPattern
-; horizontal=-1 (no change), vertical=pct
-_WTSetScrollPct(pct) {
-  global G_UIA
-  CoordMode, Mouse, Screen
-  MouseGetPos, _mx, _my
-  Try {
-    If (!G_UIA)
-      G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
-    _el := 0
-    DllCall(NumGet(NumGet(G_UIA+0) + 7*A_PtrSize), "Ptr", G_UIA, "Int64", _mx | (_my << 32), "Ptr*", _el)
-    If (!_el)
-      Return
-    _pat := 0
-    Try {
-      DllCall(NumGet(NumGet(_el+0) + 16*A_PtrSize), "Ptr", _el, "Int", 10004, "Ptr*", _pat)
-    } Finally {
-      ObjRelease(_el)
-    }
-    If (!_pat)
-      Return
-    Try {
-      ; IUIAutomationScrollPattern::SetScrollPercent (vtable 4)
-      DllCall(NumGet(NumGet(_pat+0) + 4*A_PtrSize), "Ptr", _pat, "Double", -1.0, "Double", pct)
-    } Finally {
-      ObjRelease(_pat)
-    }
-  }
-}
-
 ; ⇒ Get CmdLine for a window (by PID, or active window if omitted)
 GetActiveWindowCommandLine(pid := "") {
   If (pid = "")
@@ -1011,6 +902,7 @@ RemoveToolTip:
 Return
 
 ; === Module Includes ===
+#Include %A_ScriptDir%\windows-terminal.ahk
 #Include %A_ScriptDir%\terminal-anywhere.ahk
 #Include %A_ScriptDir%\extended-spy.ahk
 #Include %A_ScriptDir%\mbutton-scroll.ahk
