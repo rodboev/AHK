@@ -180,7 +180,12 @@ FormatWindowInfo(info) {
     s .= "Window handle (hWnd): " . info.pointHwnd . "`n"
   s .= "`n"
   ; Path/Process group
-  s .= "Folder: " . info.exe.dir . "`n"
+  ; s .= "Folder: " . info.exe.dir . "`n"  ; Redundant with command line
+  If (info.class = "CabinetWClass") {
+    _expPath := GetExplorerPath()
+    If (_expPath != "")
+      s .= "ExplorerPath: " . _expPath . "`n"
+  }
   s .= "Command line: " . WrapList(info.cmdLine, " ") . "`n"
   _pidLine := "Process ID: " . info.pid
   If (info.HasKey("hostPid"))
@@ -205,16 +210,16 @@ FormatWindowInfo(info) {
     } Else
       s .= "WT Scroll: (no scroll)`n"
   }
-  ; UIA element at cursor
+  ; UIA element at cursor (wrap long names/IDs at spaces, hard-break at 120)
   If (info.HasKey("uia") && (info.uia.type != "" || info.uia.name != "")) {
     _uiaLine := "UIA: "
     If (info.uia.type != "")
       _uiaLine .= info.uia.type
     If (info.uia.name != "")
-      _uiaLine .= (info.uia.type != "" ? " " : "") . """" . info.uia.name . """"
+      _uiaLine .= (info.uia.type != "" ? " " : "") . """" . WrapList(info.uia.name, ",", 90, ", ") . """"
     s .= _uiaLine . "`n"
     If (info.uia.autoId != "")
-      s .= "  AutomationId: " . info.uia.autoId . "`n"
+      s .= "  AutomationId: " . WrapList(info.uia.autoId, ",", 90, ", ") . "`n"
     If (info.uia.className != "")
       s .= "  ClassName: " . info.uia.className . "`n"
   }
@@ -239,7 +244,8 @@ FormatWindowInfo(info) {
 ; Wrap list items at ~100 chars, preserving whole items
 ; Input: comma-separated string like "item1, item2, item3"
 ; Output: same items wrapped to fit maxLen, with continuation lines indented
-WrapList(text, delimiter := ",", maxLen := 100, joiner := "") {
+; hardMax: force-break lines exceeding this width (try spaces first, then hard cut)
+WrapList(text, delimiter := ",", maxLen := 100, joiner := "", hardMax := 120) {
   If (joiner = "")
     joiner := delimiter = " " ? " " : delimiter . " "
   result := ""
@@ -262,6 +268,32 @@ WrapList(text, delimiter := ",", maxLen := 100, joiner := "") {
   ; Add final line
   If (currentLine != "")
     result .= (result = "" ? "" : "`n  ") . currentLine
+  ; Hard-wrap: break any lines still exceeding hardMax (try spaces, then force cut)
+  If (hardMax > 0) {
+    _out := ""
+    Loop, Parse, result, `n
+    {
+      _line := A_LoopField
+      While (StrLen(_line) > hardMax) {
+        _breakAt := 0
+        _pos := hardMax
+        While (_pos > 20) {
+          If (SubStr(_line, _pos, 1) = " ") {
+            _breakAt := _pos
+            Break
+          }
+          _pos--
+        }
+        If (_breakAt = 0)
+          _breakAt := hardMax
+        _out .= (_out != "" ? "`n" : "") . SubStr(_line, 1, _breakAt)
+        _line := "  " . LTrim(SubStr(_line, _breakAt + 1))
+      }
+      If (_line != "")
+        _out .= (_out != "" ? "`n" : "") . _line
+    }
+    result := _out
+  }
   Return result
 }
 

@@ -157,10 +157,8 @@ WTSetScrollPct(pct) {
 
 WTScrollGuard:
   Critical
-  If (!WinActive("ahk_exe WindowsTerminal.exe")) {
-    G_WTScrollStatus := ""
-    Return
-  }
+  If (!WinActive("ahk_exe WindowsTerminal.exe"))
+    Return  ; Don't clear status — Extended Spy may be reading cached values
   _pct := WTGetScrollPct()
   If (_pct = -1)
     Return
