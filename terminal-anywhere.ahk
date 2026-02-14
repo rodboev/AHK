@@ -1,20 +1,16 @@
 ; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ; ┃ WINDOWS TERMINAL FROM ANYWHERE ┃
 ; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-; [ F10 ]                       -> Open current path (auto-detect WSL)
-; [ Alt + F10 ]                 -> Open current path, force WSL
+; [ F10 ]                       -> Open current path
+; [ Alt + F10 ]                 -> Open Linux (home folder)
 ; [ Shift + F10 ]               -> Open current path as admin
-; [ Alt + Shift + F10 ]         -> Open current path as admin, force WSL
-; [ Ctrl + F10 ]                -> Open claude in current path
-; [ Ctrl + Shift + F10 ]        -> Open claude in current path as admin
+; [ Alt + Shift + F10 ]         -> Open Linux as admin (home folder)
 ; [ Ctrl + Alt + Shift + F10 ]  -> Open current path as SYSTEM
 
-F10::OpenTerminal(   {elevate: false, claude: false})
-!F10::OpenTerminal(  {elevate: false, claude: false, wsl: true})
-+F10::OpenTerminal(  {elevate: true,  claude: false})
-!+F10::OpenTerminal( {elevate: true,  claude: false, wsl: true})
-^F10::OpenTerminal(  {elevate: false, claude: true})
-^+F10::OpenTerminal( {elevate: true,  claude: true})
+F10::OpenTerminal(   {elevate: false})
+!F10::OpenTerminal(  {elevate: false, alt: true})
++F10::OpenTerminal(  {elevate: true})
+!+F10::OpenTerminal( {elevate: true,  alt: true})
 ^!+F10:: ; [ Ctrl + Alt + Shift + F10 ] -> Open current path as SYSTEM
   _dir := GetTerminalDir()
   ; Resolve wt.exe to full path — SYSTEM context lacks user PATH entries
@@ -48,42 +44,25 @@ TerminalInit() {
     TA.WTProfile := GetWTFirstProfile()
 }
 
-; ⇒ Open Windows Terminal with optional WSL profile, elevation, and Claude
+; ⇒ Open Windows Terminal with optional elevation
 OpenTerminal(opts) {
-  ; opts := {elevate: bool, claude: bool, wsl: bool}
+  ; opts := {elevate: bool, alt: bool}
   ;   elevate  true  = run as Administrator (UAC prompt)
-  ;   claude   true  = launch Claude CLI in WSL
-  ;   wsl      true  = force WSL even from Windows paths (Alt variants)
-  ;   Missing wsl key = auto-detect from path only
+  ;   alt      true  = use WSL profile (home folder)
 
   global TA
-  _winDir := GetTerminalDir()
-  _wsl := ParseWSLPath(_winDir)
-
-  If (IsObject(_wsl)) {
-    ; UNC path — WSL detected from path
-    _profile := _wsl.distro
-  } Else If (opts.wsl && TA.WSLDistro) {
-    ; Force WSL — Windows path stays as-is, WT translates to /mnt/ internally
-    _profile := TA.WSLDistro
-  } Else {
-    ; Windows path — use configured WT profile
-    _profile := TA.WTProfile
-  }
-
-  ; Build wt command — always pass original Windows/UNC path to -d
-  ; WT handles path translation for WSL profiles internally
   _args := []
   If (opts.elevate)
     _args.Push("elevate")
   _args.Push("wt")
-  If (_profile)
-    _args.Push("-p", _profile)
-  _args.Push("-d " . _winDir)
-  _isWSL := IsObject(_wsl) || (opts.wsl && TA.WSLDistro)
-  If (opts.claude && _isWSL)
-    _args.Push("--", "bash", "-lic", "claude")
-
+  If (opts.alt) {
+    If (TA.WSLDistro)
+      _args.Push("-p", TA.WSLDistro)
+  } Else {
+    If (TA.WTProfile)
+      _args.Push("-p", TA.WTProfile)
+    _args.Push("-d " . GetTerminalDir())
+  }
   UserRun(_args*)
 }
 
@@ -140,24 +119,4 @@ GetWTFirstProfile() {
     }
   }
   Return ""
-}
-
-; ⇒ Parse WSL UNC path into distro name and Linux directory
-; Input:  \\wsl.localhost\Ubuntu-24.04\home\rod\chats  or  \\wsl$\Ubuntu-24.04\home\rod
-; Output: {distro: "Ubuntu-24.04", dir: "/home/rod/chats"} or "" if not a WSL path
-ParseWSLPath(path) {
-  If (!RegExMatch(path, "i)^\\\\wsl(?:\.localhost|\$)\\([^\\]+)\\?(.*)", m))
-    Return ""
-  _dir := m2 ? ("/" . StrReplace(m2, "\", "/")) : "/"
-  Return {distro: m1, dir: _dir}
-}
-
-; ⇒ Convert Windows drive path to WSL /mnt/ path
-; Input:  C:\Users\Rod\AppData
-; Output: /mnt/c/Users/Rod/AppData
-WinToWSLPath(path) {
-  If (!RegExMatch(path, "^([A-Za-z]):\\(.*)", m))
-    Return path
-  _drive := Format("{:L}", m1)
-  Return "/mnt/" . _drive . "/" . StrReplace(m2, "\", "/")
 }

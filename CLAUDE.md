@@ -5,6 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Language Requirement
 
 **AutoHotkey v1.1.14+** — This codebase uses AHK v1.1 syntax exclusively, with `#Requires AutoHotkey v1.1.14+` enforced. Do NOT use v2.0 syntax. Key differences:
+
 - Commands use `Command, Param1, Param2` syntax (not function calls)
 - Variables use `%var%` for dereferencing in commands
 - Legacy `#IfWinActive` directives (not `#HotIf`)
@@ -14,18 +15,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `AutoHotkey.ahk` is the parent entrypoint. It `#Include`s five module files at the bottom:
 
-| File | Purpose |
-|------|---------|
-| `AutoHotkey.ahk` | Parent: config directives, helpers, bindings, misc hotkeys |
-| `windows-terminal.ahk` | WT scroll guard (jump detection, restore, ScrollLock lock, unfocused wheel) |
-| `terminal-anywhere.ahk` | Windows Terminal from anywhere (`F10` variants) — user/admin/SYSTEM |
-| `extended-spy.ahk` | Extended Window Spy (`#w`) — tooltip/dialog with window/control info |
-| `mbutton-scroll.ahk` | MButton smooth scroll (hotkeys, timer, scroll methods) |
-| `window-spawning.ahk` | Shell hook window spawning (WS_Init, hooks, move logic, Alt+Tab) |
+| File                    | Purpose                                                                     |
+| ----------------------- | --------------------------------------------------------------------------- |
+| `AutoHotkey.ahk`        | Parent: config directives, helpers, bindings, misc hotkeys                  |
+| `scroll-guard.ahk`      | WT scroll guard (jump detection, restore, ScrollLock lock, unfocused wheel) |
+| `terminal-anywhere.ahk` | Windows Terminal from anywhere (`F10` variants) — user/admin/SYSTEM         |
+| `extended-spy.ahk`      | Extended Window Spy (`#w`) — tooltip/dialog with window/control info        |
+| `mbutton-scroll.ahk`    | MButton smooth scroll (hotkeys, timer, scroll methods)                      |
+| `window-spawning.ahk`   | Shell hook window spawning (WS_Init, hooks, move logic, Alt+Tab)            |
 
 The `community-scripts/` directory contains reference libraries (loosely coupled, mostly for inspiration).
 
 ### Key Regions in AutoHotkey.ahk
+
 - **Configuration directives**: `#Requires`, `#SingleInstance`, etc., remote session guard, `WS_Init()` call
 - **Bindings / remaps**: Script control, editor-specific, global hotkeys, scroll accel
 - **Process management / privilege escalation**: `^+\``, `#+e`, `#c`, `^+=` hotkeys
@@ -34,11 +36,12 @@ The `community-scripts/` directory contains reference libraries (loosely coupled
 - **Module includes**: `#Include` directives for the five module files
 
 ### Core Features
+
 1. **Explorer Smooth Scroll** (`MButton + drag`) — 4-method system: UIA, WHEEL, WHEEL_CTRL, VSCROLL — in `mbutton-scroll.ahk`
 2. **Window Spawning** — Shell hook + WinEvent hooks move new windows to cursor's monitor — in `window-spawning.ahk`
 3. **Extended Window Spy** (`Win+W`) — Persistent tooltip with window/control info — in `extended-spy.ahk`
 4. **Terminal/Elevation** (`F10`, `Alt+F10`, `Shift+F10`, `Ctrl+F10`, `Ctrl+Alt+Shift+F10`, `Ctrl+Shift+Plus`) — Context-aware terminal launching with auto WSL detection (UNC paths), force-WSL mode, Claude CLI, admin elevation, and SYSTEM via ti.exe — in `terminal-anywhere.ahk` (F10 variants) and `AutoHotkey.ahk` (`Ctrl+Shift+Plus`)
-5. **WT Scroll Guard** — Always-on protection against CC viewport hijacking. 50ms timer detects abrupt jumps to 0% (always restores) or 100% (restores if idle >2s) via UIA `RangeValuePattern::SetValue` on `ScrollBar.Vertical`. ScrollLock freezes position indefinitely. Unfocused wheel forwarding: `#If WTHoverCheck()` posts `WM_MOUSEWHEEL` to WT under cursor when not active. Extended Spy shows live scroll %. See `ui-automation.md` for UIA architecture — in `windows-terminal.ahk`
+5. **WT Scroll Guard** — Always-on protection against CC viewport hijacking. 50ms timer detects abrupt jumps to 0% (always restores) or 100% (restores if idle >2s) via UIA `RangeValuePattern::SetValue` on `ScrollBar.Vertical`. ScrollLock freezes position indefinitely. Unfocused wheel forwarding: `#If SG_HoverCheck()` posts `WM_MOUSEWHEEL` to WT under cursor when not active. Extended Spy shows live scroll %. See `ui-automation.md` for UIA architecture — in `scroll-guard.ahk`
 
 ## Running & Debugging
 
@@ -56,7 +59,9 @@ start "" "C:\Program Files\AutoHotkey\AutoHotkey.exe" AutoHotkey.ahk
 ## Code Patterns
 
 ### Timer-based Acceleration
+
 Smooth animations use `SetTimer` with dynamic intervals (10-150ms). Follow this pattern for scroll/animation features:
+
 ```autohotkey
 SetTimer, MyTimer, %interval%
 ; ...
@@ -112,6 +117,7 @@ ObjRelease(_el)
 **Why:** `_el` may point to a destroyed UI element (e.g., mouse moved over a closing window). Dereferencing a stale vtable pointer causes an access violation, which AHK catches as a thrown exception — skipping any code after the `Try` block.
 
 ### UserRun Helper
+
 Use `UserRun(Executable, Args*)` for all process execution—handles elevation, env var expansion, and PowerShell argument parsing consistently.
 
 **Argument quoting**: All arguments are unconditionally quoted — single-quoted in PowerShell paths (with `'` escaped as `''`), double-quoted in direct execution paths. The executable path is also quoted in the direct execution branch. This prevents command injection via metacharacters (`&`, `;`, `$`, `|`) regardless of whether the argument contains spaces.
@@ -123,6 +129,7 @@ Use `UserRun(Executable, Args*)` for all process execution—handles elevation, 
 **SYSTEM PATH resolution (CRITICAL)**: When `ti.exe` runs a command as `NT AUTHORITY\SYSTEM`, the SYSTEM account's PATH is minimal (`%SystemRoot%\system32` and a few others) — user-installed programs like Windows Terminal are not included. Any executable passed to `ti.exe` must be resolved to its **full absolute path** before launching. Use `FindInPath()` (which runs in AHK's admin context with the user's full PATH) or `GetExePath()` + regex replacement on WMI command lines to resolve short names like `wt` to their full paths (e.g., `C:\Program Files\WindowsTerminalPreview\wt.exe`).
 
 ### Message Synthesis
+
 Scroll methods use `PostMessage`/`SendMessage` for WM_MOUSEWHEEL (0x20A), WM_VSCROLL (0x115). UIA uses COM `SetScrollPercent`.
 
 ### COM/UIA Pointer Dereferencing (CRITICAL)
@@ -140,6 +147,7 @@ DllCall(NumGet(NumGet(MB_ScrollPattern)+8*A_PtrSize), "Ptr", MB_ScrollPattern, .
 **Why:** In AHK v1.1, `NumGet(var)` can behave differently than `NumGet(var+0)`. The `+0` forces AHK to evaluate `var` as a number first, ensuring proper pointer arithmetic.
 
 **Also avoid:** Capturing return values from COM vtable DllCalls:
+
 ```autohotkey
 ; ❌ BROKEN - Interferes with output parameters
 hr := DllCall(NumGet(NumGet(ptr+0)+N*A_PtrSize), ..., "Ptr*", outVar)
@@ -160,6 +168,7 @@ DllCall(NumGet(NumGet(ptr+0)+N*A_PtrSize), ..., "Ptr*", outVar)
 ### FileDelete/FileAppend with Object Properties
 
 AHK v1.1 commands take plain string parameters. Forced expression syntax (`% WS.Property`) is unreliable for `FileDelete`/`FileAppend`. Always dereference to a local variable first:
+
 ```autohotkey
 ; ❌ BROKEN — unreliable with object property access
 FileDelete, % WS.LogFile
@@ -174,16 +183,29 @@ FileDelete, %_logFile%
 In AHK v1.1, the auto-execute section runs from line 1 until the first hotkey label. Code placed between hotkey subroutines is **unreachable dead code**. Global config must be in the auto-execute section.
 
 ### Configuration Arrays
+
 Control exclusions and native scroll detection:
+
 ```autohotkey
 MB_ExcludedControls := ["ToolbarWindow", "Edit"]          ; Skip these controls
 ; App exclusion is automatic — native MButton drag-scroll is detected at runtime
 ; via HCURSOR handle change (custom cursors only), GetScrollPos, and UIA GetVerticalScrollPercent
 ```
 
+### Preserve Working Code (CRITICAL)
+
+When asked to **move**, **extract**, or **refactor** code:
+
+- **Source of truth is the actual code in the file**, not plans, design docs, or memory notes
+- Copy the existing implementation verbatim — do not rewrite the approach
+- If you see an improvement opportunity, mention it separately and ask first
+- Never silently replace one working API/pattern with a different one
+- "Move to a new file" means copy+delete, not redesign
+
 ## Testing
 
 No automated tests. Manual verification required:
+
 1. **MButton scroll**: Test in Windows Explorer (file lists + nav tree) and VS Code
 2. **Window spawning**: Open a new window — should appear on cursor's monitor
 3. **Window Spy**: Press `Win+W`, hover different windows, click tooltip to copy
@@ -196,34 +218,34 @@ No automated tests. Manual verification required:
 
 ## Key Helper Functions
 
-| Function | File | Purpose |
-|----------|------|---------|
-| `GetExePath(winTitle)` | `AutoHotkey.ahk` | Returns `{path, dir}` for process |
-| `GetMonitor(winTitle)` | `AutoHotkey.ahk` | Returns 1-based monitor number |
-| `GetCursorMonitor()` | `AutoHotkey.ahk` | Returns 1-based monitor index for cursor |
-| `IsProcessElevated(pid)` | `AutoHotkey.ahk` | Checks admin privileges via token |
-| `UserRun(exe, args*)` | `AutoHotkey.ahk` | Smart process execution with elevation and quoting |
-| `HasVal(arr, val)` | `AutoHotkey.ahk` | Check if array contains value (partial match) |
-| `ProcessExistsByCommandLine(cmdLine)` | `AutoHotkey.ahk` | Find PID by command line match via WMI |
-| `GetUIAProcessId(hwnd)` | `AutoHotkey.ahk` | UIA content process PID (resolves UWP/Electron host) |
-| `WTScrollInit()` | `windows-terminal.ahk` | Initialize scroll guard globals and start 50ms timer |
-| `WTGetScrollPattern()` | `windows-terminal.ahk` | Get RangeValuePattern for WT ScrollBar.Vertical via FindAll(ControlType=ScrollBar) |
-| `WTGetScrollPct()` | `windows-terminal.ahk` | WT vertical scroll percent (0-100) from Value/Min/Max, -1 if unavailable |
-| `WTSetScrollPct(pct)` | `windows-terminal.ahk` | Set WT scroll position from percentage using RangeValuePattern::SetValue |
-| `WTHoverCheck()` | `windows-terminal.ahk` | Returns true when cursor hovers over unfocused WT window (#If condition) |
-| `GetUIAElementInfo(x, y)` | `extended-spy.ahk` | UIA element properties at screen coordinates |
-| `GetScrollPos(hwnd)` | `mbutton-scroll.ahk` | Win32 vertical scroll position |
-| `HasWin32Scrollbar(hwnd)` | `mbutton-scroll.ahk` | Checks if Win32 scrollbar exists |
-| `WrapList(text, delim, maxLen)` | `extended-spy.ahk` | Wraps delimited text preserving items |
-| `CleanWindowText(text)` | `extended-spy.ahk` | Removes non-ASCII, dedupes long text |
-| `FilterLongItems(text, maxLen)` | `extended-spy.ahk` | Removes items >maxLen from list |
-| `SortList(text)` | `extended-spy.ahk` | Sorts comma-separated items alphabetically |
-| `OpenTerminal(opts)` | `terminal-anywhere.ahk` | Open WT with WSL auto-detect, force-WSL, elevation, Claude |
-| `GetTerminalDir()` | `terminal-anywhere.ahk` | Working directory from active window context |
-| `GetDefaultWSLDistro()` | `terminal-anywhere.ahk` | Default WSL distro name from registry |
-| `GetWTFirstProfile()` | `terminal-anywhere.ahk` | First non-hidden WT profile from settings.json |
-| `ParseWSLPath(path)` | `terminal-anywhere.ahk` | UNC path → `{distro, dir}` or `""` |
-| `WinToWSLPath(path)` | `terminal-anywhere.ahk` | `C:\path` → `/mnt/c/path` for WSL |
+| Function                              | File                    | Purpose                                                                            |
+| ------------------------------------- | ----------------------- | ---------------------------------------------------------------------------------- |
+| `GetExePath(winTitle)`                | `AutoHotkey.ahk`        | Returns `{path, dir}` for process                                                  |
+| `GetMonitor(winTitle)`                | `AutoHotkey.ahk`        | Returns 1-based monitor number                                                     |
+| `GetCursorMonitor()`                  | `AutoHotkey.ahk`        | Returns 1-based monitor index for cursor                                           |
+| `IsProcessElevated(pid)`              | `AutoHotkey.ahk`        | Checks admin privileges via token                                                  |
+| `UserRun(exe, args*)`                 | `AutoHotkey.ahk`        | Smart process execution with elevation and quoting                                 |
+| `HasVal(arr, val)`                    | `AutoHotkey.ahk`        | Check if array contains value (partial match)                                      |
+| `ProcessExistsByCommandLine(cmdLine)` | `AutoHotkey.ahk`        | Find PID by command line match via WMI                                             |
+| `GetUIAProcessId(hwnd)`               | `AutoHotkey.ahk`        | UIA content process PID (resolves UWP/Electron host)                               |
+| `SG_ScrollInit()`                     | `scroll-guard.ahk`      | Initialize scroll guard globals and start 50ms timer                               |
+| `SG_GetScrollPattern()`               | `scroll-guard.ahk`      | Get RangeValuePattern for WT ScrollBar.Vertical via FindAll(ControlType=ScrollBar) |
+| `SG_GetScrollPct()`                   | `scroll-guard.ahk`      | WT vertical scroll percent (0-100) from Value/Min/Max, -1 if unavailable           |
+| `SG_SetScrollPct(pct)`                | `scroll-guard.ahk`      | Set WT scroll position from percentage using RangeValuePattern::SetValue           |
+| `SG_HoverCheck()`                     | `scroll-guard.ahk`      | Returns true when cursor hovers over unfocused WT window (#If condition)           |
+| `GetUIAElementInfo(x, y)`             | `extended-spy.ahk`      | UIA element properties at screen coordinates                                       |
+| `GetScrollPos(hwnd)`                  | `mbutton-scroll.ahk`    | Win32 vertical scroll position                                                     |
+| `HasWin32Scrollbar(hwnd)`             | `mbutton-scroll.ahk`    | Checks if Win32 scrollbar exists                                                   |
+| `WrapList(text, delim, maxLen)`       | `extended-spy.ahk`      | Wraps delimited text preserving items                                              |
+| `CleanWindowText(text)`               | `extended-spy.ahk`      | Removes non-ASCII, dedupes long text                                               |
+| `FilterLongItems(text, maxLen)`       | `extended-spy.ahk`      | Removes items >maxLen from list                                                    |
+| `SortList(text)`                      | `extended-spy.ahk`      | Sorts comma-separated items alphabetically                                         |
+| `OpenTerminal(opts)`                  | `terminal-anywhere.ahk` | Open WT with WSL auto-detect, force-WSL, elevation, Claude                         |
+| `GetTerminalDir()`                    | `terminal-anywhere.ahk` | Working directory from active window context                                       |
+| `GetDefaultWSLDistro()`               | `terminal-anywhere.ahk` | Default WSL distro name from registry                                              |
+| `GetWTFirstProfile()`                 | `terminal-anywhere.ahk` | First non-hidden WT profile from settings.json                                     |
+| `ParseWSLPath(path)`                  | `terminal-anywhere.ahk` | UNC path → `{distro, dir}` or `""`                                                 |
+| `WinToWSLPath(path)`                  | `terminal-anywhere.ahk` | `C:\path` → `/mnt/c/path` for WSL                                                  |
 
 ## Conventions
 
@@ -242,12 +264,12 @@ The MButton scroll system intercepts middle-click-drag and converts it to smooth
 
 ### Scroll Methods
 
-| Method | Mechanism | Granularity | Best For |
-|--------|-----------|-------------|----------|
-| **UIA** | `SetScrollPercent` via IUIAutomationScrollPattern | Fractional % | Explorer file lists, mmc.exe |
-| **WHEEL** | `WM_MOUSEWHEEL` sub-120 delta to window | Sub-notch | Electron apps (VS Code) |
-| **WHEEL_CTRL** | `WM_MOUSEWHEEL` to control (with fallback detection) | 1 line* | SystemInformer |
-| **VSCROLL** | `WM_VSCROLL` line-by-line, dynamic timer (300ms→20ms) | 1 line | Tree views, universal fallback |
+| Method         | Mechanism                                             | Granularity  | Best For                       |
+| -------------- | ----------------------------------------------------- | ------------ | ------------------------------ |
+| **UIA**        | `SetScrollPercent` via IUIAutomationScrollPattern     | Fractional % | Explorer file lists, mmc.exe   |
+| **WHEEL**      | `WM_MOUSEWHEEL` sub-120 delta to window               | Sub-notch    | Electron apps (VS Code)        |
+| **WHEEL_CTRL** | `WM_MOUSEWHEEL` to control (with fallback detection)  | 1 line\*     | SystemInformer                 |
+| **VSCROLL**    | `WM_VSCROLL` line-by-line, dynamic timer (300ms→20ms) | 1 line       | Tree views, universal fallback |
 
 ### Automatic Fallback Chain
 
@@ -274,6 +296,7 @@ Each fallback resets `MB_FallbackChecked := 0`, enabling the next method's first
 ### UIA Two-Tick Verification
 
 The UIA fallback uses a two-tick approach to avoid Sleep() in the 10ms timer:
+
 - **Tick 1** (`MB_FallbackChecked = 0`): Captures `GetScrollPos` of control, sends UIA scroll, sets `MB_FallbackChecked := -1`
 - **Tick 2** (`MB_FallbackChecked = -1`): Checks if UIA reports NoScroll sentinel (-1), OR cross-validates that Win32 scrollbar actually moved via `HasWin32Scrollbar()` + `GetScrollPos` comparison. Falls to WHEEL on failure.
 
@@ -292,7 +315,7 @@ For non-Explorer apps, MButton Down is **passed through immediately** to enable 
 
 A movement-gated **native scroll probe** determines whether the app handles MButton drag-scroll natively using three signals:
 
-1. **Cursor change** (HCURSOR handle via `GetCursorInfo` + `A_Cursor = "Unknown"`): Checked every tick. The initial HCURSOR is captured *before* any MButton event is sent. A change is only detected when the handle differs AND `A_Cursor` reports `"Unknown"` (custom bitmap cursor). This dual check prevents false positives from standard cursor changes while reliably catching custom autoscroll icons (Chrome, Firefox).
+1. **Cursor change** (HCURSOR handle via `GetCursorInfo` + `A_Cursor = "Unknown"`): Checked every tick. The initial HCURSOR is captured _before_ any MButton event is sent. A change is only detected when the handle differs AND `A_Cursor` reports `"Unknown"` (custom bitmap cursor). This dual check prevents false positives from standard cursor changes while reliably catching custom autoscroll icons (Chrome, Firefox).
 2. **Win32 scroll position** (`GetScrollPos`): Checked after drag threshold (≥3px). Catches classic Win32 apps with native scrollbars.
 3. **UIA scroll percent** (`GetVerticalScrollPercent`): Checked after drag threshold. Catches modern apps using custom renderers.
 
@@ -323,19 +346,19 @@ Design documents at `.claude/window-spawning/`.
 
 ### Key Functions
 
-| Function/Label | Purpose |
-|----------------|---------|
-| `WS_Init()` | Initialize `WS` object, register shell hook, SetWinEventHook (SHOW, UNCLOAKED, CREATE), CoInitialize, cleanup timer |
-| `WS_OnShellHook()` | Handle DESTROYED (brief-process detection + cleanup), ACTIVATED (positive intent detection), CREATED (exe recording + pre-pending + deferred move) |
-| `WS_OnWinEvent()` | Handle EVENT_OBJECT_SHOW, UNCLOAKED, CREATE (opacity hiding, deferred window processing) |
-| `WS_IsReady()` | Timing gate: visible, sized, uncloaked |
-| `WS_IsMovable()` | Policy gate: skip tool windows, excluded classes, no-title (except `ApplicationFrameWindow`), visible-owner |
-| `WS_MoveToMonitor()` | Position mapping across monitors (relative or cursor-centered), taskbar-aware clamping, maximized/minimized handling, inline opacity reveal |
-| `WS_Reveal()` | Idempotent opacity restore + sentinel set |
-| `WS_Log()` | Debug logging to `%TEMP%\WS_Debug.log` |
-| `WS_CleanPrePending` | Timer: stale entry cleanup for PrePending, Hidden, OwnerSentinel, RecentCreated, RecentExes |
-| `WS_Cleanup()` | OnExit: unhook WinEvents, reveal hidden windows, CoUninitialize |
-| `~!Tab::` | Alt+Tab passthrough hotkey with non-blocking WinEvent detection |
+| Function/Label       | Purpose                                                                                                                                            |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WS_Init()`          | Initialize `WS` object, register shell hook, SetWinEventHook (SHOW, UNCLOAKED, CREATE), CoInitialize, cleanup timer                                |
+| `WS_OnShellHook()`   | Handle DESTROYED (brief-process detection + cleanup), ACTIVATED (positive intent detection), CREATED (exe recording + pre-pending + deferred move) |
+| `WS_OnWinEvent()`    | Handle EVENT_OBJECT_SHOW, UNCLOAKED, CREATE (opacity hiding, deferred window processing)                                                           |
+| `WS_IsReady()`       | Timing gate: visible, sized, uncloaked                                                                                                             |
+| `WS_IsMovable()`     | Policy gate: skip tool windows, excluded classes, no-title (except `ApplicationFrameWindow`), visible-owner                                        |
+| `WS_MoveToMonitor()` | Position mapping across monitors (relative or cursor-centered), taskbar-aware clamping, maximized/minimized handling, inline opacity reveal        |
+| `WS_Reveal()`        | Idempotent opacity restore + sentinel set                                                                                                          |
+| `WS_Log()`           | Debug logging to `%TEMP%\WS_Debug.log`                                                                                                             |
+| `WS_CleanPrePending` | Timer: stale entry cleanup for PrePending, Hidden, OwnerSentinel, RecentCreated, RecentExes                                                        |
+| `WS_Cleanup()`       | OnExit: unhook WinEvents, reveal hidden windows, CoUninitialize                                                                                    |
+| `~!Tab::`            | Alt+Tab passthrough hotkey with non-blocking WinEvent detection                                                                                    |
 
 ### Architecture
 
@@ -355,6 +378,7 @@ All state is stored in a single `WS := {}` object. Every function declares only 
 
 **Tier 1 — Brief-process detection** (Win32 single-instance re-launch):
 When a single-instance Win32 app is re-launched, a new process briefly exists (100-500ms). It detects the existing instance via mutex/named pipe, sends a message, then exits. We detect this pattern:
+
 1. `HSHELL_WINDOWCREATED` → record `{exe, tick}` in `WS.RecentCreated`
 2. `HSHELL_WINDOWDESTROYED` → if window died within 3s, record exe in `WS.RecentExes`
 3. `HSHELL_WINDOWACTIVATED` → if exe matches a `WS.RecentExes` entry (<5s) → **move**
@@ -366,6 +390,7 @@ If overlay (Start menu) was recently visible (`WS.OverlayTick` < 2s) AND a **dif
 **Z-order fallback protection**: `WS.OverlayTick` is cleared when the foreground window is destroyed (prevents false Tier 2 on close-fallback) and when the previous window was minimized (prevents false Tier 2 on minimize-fallback).
 
 **Retained guards** (not intent-based):
+
 - Taskbar cursor check: cursor over `Shell_TrayWnd`/`Shell_SecondaryTrayWnd` → skip
 - Same-monitor optimization: `windowMon == cursorMon` → skip
 
@@ -376,6 +401,7 @@ If overlay (Start menu) was recently visible (`WS.OverlayTick` < 2s) AND a **dif
 **Mechanism**: At `EVENT_OBJECT_CREATE` time, hide windows using `WS_EX_LAYERED` + `SetLayeredWindowAttributes` (alpha 0 in production, 128 in debug mode for 50% visibility). After `WS_MoveToMonitor` places the window on the correct monitor, restore full opacity.
 
 **Key data structures:**
+
 - `WS.PrePending` dict: `hwnd → {mon, tick, qpc}` — tracks CREATE-to-ShellHook/SHOW pipeline
 - `WS.Hidden` dict: `hwnd → hadLayered` (bool if opacity-hidden, `-1` sentinel if "processed")
 
@@ -387,10 +413,10 @@ If overlay (Start menu) was recently visible (`WS.OverlayTick` < 2s) AND a **dif
 
 `WS_MoveToMonitor` uses two positioning strategies depending on the window type:
 
-| Mode | Condition | Behavior |
-|------|-----------|----------|
-| **Relative mapping** | Window has a title | Maps relative position from source to target monitor (window at 25% across monitor A → 25% across monitor B) |
-| **Cursor-centered** | Window has no title | Centers window on cursor position, clamped to work area |
+| Mode                 | Condition           | Behavior                                                                                                     |
+| -------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------ |
+| **Relative mapping** | Window has a title  | Maps relative position from source to target monitor (window at 25% across monitor A → 25% across monitor B) |
+| **Cursor-centered**  | Window has no title | Centers window on cursor position, clamped to work area                                                      |
 
 **Why two modes**: Application windows (titled) have meaningful positions — the user or app placed them intentionally, so preserving relative position across monitors makes sense. Titleless windows (popups, dialogs, share sheets) spawn at system-default positions (often 0,0) with no user intent. Centering on the cursor places them where the user is looking and interacting.
 
@@ -402,28 +428,29 @@ If overlay (Start menu) was recently visible (`WS.OverlayTick` < 2s) AND a **dif
 
 ### WS Object Properties
 
-| Property | Purpose |
-|----------|---------|
-| `WS.Debug` | Debug log toggle. Logs to `%TEMP%\WS_Debug.log` |
-| `WS.LogFile` | Path to debug log file |
-| `WS.HookHwnd` | Hidden GUI window for shell hook |
-| `WS.Pending` | Deferred hwnd → `{mon, tick}` |
-| `WS.PendingAltTab` | Alt+Tab state: `{mon, tick}` or `""` |
-| `WS.ExcludedClasses` | Array of window classes to skip (includes `RAIL_WINDOW` for WSLg) |
-| `WS.PrePending` | CREATE-registered hwnd → `{mon, tick, qpc}` |
-| `WS.Hidden` | Opacity-hidden hwnd → `hadLayered` (bool), or `-1` (sentinel) |
-| `WS.OwnerSentinel` | Owner hwnd → `A_TickCount` (sibling CREATE suppression, 200ms) |
-| `WS.RecentCreated` | hwnd → `{exe, tick}` — window lifespan tracking for Tier 1 |
-| `WS.RecentExes` | exe name → `A_TickCount` — brief-process signal for Tier 1 |
-| `WS.LastForegroundHwnd` | Last movable foreground hwnd (Tier 2 overlay detection) |
-| `WS.OverlayTick` | `A_TickCount` when overlay/infrastructure detected (Tier 2) |
-| `WS.EventHookShow` | Handle from `SetWinEventHook` (EVENT_OBJECT_SHOW) |
-| `WS.EventHookUncloak` | Handle from `SetWinEventHook` (EVENT_OBJECT_UNCLOAKED) |
-| `WS.EventHookCreate` | Handle from `SetWinEventHook` (EVENT_OBJECT_CREATE) |
-| `WS.WinEventCB` | `RegisterCallback` pointer for WinEventProc |
-| `WS.QPCFreq` | QPC frequency for µs-precision timing |
+| Property                | Purpose                                                           |
+| ----------------------- | ----------------------------------------------------------------- |
+| `WS.Debug`              | Debug log toggle. Logs to `%TEMP%\WS_Debug.log`                   |
+| `WS.LogFile`            | Path to debug log file                                            |
+| `WS.HookHwnd`           | Hidden GUI window for shell hook                                  |
+| `WS.Pending`            | Deferred hwnd → `{mon, tick}`                                     |
+| `WS.PendingAltTab`      | Alt+Tab state: `{mon, tick}` or `""`                              |
+| `WS.ExcludedClasses`    | Array of window classes to skip (includes `RAIL_WINDOW` for WSLg) |
+| `WS.PrePending`         | CREATE-registered hwnd → `{mon, tick, qpc}`                       |
+| `WS.Hidden`             | Opacity-hidden hwnd → `hadLayered` (bool), or `-1` (sentinel)     |
+| `WS.OwnerSentinel`      | Owner hwnd → `A_TickCount` (sibling CREATE suppression, 200ms)    |
+| `WS.RecentCreated`      | hwnd → `{exe, tick}` — window lifespan tracking for Tier 1        |
+| `WS.RecentExes`         | exe name → `A_TickCount` — brief-process signal for Tier 1        |
+| `WS.LastForegroundHwnd` | Last movable foreground hwnd (Tier 2 overlay detection)           |
+| `WS.OverlayTick`        | `A_TickCount` when overlay/infrastructure detected (Tier 2)       |
+| `WS.EventHookShow`      | Handle from `SetWinEventHook` (EVENT_OBJECT_SHOW)                 |
+| `WS.EventHookUncloak`   | Handle from `SetWinEventHook` (EVENT_OBJECT_UNCLOAKED)            |
+| `WS.EventHookCreate`    | Handle from `SetWinEventHook` (EVENT_OBJECT_CREATE)               |
+| `WS.WinEventCB`         | `RegisterCallback` pointer for WinEventProc                       |
+| `WS.QPCFreq`            | QPC frequency for µs-precision timing                             |
 
 ### Critical AHK v1.1 Details (Window Spawning)
+
 - **32-bit masking**: `idObject & 0xFFFFFFFF` — WinEventProc uses 32-bit params but AHK reads 64-bit register slots on x64
 - **Numeric coercion**: `hwnd + 0` — ensures consistent object key type in `WS.Pending` etc.
 - **Global discipline**: Every function declares `global WS` (single object replaces 12+ individual globals)
@@ -446,6 +473,7 @@ explorer.exe
 ```
 
 This architecture is relevant to:
+
 - **WS_IsMovable()**: ApplicationFrameWindow is movable, CoreWindow is not
 - **Tier 2 overlay detection**: Start menu CoreWindow doesn't fire shell hooks, so overlay detection relies on empty-class infrastructure events and `WS.OverlayTick`
 - **Brief-process detection**: UWP re-launch doesn't create a new process (Tier 1 misses), hence Tier 2 exists

@@ -123,11 +123,8 @@ CollectWindowInfo(hwnd) {
 ; Get UIA element properties at screen coordinates via ElementFromPoint
 ; Returns {name, type, autoId, className} for the element under the cursor
 GetUIAElementInfo(x, y) {
-  global G_UIA
   result := {name: "", type: "", autoId: "", className: "", pid: 0}
   Try {
-    If (!G_UIA)
-      G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
     _el := 0
     ; IUIAutomation::ElementFromPoint (vtable 7)
     DllCall(NumGet(NumGet(G_UIA+0) + 7*A_PtrSize), "Ptr", G_UIA, "Int64", x | (y << 32), "Ptr*", _el)
@@ -177,15 +174,14 @@ FormatWindowInfo(info) {
   s .= "ahk_class: " . info.class . "`n"
   s .= "ahk_id: " . info.hwnd . "`n"
   If (info.HasKey("pointHwnd"))
-    s .= "Window handle (hWnd): " . info.pointHwnd . "`n"
-  s .= "`n"
-  ; Path/Process group
-  ; s .= "Folder: " . info.exe.dir . "`n"  ; Redundant with command line
+    s .= "hWnd: " . info.pointHwnd . "`n"
   If (info.class = "CabinetWClass") {
     _expPath := GetExplorerPath()
     If (_expPath != "")
       s .= "ExplorerPath: " . _expPath . "`n"
   }
+  s .= "`n"
+  ; Path/Process group
   s .= "Command line: " . WrapList(info.cmdLine, " ") . "`n"
   _pidLine := "Process ID: " . info.pid
   If (info.HasKey("hostPid"))
@@ -193,15 +189,6 @@ FormatWindowInfo(info) {
   If (info.elevated)
     _pidLine .= " (Elevated)"
   s .= _pidLine . "`n"
-  s .= "`n"
-  ; Geometry group
-  s .= "Position: (" . info.x . ", " . info.y . ")`n"
-  s .= "Monitor: " . info.mon . "`n"
-  s .= "Size: " . info.w . " x " . info.h . "`n"
-  s .= "Style: " . info.style . "`n"
-  s .= "ExStyle: " . info.exStyle . "`n"
-  If (info.HasKey("scrollPattern"))
-    s .= "ScrollPattern: " . info.scrollPattern . "`n"
   ; WT Scroll position
   If (info.HasKey("wtScroll")) {
     If (info.wtScroll.pct != -1) {
@@ -210,6 +197,8 @@ FormatWindowInfo(info) {
     } Else
       s .= "WT Scroll: (no scroll)`n"
   }
+  If (info.HasKey("wtDiag") && info.wtDiag != "")
+    s .= "WT Debug: " . info.wtDiag . "`n"
   ; UIA element at cursor (wrap long names/IDs at spaces, hard-break at 120)
   If (info.HasKey("uia") && (info.uia.type != "" || info.uia.name != "")) {
     _uiaLine := "UIA: "
@@ -222,13 +211,15 @@ FormatWindowInfo(info) {
       s .= "  AutomationId: " . WrapList(info.uia.autoId, ",", 90, ", ") . "`n"
     If (info.uia.className != "")
       s .= "  ClassName: " . info.uia.className . "`n"
+    If (info.HasKey("scrollPattern"))
+      s .= "  ScrollPattern: " . info.scrollPattern . "`n"
   }
   s .= "`n"
   ; Focus/Control group
   If (info.HasKey("focusedControl"))
-    s .= "Focused Control: " . info.focusedControl . (info.focusedHwnd != "" ? "`nhWnd: " . info.focusedHwnd : "") . "`n"
+    s .= "Focused Control: " . info.focusedControl . (info.focusedHwnd != "" ? "`nControl hWnd: " . info.focusedHwnd : "") . "`n"
   If (info.HasKey("activeFocus"))
-    s .= "Active Focus: " . info.activeFocus . (info.activeFocusHwnd != "" ? "`n  hWnd: " . info.activeFocusHwnd : "") . "`n"
+    s .= "Active Focus: " . info.activeFocus . (info.activeFocusHwnd != "" ? "`n  Control hWnd: " . info.activeFocusHwnd : "") . "`n"
   If (info.HasKey("control"))
     s .= "Control: " . info.control . "`n"
   s .= "`n"
@@ -409,7 +400,8 @@ ExtendedSpyUpdate:
 
   ; WT Scroll position (uses cached value from guard timer to avoid COM reentrancy)
   If (info.exe.path ~= "i)WindowsTerminal") {
-    info.wtScroll := {pct: G_WTScrollLastPct, status: G_WTScrollStatus}
+    info.wtScroll := {pct: SG_ScrollLastPct, status: SG_ScrollStatus}
+    info.wtDiag := SG_ScrollDiag
   }
 
   ; UIA PID override: use content process when it differs from host

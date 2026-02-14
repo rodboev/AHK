@@ -515,11 +515,11 @@ Toggle = 0
 Toggle2 = 0
 #MaxThreadsPerHotkey 2
 #IfWinActive, ahk_class CabinetWClass
-$*MButton Up::
+*MButton Up::
 SetTimer, MBScroll, off
 SystemCursor("On")
 return
-$*MButton::
+*MButton::
   Sensitivity = 10 ; how far it takes before the scroll happens
   MouseGetPos, X1, Y1, , c, 2
   SetTimer, MBScroll, 20

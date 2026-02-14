@@ -24,7 +24,7 @@ EnvGet, G_UserProfile, USERPROFILE
   If !IsRemoteSession()
     WS_Init() ; Init window spawning
     TerminalInit()
-    WTScrollInit()
+    SG_ScrollInit()
   Return
 #If
 
@@ -38,7 +38,7 @@ EnvGet, G_UserProfile, USERPROFILE
   Pause,,1
 Return
 +!e::UserRun("vsc", A_ScriptFullPath) ; [ Shift+Alt+E ] -> Edit script in VS Code
-#IfWinActive AutoHotkey.ahk
+#IfWinActive .ahk
   ~^s::Reload ; [ Ctrl+S ] -> Reload script on save (in any editor)
 #IfWinActive
 
@@ -56,8 +56,10 @@ Return
 #IfWinActive
 
 ; ⇒ VSCode + forks
-#If (WinActive("ahk_exe code.exe") or WinActive("ahk_exe cursor.exe") or WinActive("ahk_exe antigravity.exe") or WinActive("ahk_exe vscodium.exe"))
+#If (WinActive("ahk_exe code.exe") or WinActive("ahk_exe cursor.exe") or WinActive("ahk_exe antigravity.exe") or WinActive("ahk_exe vscodium.exe") OR WinActive("ahk_exe vsc.exe"))
   ^w::Send {Alt Down}z{AltUp} ; [ Ctrl+W ] -> Toggle word wrap
+  ^Tab::Send {Ctrl Down}{PgDn}{Ctrl Up} ; [ Ctrl+Tab ] -> Next tab
+  +^Tab::Send {Ctrl Down}{PgUp}{Ctrl Up} ; [ ShIft+Ctrl+Tab ] -> Previous tab
 #If
 
 ; ⇒ Other global bindings
@@ -93,54 +95,70 @@ Return
 #IfWinActive
 
 #If WinActive("ahk_class CabinetWClass") || WinActive("ahk_class #32770")
-  ^e:: ; [ Ctrl+E ] -> Edit selected file with default edit handler (Explorer or file dialog)
-    selected := _GetSelectedFile()
-    If (selected = "")
+  ^e:: ; [ Ctrl+E ] -> Edit selected file in Sublime Text (Explorer or file dialog)
+    _selected := _GetSelectedFile()
+    If (_selected = "")
       Return
     ; .lnk shortcuts: fix disabled target field, show Properties
-    If (SubStr(selected, -3) = ".lnk") {
-      _FixAdvertisedShortcut(selected)
-      _ShowProperties(selected)
+    If (SubStr(_selected, -3) = ".lnk") {
+      _FixAdvertisedShortcut(_selected)
+      _ShowProperties(_selected)
       Return
     }
     ; WSL paths: edit directly (permissions managed by Linux)
-    If (SubStr(selected, 1, 6) = "\\wsl$" || SubStr(selected, 1, 15) = "\\wsl.localhost") {
-      Try
-        Run *edit "%selected%"
-      Catch
-        Run "%selected%"
+    If (SubStr(_selected, 1, 6) = "\\wsl$" || SubStr(_selected, 1, 15) = "\\wsl.localhost") {
+      UserRun("subl", _selected)
       Return
     }
-    ; Check write access; behavior varies by path type
-    If !_HasWriteAccess(selected) {
-      If (SubStr(selected, 1, 2) = "\\") {
-        ; Network UNC: warn about slowness, Cancel skips grant but still edits
-        MsgBox, 0x31, Edit Network File, Write access is needed to edit this file. Note that network paths can slow down access changes. Do you wish to change permissions?`n`n%selected%
+    ; Binary files: open with default handler (Open With dialog), not text editor
+    If (_IsBinaryFile(_selected)) {
+      Run "%_selected%"
+      Return
+    }
+    ; Check write access and prompt if needed
+    If (!_HasWriteAccess(_selected)) {
+      If (SubStr(_selected, 1, 2) = "\\") {
+        MsgBox, 0x31, Edit Network File, Write access is needed to edit this file. Note that network paths can slow down access changes. Do you wish to change permissions?`n`n%_selected%
         IfMsgBox Cancel
         {
-          Try
-            Run *edit "%selected%"
-          Catch
-            Run "%selected%"
+          UserRun("subl", _selected)
           Return
         }
       } Else {
-        ; Local: standard confirmation, Cancel aborts entirely
-        MsgBox, 0x31, Edit Protected File, Full write access must be granted to edit this file.`n`n%selected%
+        MsgBox, 0x31, Edit Protected File, Full write access must be granted to edit this file.`n`n%_selected%
         IfMsgBox Cancel
           Return
       }
-      _GrantWriteAccess(selected)
+      _GrantWriteAccess(_selected)
     }
-    Try
-      Run *edit "%selected%"
-    Catch
-      Run "%selected%"
+    UserRun("subl", _selected)
   Return
-  ^+e:: ; [ Ctrl+Shift+E ] -> Remove user's granted ACL entry from selected file
-    selected := _GetSelectedFile()
-    If (selected != "")
-      _RevokeWriteAccess(selected)
+  ^+e:: ; [ Ctrl+Shift+E ] -> Force edit in Sublime Text (skip binary check)
+    _selected := _GetSelectedFile()
+    If (_selected = "")
+      Return
+    If (!_HasWriteAccess(_selected)) {
+      MsgBox, 0x31, Edit Protected File, Full write access must be granted to edit this file.`n`n%_selected%
+      IfMsgBox Cancel
+        Return
+      _GrantWriteAccess(_selected)
+    }
+    UserRun("subl", _selected)
+  Return
+  ^o:: ; [ Ctrl+O ] -> Toggle INTERACTIVE full control on selected file
+    _selected := _GetSelectedFile()
+    If (_selected = "")
+      Return
+    SplitPath, _selected, _fileName
+    _fp := _selected
+    If (_HasWriteAccess(_selected)) {
+      RunWait, %ComSpec% /c icacls "%_fp%" /remove INTERACTIVE,, Hide
+      ToolTip, ACL revoked: %_fileName%
+    } Else {
+      RunWait, %ComSpec% /c icacls "%_fp%" /grant INTERACTIVE:F,, Hide
+      ToolTip, ACL granted: %_fileName%
+    }
+    SetTimer, RemoveToolTip, -2000
   Return
 #If
 
@@ -173,7 +191,7 @@ Return
   $MButton::SendInput {F11}
 #IfWinActive
 #IfWinActive ahk_class QWidget
-  $*MButton::Send n ; VLC: next file on middle click
+  *MButton::Send n ; VLC: next file on middle click
 #IfWinActive
 
 ; Alt+Shift+S = Run or activate Everything
@@ -450,16 +468,25 @@ GetCursorMonitor() {
   Return 1
 }
 
+; => Start up G_UIA
+global G_UIA
+If (!G_UIA) {
+  G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
+}
+G_UIACleanup() {
+  If (G_UIA) {
+    ObjRelease(G_UIA)
+    G_UIA := 0
+  }
+}
+
 ; ⇒ Get the UIA content process PID for a window (resolves host vs content for UWP/Electron)
 ; Returns content PID if different from window PID, otherwise returns window PID
 GetUIAProcessId(hwnd) {
-  global G_UIA
   WinGet, _winPid, PID, ahk_id %hwnd%
   If (!_winPid)
     Return 0
   Try {
-    If (!G_UIA)
-      G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
     _el := 0
     ; IUIAutomation::ElementFromHandle (vtable 6)
     DllCall(NumGet(NumGet(G_UIA+0) + 6*A_PtrSize), "Ptr", G_UIA, "Ptr", hwnd, "Ptr*", _el)
@@ -513,175 +540,97 @@ ProcessExistsByCommandLine(cmdLine) {
 }
 
 ; ⇒ Check if non-elevated user has write access to a file
-; Uses the linked (non-elevated) token with AccessCheck
+; Elevated: creates restricted token (Administrators disabled) to simulate non-elevated check.
+; Non-elevated: uses process token directly.
 _HasWriteAccess(filePath) {
-  hToken := 0
-  If !DllCall("advapi32\OpenProcessToken"
-      , "Ptr", DllCall("GetCurrentProcess", "Ptr")
-      , "UInt", 0x0008    ; TOKEN_QUERY
-      , "Ptr*", hToken)
-    Return true
+  _accessOK := false
+  _hToken := 0, _hCheckToken := 0, _hImpToken := 0, _pSD := 0
 
-  ; Get linked (non-elevated) token — only exists when running elevated
-  VarSetCapacity(linkedBuf, A_PtrSize, 0)
-  hLinked := 0
-  If DllCall("advapi32\GetTokenInformation"
-      , "Ptr", hToken, "Int", 19  ; TokenLinkedToken
-      , "Ptr", &linkedBuf, "UInt", A_PtrSize, "UInt*", 0)
-    hLinked := NumGet(linkedBuf, 0, "Ptr")
-  DllCall("CloseHandle", "Ptr", hToken)
+  Try {
+    If !DllCall("advapi32\OpenProcessToken"
+        , "Ptr", DllCall("GetCurrentProcess", "Ptr")
+        , "UInt", 0x000A    ; TOKEN_QUERY | TOKEN_DUPLICATE
+        , "Ptr*", _hToken)
+      Return false
 
-  If !hLinked
-    Return true  ; Not elevated — current user IS the non-elevated user
+    ; Check elevation status via TokenElevation (info class 20)
+    VarSetCapacity(_elevBuf, 4, 0)
+    DllCall("advapi32\GetTokenInformation"
+        , "Ptr", _hToken, "Int", 20  ; TokenElevation
+        , "Ptr", &_elevBuf, "UInt", 4, "UInt*", 0)
+    _isElevated := NumGet(_elevBuf, 0, "UInt")
 
-  ; Linked token has TOKEN_QUERY only; upgrade via DuplicateHandle for TOKEN_DUPLICATE
-  hLinkedDup := 0
-  _hProc := DllCall("GetCurrentProcess", "Ptr")
-  DllCall("DuplicateHandle"
-      , "Ptr", _hProc, "Ptr", hLinked
-      , "Ptr", _hProc, "Ptr*", hLinkedDup
-      , "UInt", 0x000A  ; TOKEN_QUERY | TOKEN_DUPLICATE
-      , "Int", 0, "UInt", 0)
-  DllCall("CloseHandle", "Ptr", hLinked)
-  If !hLinkedDup
-    Return true
+    If (_isElevated) {
+      ; Create restricted token: disable BUILTIN\Administrators SID
+      VarSetCapacity(_adminSid, 68, 0)
+      _sidSize := 68
+      DllCall("advapi32\CreateWellKnownSid"
+          , "Int", 26  ; WinBuiltinAdministratorsSid
+          , "Ptr", 0, "Ptr", &_adminSid, "UInt*", _sidSize)
+      VarSetCapacity(_disableSids, A_PtrSize + 4, 0)
+      NumPut(&_adminSid, _disableSids, 0, "Ptr")
+      NumPut(0, _disableSids, A_PtrSize, "UInt")
+      If !DllCall("advapi32\CreateRestrictedToken"
+          , "Ptr", _hToken
+          , "UInt", 0          ; flags
+          , "UInt", 1          ; DisableSidCount
+          , "Ptr", &_disableSids
+          , "UInt", 0, "Ptr", 0  ; DeletePrivilegeCount
+          , "UInt", 0, "Ptr", 0  ; RestrictedSidCount
+          , "Ptr*", _hCheckToken)
+        Return false
+    } Else {
+      _hCheckToken := _hToken
+      _hToken := 0  ; prevent double-close in Finally
+    }
 
-  ; Duplicate as SecurityImpersonation token (required by AccessCheck)
-  hImpToken := 0
-  DllCall("advapi32\DuplicateToken"
-      , "Ptr", hLinkedDup, "Int", 2, "Ptr*", hImpToken)  ; SecurityImpersonation
-  DllCall("CloseHandle", "Ptr", hLinkedDup)
-  If !hImpToken
-    Return true
+    ; Duplicate as SecurityImpersonation token (required by AccessCheck)
+    If !DllCall("advapi32\DuplicateToken"
+        , "Ptr", _hCheckToken, "Int", 2, "Ptr*", _hImpToken)
+      Return false
 
-  ; Get file security descriptor (owner + group + DACL)
-  pSD := 0
-  If DllCall("advapi32\GetNamedSecurityInfoW"
-      , "WStr", filePath, "Int", 1, "UInt", 0x7  ; SE_FILE_OBJECT, OWNER|GROUP|DACL
-      , "Ptr", 0, "Ptr", 0, "Ptr", 0, "Ptr", 0
-      , "Ptr*", pSD) || !pSD {
-    DllCall("CloseHandle", "Ptr", hImpToken)
-    Return true
+    ; Get file security descriptor (owner + group + DACL)
+    If DllCall("advapi32\GetNamedSecurityInfoW"
+        , "WStr", filePath, "Int", 1, "UInt", 0x7  ; SE_FILE_OBJECT, OWNER|GROUP|DACL
+        , "Ptr", 0, "Ptr", 0, "Ptr", 0, "Ptr", 0
+        , "Ptr*", _pSD)
+      Return false
+
+    ; GENERIC_MAPPING for file objects
+    VarSetCapacity(_gm, 16, 0)
+    NumPut(0x00120089, _gm, 0, "UInt")   ; FILE_GENERIC_READ
+    NumPut(0x00120116, _gm, 4, "UInt")   ; FILE_GENERIC_WRITE
+    NumPut(0x001200A0, _gm, 8, "UInt")   ; FILE_GENERIC_EXECUTE
+    NumPut(0x001F01FF, _gm, 12, "UInt")  ; FILE_ALL_ACCESS
+
+    _desiredAccess := 0x40000000          ; GENERIC_WRITE
+    DllCall("advapi32\MapGenericMask", "UInt*", _desiredAccess, "Ptr", &_gm)
+
+    VarSetCapacity(_privSet, 64, 0)
+    _privSetLen := 64, _grantedAccess := 0
+    DllCall("advapi32\AccessCheck"
+        , "Ptr", _pSD, "Ptr", _hImpToken
+        , "UInt", _desiredAccess, "Ptr", &_gm
+        , "Ptr", &_privSet, "UInt*", _privSetLen
+        , "UInt*", _grantedAccess, "Int*", _accessOK)
+    _accessOK := _accessOK + 0  ; force numeric
+  } Finally {
+    If (_hToken)
+      DllCall("CloseHandle", "Ptr", _hToken)
+    If (_hCheckToken)
+      DllCall("CloseHandle", "Ptr", _hCheckToken)
+    If (_hImpToken)
+      DllCall("CloseHandle", "Ptr", _hImpToken)
+    If (_pSD)
+      DllCall("kernel32\LocalFree", "Ptr", _pSD)
   }
-
-  ; GENERIC_MAPPING for file objects
-  VarSetCapacity(gm, 16, 0)
-  NumPut(0x00120089, gm, 0, "UInt")   ; FILE_GENERIC_READ
-  NumPut(0x00120116, gm, 4, "UInt")   ; FILE_GENERIC_WRITE
-  NumPut(0x001200A0, gm, 8, "UInt")   ; FILE_GENERIC_EXECUTE
-  NumPut(0x001F01FF, gm, 12, "UInt")  ; FILE_ALL_ACCESS
-
-  desiredAccess := 0x40000000          ; GENERIC_WRITE
-  DllCall("advapi32\MapGenericMask", "UInt*", desiredAccess, "Ptr", &gm)
-
-  VarSetCapacity(privSet, 64, 0)
-  privSetLen := 64, grantedAccess := 0, accessOK := false
-  DllCall("advapi32\AccessCheck"
-      , "Ptr", pSD, "Ptr", hImpToken
-      , "UInt", desiredAccess, "Ptr", &gm
-      , "Ptr", &privSet, "UInt*", privSetLen
-      , "UInt*", grantedAccess, "Int*", accessOK)
-
-  DllCall("CloseHandle", "Ptr", hImpToken)
-  DllCall("kernel32\LocalFree", "Ptr", pSD)
-  Return accessOK
+  Return _accessOK
 }
 
-; ⇒ Grant write access: save owner → take ownership → grant access → restore owner
-; Uses SetEntriesInAcl + SetNamedSecurityInfo (pure API, no external processes)
+; ⇒ Grant full control to current user via icacls (preserves existing ownership)
 _GrantWriteAccess(filePath) {
-  ; 1. Save current owner SID
-  pSD := 0, pOwner := 0
-  If DllCall("advapi32\GetNamedSecurityInfoW"
-      , "WStr", filePath, "Int", 1, "UInt", 0x1  ; SE_FILE_OBJECT, OWNER
-      , "Ptr*", pOwner, "Ptr", 0, "Ptr", 0, "Ptr", 0
-      , "Ptr*", pSD) || !pSD
-    Return
-
-  sidLen := DllCall("advapi32\GetLengthSid", "Ptr", pOwner, "UInt")
-  VarSetCapacity(savedOwner, sidLen, 0)
-  DllCall("advapi32\CopySid", "UInt", sidLen, "Ptr", &savedOwner, "Ptr", pOwner)
-  DllCall("kernel32\LocalFree", "Ptr", pSD)
-
-  ; 2. Enable required privileges
-  _EnablePrivilege("SeTakeOwnershipPrivilege")
-  _EnablePrivilege("SeRestorePrivilege")
-
-  ; 3. Get current user's SID for taking ownership
-  hToken := 0
-  DllCall("advapi32\OpenProcessToken"
-      , "Ptr", DllCall("GetCurrentProcess", "Ptr")
-      , "UInt", 0x0008, "Ptr*", hToken)  ; TOKEN_QUERY
-  VarSetCapacity(tuBuf, 256, 0)
-  DllCall("advapi32\GetTokenInformation"
-      , "Ptr", hToken, "Int", 1  ; TokenUser
-      , "Ptr", &tuBuf, "UInt", 256, "UInt*", 0)
-  DllCall("CloseHandle", "Ptr", hToken)
-  pUserSid := NumGet(tuBuf, 0, "Ptr")
-
-  ; 4. Build EXPLICIT_ACCESS: grant Full Control to current user
-  eaSize := (A_PtrSize = 8) ? 48 : 32
-  VarSetCapacity(ea, eaSize, 0)
-  VarSetCapacity(uName, StrLen(A_UserName) * 2 + 2, 0)
-  StrPut(A_UserName, &uName, "UTF-16")
-  DllCall("advapi32\BuildExplicitAccessWithNameW"
-      , "Ptr", &ea, "Ptr", &uName
-      , "UInt", 0x1F01FF   ; FILE_ALL_ACCESS
-      , "UInt", 2          ; GRANT_ACCESS
-      , "UInt", 0)         ; NO_INHERITANCE
-
-  ; 5. Critical section: take ownership → modify DACL → restore owner
-  Critical
-  DllCall("advapi32\SetNamedSecurityInfoW"
-      , "WStr", filePath, "Int", 1, "UInt", 0x1  ; OWNER
-      , "Ptr", pUserSid, "Ptr", 0, "Ptr", 0, "Ptr", 0)
-
-  pDacl := 0, pSD2 := 0
-  DllCall("advapi32\GetNamedSecurityInfoW"
-      , "WStr", filePath, "Int", 1, "UInt", 0x4  ; DACL
-      , "Ptr", 0, "Ptr", 0, "Ptr*", pDacl, "Ptr", 0, "Ptr*", pSD2)
-
-  pNewDacl := 0
-  If (pSD2)
-    DllCall("advapi32\SetEntriesInAclW"
-        , "UInt", 1, "Ptr", &ea, "Ptr", pDacl, "Ptr*", pNewDacl)
-  If (pNewDacl)
-    DllCall("advapi32\SetNamedSecurityInfoW"
-        , "WStr", filePath, "Int", 1, "UInt", 0x4  ; DACL
-        , "Ptr", 0, "Ptr", 0, "Ptr", pNewDacl, "Ptr", 0)
-
-  DllCall("advapi32\SetNamedSecurityInfoW"
-      , "WStr", filePath, "Int", 1, "UInt", 0x1  ; OWNER (restore)
-      , "Ptr", &savedOwner, "Ptr", 0, "Ptr", 0, "Ptr", 0)
-  Critical Off
-
-  If (pNewDacl)
-    DllCall("kernel32\LocalFree", "Ptr", pNewDacl)
-  If (pSD2)
-    DllCall("kernel32\LocalFree", "Ptr", pSD2)
-}
-
-; ⇒ Enable a named privilege on the current process token
-_EnablePrivilege(privName) {
-  hToken := 0
-  If !DllCall("advapi32\OpenProcessToken"
-      , "Ptr", DllCall("GetCurrentProcess", "Ptr")
-      , "UInt", 0x0028  ; TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY
-      , "Ptr*", hToken)
-    Return
-
-  VarSetCapacity(luid, 8, 0)
-  DllCall("advapi32\LookupPrivilegeValueW", "Ptr", 0, "WStr", privName, "Ptr", &luid)
-
-  VarSetCapacity(tp, 16, 0)
-  NumPut(1, tp, 0, "UInt")                         ; PrivilegeCount = 1
-  NumPut(NumGet(luid, 0, "Int64"), tp, 4, "Int64")  ; LUID
-  NumPut(2, tp, 12, "UInt")                         ; SE_PRIVILEGE_ENABLED
-
-  DllCall("advapi32\AdjustTokenPrivileges"
-      , "Ptr", hToken, "Int", 0
-      , "Ptr", &tp, "UInt", 0, "Ptr", 0, "Ptr", 0)
-  DllCall("CloseHandle", "Ptr", hToken)
+  _fp := filePath
+  RunWait, %ComSpec% /c icacls "%_fp%" /grant "%A_UserName%":F,, Hide
 }
 
 ; ⇒ Get selected file path in Explorer or file dialog (excludes directories)
@@ -765,42 +714,15 @@ _FixAdvertisedShortcut(lnkPath) {
   Return false
 }
 
-; ⇒ Remove user's explicit allow ACEs from a file (undo _GrantWriteAccess)
-_RevokeWriteAccess(filePath) {
-  eaSize := (A_PtrSize = 8) ? 48 : 32
-  VarSetCapacity(ea, eaSize, 0)
-  VarSetCapacity(uName, StrLen(A_UserName) * 2 + 2, 0)
-  StrPut(A_UserName, &uName, "UTF-16")
-  DllCall("advapi32\BuildExplicitAccessWithNameW"
-      , "Ptr", &ea, "Ptr", &uName
-      , "UInt", 0           ; ignored for REVOKE_ACCESS
-      , "UInt", 4           ; REVOKE_ACCESS
-      , "UInt", 0)          ; NO_INHERITANCE
-
-  pDacl := 0, pSD := 0
-  If DllCall("advapi32\GetNamedSecurityInfoW"
-      , "WStr", filePath, "Int", 1, "UInt", 0x4  ; DACL
-      , "Ptr", 0, "Ptr", 0, "Ptr*", pDacl, "Ptr", 0, "Ptr*", pSD) || !pSD {
-    SplitPath, filePath, fileName
-    ToolTip, Failed to read ACL: %fileName%
-    SetTimer, RemoveToolTip, -2000
-    Return
-  }
-
-  pNewDacl := 0
-  DllCall("advapi32\SetEntriesInAclW"
-      , "UInt", 1, "Ptr", &ea, "Ptr", pDacl, "Ptr*", pNewDacl)
-  If (pNewDacl) {
-    DllCall("advapi32\SetNamedSecurityInfoW"
-        , "WStr", filePath, "Int", 1, "UInt", 0x4  ; DACL
-        , "Ptr", 0, "Ptr", 0, "Ptr", pNewDacl, "Ptr", 0)
-    DllCall("kernel32\LocalFree", "Ptr", pNewDacl)
-  }
-  DllCall("kernel32\LocalFree", "Ptr", pSD)
-
-  SplitPath, filePath, fileName
-  ToolTip, ACL revoked: %fileName%
-  SetTimer, RemoveToolTip, -2000
+; ⇒ Check if file is binary using file.exe --mime-type (libmagic signature database)
+_IsBinaryFile(filePath) {
+  _fp := filePath
+  _outFile := A_Temp . "\ahk_mime_check.txt"
+  RunWait, %ComSpec% /c ""%A_ProgramFiles%\Git\usr\bin\file.exe" --mime-type "%_fp%"" > "%_outFile%" 2>&1,, Hide
+  FileRead, _output, %_outFile%
+  FileDelete, %_outFile%
+  ; file.exe outputs: "filepath: mime/type" — text files start with "text/"
+  Return !InStr(_output, ": text/")
 }
 
 ; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
@@ -902,7 +824,7 @@ RemoveToolTip:
 Return
 
 ; === Module Includes ===
-#Include %A_ScriptDir%\windows-terminal.ahk
+#Include %A_ScriptDir%\scroll-guard.ahk
 #Include %A_ScriptDir%\terminal-anywhere.ahk
 #Include %A_ScriptDir%\extended-spy.ahk
 #Include %A_ScriptDir%\mbutton-scroll.ahk

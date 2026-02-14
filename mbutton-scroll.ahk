@@ -23,20 +23,20 @@ HasWin32Scrollbar(hwnd) {
 }
 
 ; -> [ MButton + drag ] -> Invoke smooth scrolling on any app; release to stop.
-$*MButton::
-  global MBScroll_X1, MBScroll_Y1, MBScroll_Win, MBScroll_CtrlClassNN, MBScroll_Triggered
-  global G_UIA, MB_ScrollPattern := 0, MB_Element := 0, MBScroll_Ctrl
+*MButton::
+  global MB_X1, MB_Y1, MB_Win, MB_ClassName, MB_Triggered
+  global MB_ScrollPattern := 0, MB_Element := 0, MB_Ctrl
   global MB_Disabled := 0, MB_DeferredDown := 0, MB_ViewSize := 10.0, MB_AccumPct := -1
   global MB_Method := "VSCROLL" ; Default fallback
   global MB_FallbackChecked := 0  ; Check fallback once per drag
   global MB_NativeProbe := 0, MB_InitScrollPos := 0, MB_InitScrollPct := 0.0, MB_InitHCursor := 0
 
-  MouseGetPos,,, MBScroll_Win, MBScroll_CtrlClassNN
-  WinGetClass, ahk_class, ahk_id %MBScroll_Win%
+  MouseGetPos,,, MB_Win, MB_ClassName
+  WinGetClass, ahk_class, ahk_id %MB_Win%
 
   ; EXCLUDED CONTROLS (toolbars, edit boxes, headers — never scroll these)
   MB_ExcludedControls := ["ToolbarWindow", "ReBarWindow", "Edit", "AddressBandRoot", "statusbar", "SysHeader", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"]
-  IsExcludedRegion := HasVal(MB_ExcludedControls, MBScroll_CtrlClassNN) or (not MBScroll_CtrlClassNN and not (ahk_class = "Shell_TrayWnd" or ahk_class = "WorkerW"))
+  IsExcludedRegion := HasVal(MB_ExcludedControls, MB_ClassName) or (not MB_ClassName and not (ahk_class = "Shell_TrayWnd" or ahk_class = "WorkerW"))
   If (IsExcludedRegion) {
     MB_Disabled := 1
     SendInput, {Blind}{MButton Down}
@@ -63,21 +63,21 @@ $*MButton::
   ; Activate Explorer window if clicking on inactive one
   If (ahk_class = "CabinetWClass") {
     WinGet, activeWin, ID, A
-    If (MBScroll_Win != activeWin) {
-      WinActivate, ahk_id %MBScroll_Win%
+    If (MB_Win != activeWin) {
+      WinActivate, ahk_id %MB_Win%
     }
   }
 
   ; Capture initial mouse coords
   CoordMode, Mouse, Screen
-  MouseGetPos, MBScroll_X1, MBScroll_Y1
+  MouseGetPos, MB_X1, MB_Y1
 
   ; Get control window handle (hwnd)
-  ControlGet, MBScroll_Ctrl, Hwnd,, %MBScroll_CtrlClassNN%, ahk_id %MBScroll_Win%
-  MBScroll_Triggered := 0
+  ControlGet, MB_Ctrl, Hwnd,, %MB_ClassName%, ahk_id %MB_Win%
+  MB_Triggered := 0
 
   ; TreeView controls → direct to VSCROLL (skip native probe, never has native MButton scroll)
-  If (InStr(MBScroll_CtrlClassNN, "SysTreeView32")) {
+  If (InStr(MB_ClassName, "SysTreeView32")) {
     MB_Method := "VSCROLL"
     MB_NativeProbe := 0
     SetTimer, MBScrollTimer, 150
@@ -85,9 +85,7 @@ $*MButton::
   }
 
   ; SET UP UIA (for both native scroll detection and potential custom scroll)
-  If (!G_UIA)
-    G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
-  targetForUIA := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
+  targetForUIA := MB_Ctrl ? MB_Ctrl : MB_Win
   DllCall(NumGet(NumGet(G_UIA+0)+6*A_PtrSize), "Ptr", G_UIA, "Ptr", targetForUIA, "Ptr*", MB_Element)
   If (MB_Element) {
     DllCall(NumGet(NumGet(MB_Element+0)+16*A_PtrSize), "Ptr", MB_Element, "Int", 10004, "Ptr*", MB_ScrollPattern)
@@ -99,7 +97,7 @@ $*MButton::
   }
 
   ; Capture initial scroll state for native detection
-  probeTarget := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
+  probeTarget := MB_Ctrl ? MB_Ctrl : MB_Win
   MB_InitScrollPos := GetScrollPos(probeTarget)
   MB_InitScrollPct := -1.0
   If (MB_ScrollPattern)
@@ -112,7 +110,7 @@ Return
 
 MBScrollTimer:
   Critical ; Prevent MButton Up from interrupting mid-DllCall (race condition safety)
-  global MB_AccumPct, MB_Method, MB_ViewSize, MBScroll_Ctrl, MB_FallbackChecked
+  global MB_AccumPct, MB_Method, MB_ViewSize, MB_Ctrl, MB_FallbackChecked
   global MB_NativeProbe, MB_InitScrollPos, MB_InitScrollPct, MB_InitHCursor
   ; Safety check: if MButton released, stop immediately
   If !GetKeyState("MButton", "P") {
@@ -140,12 +138,12 @@ MBScrollTimer:
     If (!nativeDetected) {
       CoordMode, Mouse, Screen
       MouseGetPos,, probeY
-      probeDrag := Abs(probeY - MBScroll_Y1)
+      probeDrag := Abs(probeY - MB_Y1)
 
       ; Signals 2 & 3: check after 3px (filters cursor jitter)
       If (probeDrag >= 3) {
         ; Signal 2: Win32 scroll position changed
-        probeTarget := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
+        probeTarget := MB_Ctrl ? MB_Ctrl : MB_Win
         currentScrollPos := GetScrollPos(probeTarget)
         If (currentScrollPos != MB_InitScrollPos)
           nativeDetected := true
@@ -202,11 +200,11 @@ MBScrollTimer:
 
   CoordMode, Mouse, Screen
   MouseGetPos,, Y2
-  SignedDist := Y2 - MBScroll_Y1
+  SignedDist := Y2 - MB_Y1
   AbsDist := Abs(SignedDist)
 
   If (AbsDist >= 8) {
-    MBScroll_Triggered := 1
+    MB_Triggered := 1
     signDir := (SignedDist > 0) ? 1 : -1
     absEffective := AbsDist
 
@@ -233,7 +231,7 @@ MBScrollTimer:
 
       ; Capture Win32 scroll position BEFORE UIA scroll (for cross-validation)
       If (MB_FallbackChecked = 0) {
-        uiaTarget := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
+        uiaTarget := MB_Ctrl ? MB_Ctrl : MB_Win
         MB_UIAVerifyPos := GetScrollPos(uiaTarget)
       }
 
@@ -263,7 +261,7 @@ MBScrollTimer:
           uiaFailed := true  ; NoScroll sentinel (-1)
         } Else {
           ; Cross-validate: if control has a Win32 scrollbar, it should have moved
-          uiaTarget := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
+          uiaTarget := MB_Ctrl ? MB_Ctrl : MB_Win
           If (HasWin32Scrollbar(uiaTarget)) {
             posAfter := GetScrollPos(uiaTarget)
             If (posAfter = MB_UIAVerifyPos)
@@ -291,7 +289,7 @@ MBScrollTimer:
       ; WM_MOUSEWHEEL to CONTROL with GetScrollPos fallback
       ; No fractional scrolling, better acceleration than WM_VSCROLL
       ; ===========================================
-      target := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
+      target := MB_Ctrl ? MB_Ctrl : MB_Win
 
       ; Get position BEFORE scroll (only on first check)
       If (!MB_FallbackChecked) {
@@ -299,7 +297,7 @@ MBScrollTimer:
       }
 
       ; Send WHEEL message
-      lParam := ((MBScroll_Y1 & 0xFFFF) << 16) | (MBScroll_X1 & 0xFFFF)
+      lParam := ((MB_Y1 & 0xFFFF) << 16) | (MB_X1 & 0xFFFF)
       magnitude := Max(1, Min(119, Floor(curveValue / 2)))
       Delta := (SignedDist > 0) ? -magnitude : magnitude
       wParam := Delta << 16
@@ -333,7 +331,7 @@ MBScrollTimer:
       ; No fractional scrolling, most compatible
       ; ===========================================
       scrollDir := (SignedDist > 0) ? 1 : 0
-      target := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
+      target := MB_Ctrl ? MB_Ctrl : MB_Win
 
       ; Dynamic timer: 300ms at 8px (slow), 20ms at 300px+ (fast)
       ; Map AbsDist 8-200 to timer 20-300
@@ -350,7 +348,7 @@ MBScrollTimer:
       ; WM_MOUSEWHEEL to WINDOW (Electron apps, auto-detected default)
       ; Fallback: WHEEL → WHEEL_CTRL if window-level message doesn't scroll
       ; ===========================================
-      lParam := ((MBScroll_Y1 & 0xFFFF) << 16) | (MBScroll_X1 & 0xFFFF)
+      lParam := ((MB_Y1 & 0xFFFF) << 16) | (MB_X1 & 0xFFFF)
       ; MUST cap below 120 for smooth scrolling (120 = 1 notch = 3 lines)
       magnitude := Max(1, Min(119, Floor(curveValue / 2)))
       Delta := (SignedDist > 0) ? -magnitude : magnitude
@@ -358,9 +356,9 @@ MBScrollTimer:
 
       If (!MB_FallbackChecked) {
         ; Test if window-level WHEEL actually scrolls (first scroll only)
-        ctrlTarget := MBScroll_Ctrl ? MBScroll_Ctrl : MBScroll_Win
+        ctrlTarget := MB_Ctrl ? MB_Ctrl : MB_Win
         posBefore := GetScrollPos(ctrlTarget)
-        PostMessage, 0x20A, %wParam%, %lParam%,, ahk_id %MBScroll_Win%
+        PostMessage, 0x20A, %wParam%, %lParam%,, ahk_id %MB_Win%
         Sleep, 15
         posAfter := GetScrollPos(ctrlTarget)
         If (posBefore = posAfter) {
@@ -373,7 +371,7 @@ MBScrollTimer:
           MB_FallbackChecked := 1
         }
       } Else {
-        PostMessage, 0x20A, %wParam%, %lParam%,, ahk_id %MBScroll_Win%
+        PostMessage, 0x20A, %wParam%, %lParam%,, ahk_id %MB_Win%
       }
 
       If (MB_Debug && MB_Method = "WHEEL")
@@ -382,9 +380,9 @@ MBScrollTimer:
   }
 Return
 
-$*MButton Up::
+*MButton Up::
   Critical ; Prevent timer from firing during cleanup (race condition safety)
-  global MB_Disabled, MB_DeferredDown, MBScroll_Triggered, MBScroll_Win, MB_ScrollPattern, MB_Element
+  global MB_Disabled, MB_DeferredDown, MB_Triggered, MB_Win, MB_ScrollPattern, MB_Element
   SetTimer, MBScrollTimer, Off
   If (MB_Debug)
     ToolTip
@@ -402,7 +400,7 @@ $*MButton Up::
   ; Release MButton to app
   If (MB_DeferredDown) {
     ; Explorer: MButton Down was deferred — only send click if no scroll occurred
-    If (!MBScroll_Triggered) {
+    If (!MB_Triggered) {
       SendInput, {Blind}{MButton}
     }
   } Else {
@@ -412,7 +410,7 @@ $*MButton Up::
 Return
 
 MB_Cleanup() {
-  global MB_ScrollPattern, MB_Element, G_UIA
+  global MB_ScrollPattern, MB_Element
   SetTimer, MBScrollTimer, Off
   If (MB_ScrollPattern) {
     ObjRelease(MB_ScrollPattern)
@@ -421,9 +419,5 @@ MB_Cleanup() {
   If (MB_Element) {
     ObjRelease(MB_Element)
     MB_Element := 0
-  }
-  If (G_UIA) {
-    ObjRelease(G_UIA)
-    G_UIA := 0
   }
 }

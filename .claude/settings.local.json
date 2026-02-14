@@ -1,6 +1,13 @@
 {
   "permissions": {
-    "deny": ["Read(./community-scripts/**)"],
-    "additionalDirectories": ["/mnt/c/Dropbox/Projects/AHK/.claude"]
+    "deny": [
+      "Read(./community-scripts/**)"
+    ],
+    "additionalDirectories": [
+      "/mnt/c/Dropbox/Projects/AHK/.claude"
+    ],
+    "allow": [
+      "Bash(powershell.exe:*)"
+    ]
   }
 }
