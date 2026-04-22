@@ -17,7 +17,6 @@
 SendMode, Input
 SetWorkingDir, %A_ScriptDir%
 SetTitleMatchMode, 2
-EnvGet, G_UserProfile, USERPROFILE
 
 ; Disable hotkeys inside remote sessions (RDP, Hyper-V, VMWare)
 #If IsRemoteSession()
@@ -37,7 +36,7 @@ EnvGet, G_UserProfile, USERPROFILE
   Suspend
   Pause,,1
 Return
-+!e::UserRun("vsc", A_ScriptFullPath) ; [ Shift+Alt+E ] -> Edit script in VS Code
++!e::Edit ; UserRun("vsc", A_ScriptFullPath) ; [ Shift+Alt+E ] -> Edit script in VS Code
 #IfWinActive .ahk
   ~^s::Reload ; [ Ctrl+S ] -> Reload script on save (in any editor)
 #IfWinActive
@@ -107,7 +106,7 @@ Return
     }
     ; WSL paths: edit directly (permissions managed by Linux)
     If (SubStr(_selected, 1, 6) = "\\wsl$" || SubStr(_selected, 1, 15) = "\\wsl.localhost") {
-      UserRun("subl", _selected)
+      UserRun("notepad", _selected)
       Return
     }
     ; Binary files: open with default handler (Open With dialog), not text editor
@@ -121,7 +120,7 @@ Return
         MsgBox, 0x31, Edit Network File, Write access is needed to edit this file. Note that network paths can slow down access changes. Do you wish to change permissions?`n`n%_selected%
         IfMsgBox Cancel
         {
-          UserRun("subl", _selected)
+          UserRun("notepad", _selected)
           Return
         }
       } Else {
@@ -131,19 +130,19 @@ Return
       }
       _GrantWriteAccess(_selected)
     }
-    UserRun("subl", _selected)
+    UserRun("notepad", _selected)
   Return
   ^+e:: ; [ Ctrl+Shift+E ] -> Force edit in Sublime Text (skip binary check)
     _selected := _GetSelectedFile()
     If (_selected = "")
       Return
     If (!_HasWriteAccess(_selected)) {
-      MsgBox, 0x31, Edit Protected File, Full write access must be granted to edit this file.`n`n%_selected%
-      IfMsgBox Cancel
-        Return
+      ; MsgBox, 0x31, Edit Protected File, Full write access must be granted to edit this file.`n`n%_selected%
+      ; IfMsgBox Cancel
+      ;  Return
       _GrantWriteAccess(_selected)
     }
-    UserRun("subl", _selected)
+    UserRun("notepad", _selected)
   Return
   ^o:: ; [ Ctrl+O ] -> Toggle INTERACTIVE full control on selected file
     _selected := _GetSelectedFile()
@@ -198,7 +197,7 @@ Return
 ~+!s::
   DetectHiddenWindows, On
   If (!WinExist("ahk_exe Everything.exe")) {
-    UserRun("C:\Program Files\Everything 1.5a\Everything.exe")
+    UserRun("\Apps\Everything\Everything.exe") ; was "Program Files\Everything 1.5a"
     WinWait, ahk_exe Everything.exe
     WinActivate
   }
@@ -736,71 +735,219 @@ _IsBinaryFile(filePath) {
 ; ∙ User: UserRun("wt", "-d %UserProfile%\Desktop"), or UserRun("wt", "-d" . A_Desktop)
 ; ∙ Admin: UserRun("elevate", exePath, fileArguments)
 UserRun(Executable, Args*) {
-  elevate := (Executable = "elevate")
-  If (elevate) {
-    Executable := Args[1]
-    Args.RemoveAt(1)
-  }
+    global UserRun_LastError
 
-  ; Check If any arg needs PowerShell For env var expansion or special handling
-  needsPowerShell := false
-  Loop % Args.Length() {
-    arg := Args[A_Index]
-    If (RegExMatch(arg, "%(.*?)%") || InStr(arg, "$env:") || RegExMatch(arg, "(?i)^\s*-d\s")) {
-      needsPowerShell := true
-      Break
+    UserRun_LastError := ""
+
+    ; "elevate" is a sentinel: elevate the real target in Args[1]
+    elevate := (Executable = "elevate")
+    if (elevate) {
+        if (Args.Length() < 1) {
+            MsgBox, 16, UserRun failed, Missing target executable for elevate.
+            return false
+        }
+        Executable := Args[1]
+        Args.RemoveAt(1)
     }
-  }
 
-  ; Run from Explorer For cleaner process trees
-  If (needsPowerShell) {
-    _safeExe := StrReplace(Executable, "'", "''")
-    quotedExe := "'" _safeExe "'"
-    psCmd := "& " quotedExe
+    ; Check if any arg needs PowerShell for env var expansion or special handling
+    needsPowerShell := false
     Loop % Args.Length() {
-      arg := Args[A_Index]
-      ; Handle "-d <path>" specially (For Windows Terminal)
-      If RegExMatch(arg, "(?i)^\s*-d\s+(.+)$", m) {
-        rawPath := m1
-        expanded := RegExReplace(rawPath, "(?i)%(.*?)%", "$env:$1")
-        _safePath := StrReplace(expanded, "'", "''")
-        path := "'" _safePath "'"
-        psCmd .= " -d " path
-      } Else {
-        expanded := RegExReplace(arg, "(?i)%(.*?)%", "$env:$1")
-        _safeArg := StrReplace(expanded, "'", "''")
-        quotedArg := "'" _safeArg "'"
-        psCmd .= " " quotedArg
-      }
+        arg := Args[A_Index]
+        if (RegExMatch(arg, "%(.*?)%") || InStr(arg, "$env:") || RegExMatch(arg, "(?i)^\s*-d\s")) {
+            needsPowerShell := true
+            break
+        }
     }
-    If (elevate) {
-      ; Escape single quotes for embedding psCmd inside -ArgumentList '...'
-      _psCmdEsc := StrReplace(psCmd, "'", "''")
-      full := "RunFromProcess-x64 explorer.exe conhost.exe --headless powershell -NoProfile -Command ""Start-Process powershell -ArgumentList '-NoProfile -Command " _psCmdEsc "' -Verb RunAs -WindowStyle Hidden"""
-    } Else {
-      full := "RunFromProcess-x64 explorer.exe conhost.exe --headless powershell -NoProfile -Command """ psCmd """"
+
+    ; Resolve RunFromProcess once. Empty string means "not available".
+    rfp := FindInPath("RunFromProcess-x64.exe")
+
+    ; --------------------------------------------------------------------------
+    ; PowerShell-required path
+    ; --------------------------------------------------------------------------
+    if (needsPowerShell) {
+        ; Resolve PowerShell only here, because only this branch requires it.
+        psPath := FindInPath("powershell.exe")
+        if (psPath = "")
+            psPath := FindInPath("pwsh.exe")
+
+        if (psPath = "") {
+            MsgBox, 16, UserRun failed, PowerShell is required for this launch path but was not found.
+            return false
+        }
+
+        ; pwsh-only environment workaround
+        psPrefix := ""
+        if RegExMatch(psPath, "(?i)\\pwsh\.exe$")
+            psPrefix := "set DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 && "
+
+        _safeExe := StrReplace(Executable, "'", "''")
+        quotedExe := "'" _safeExe "'"
+        psCmd := "& " quotedExe
+
+        Loop % Args.Length() {
+            arg := Args[A_Index]
+
+            ; Handle "-d <path>" specially (Windows Terminal)
+            if RegExMatch(arg, "(?i)^\s*-d\s+(.+)$", m) {
+                rawPath := m1
+                expanded := RegExReplace(rawPath, "(?i)%(.*?)%", "$env:$1")
+                _safePath := StrReplace(expanded, "'", "''")
+                psCmd .= " -d '" _safePath "'"
+            } else {
+                expanded := RegExReplace(arg, "(?i)%(.*?)%", "$env:$1")
+                _safeArg := StrReplace(expanded, "'", "''")
+                psCmd .= " '" _safeArg "'"
+            }
+        }
+
+        if (elevate) {
+            ; Elevation in this branch is PowerShell-mediated by design.
+            _psCmdEsc := StrReplace(psCmd, "'", "''")
+            psExeQ := """" psPath """"
+            psArg := "-NoProfile -Command ""Start-Process " psExeQ " -ArgumentList '-NoProfile -Command " _psCmdEsc "' -Verb RunAs -WindowStyle Hidden"""
+
+            if (rfp != "") {
+                full := """" rfp """ explorer.exe conhost.exe --headless cmd.exe /C """ psPrefix psExeQ " " psArg """"
+                Run, %full%, , UseErrorLevel Hide
+                if (ErrorLevel) {
+                    MsgBox, 16, UserRun failed, % "Run failed.`nErrorLevel: " ErrorLevel "`n`nCommand:`n" full
+                    return false
+                }
+                return true
+            }
+
+            ; Fallback: Explorer shell
+            if !ShellRunUserOrFail("cmd.exe", "/C " Chr(34) psPrefix psExeQ " " psArg Chr(34), "", "open", 0)
+                return false
+
+            return true
+        }
+
+        ; Non-elevated PowerShell path
+        psExeQ := """" psPath """"
+        psArg := "-NoProfile -Command " Chr(34) psCmd Chr(34)
+
+        if (rfp != "") {
+            full := """" rfp """ explorer.exe conhost.exe --headless cmd.exe /C """ psPrefix psExeQ " " psArg """"
+            Run, %full%, , UseErrorLevel Hide
+            if (ErrorLevel) {
+                MsgBox, 16, UserRun failed, % "Run failed.`nErrorLevel: " ErrorLevel "`n`nCommand:`n" full
+                return false
+            }
+            return true
+        }
+
+        if !ShellRunUserOrFail("cmd.exe", "/C " Chr(34) psPrefix psExeQ " " psArg Chr(34), "", "open", 0)
+            return false
+
+        return true
     }
-  } Else {
-    ; Direct execution - no env vars to expand, build simple argument string
+
+    ; --------------------------------------------------------------------------
+    ; Direct execution path (no PowerShell semantics required)
+    ; --------------------------------------------------------------------------
     argStr := ""
     Loop % Args.Length() {
-      arg := Args[A_Index]
-      _safeArg := StrReplace(arg, """", """""")
-      argStr .= " """ _safeArg """"
+        arg := Args[A_Index]
+        _safeArg := StrReplace(arg, """", """""")
+        argStr .= " """ _safeArg """"
     }
-    If (elevate) {
-      ; Use PowerShell Start-Process For elevation
-      _safeExe2 := StrReplace(Executable, "'", "''")
-      _safeArgs2 := StrReplace(argStr, "'", "''")
-      full := "RunFromProcess-x64 explorer.exe conhost.exe --headless powershell -NoProfile -Command ""Start-Process '" _safeExe2 "' -ArgumentList '" _safeArgs2 "' -Verb RunAs -WindowStyle Hidden"""
-    } Else {
-      _safeExeD := StrReplace(Executable, """", """""")
-      full := "RunFromProcess-x64 explorer.exe """ _safeExeD """" argStr
-    }
-  }
 
-  Run, %full%, , Hide
-  Return !ErrorLevel
+    if (elevate) {
+        ; Prefer PowerShell Start-Process when available
+        psPath := FindInPath("powershell.exe")
+        if (psPath = "")
+            psPath := FindInPath("pwsh.exe")
+
+        if (psPath != "") {
+            psPrefix := ""
+            if RegExMatch(psPath, "(?i)\\pwsh\.exe$")
+                psPrefix := "set DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 && "
+
+            _safeExe2 := StrReplace(Executable, "'", "''")
+            _safeArgs2 := StrReplace(argStr, "'", "''")
+            psExeQ := """" psPath """"
+            psArg := "-NoProfile -Command ""Start-Process '" _safeExe2 "' -ArgumentList '" _safeArgs2 "' -Verb RunAs -WindowStyle Hidden"""
+
+            if (rfp != "") {
+                full := """" rfp """ explorer.exe conhost.exe --headless cmd.exe /C """ psPrefix psExeQ " " psArg """"
+                Run, %full%, , UseErrorLevel Hide
+                if (ErrorLevel) {
+                    MsgBox, 16, UserRun failed, % "Run failed.`nErrorLevel: " ErrorLevel "`n`nCommand:`n" full
+                    return false
+                }
+                return true
+            }
+
+            if !ShellRunUserOrFail("cmd.exe", "/C " Chr(34) psPrefix psExeQ " " psArg Chr(34), "", "open", 0)
+                return false
+
+            return true
+        }
+
+        ; Fallback: elevate.exe
+        elevatePath := FindInPath("elevate.exe")
+        if (elevatePath = "") {
+            MsgBox, 16, UserRun failed, Neither PowerShell nor elevate.exe was found for elevated launch.
+            return false
+        }
+
+        _safeElevate := StrReplace(elevatePath, """", """""")
+        _safeExeD := StrReplace(Executable, """", """""")
+        full := """" _safeElevate """ """ _safeExeD """" argStr
+
+        if (rfp != "") {
+            full := """" rfp """ explorer.exe " full
+        }
+
+        Run, %full%, , UseErrorLevel Hide
+        if (ErrorLevel) {
+            MsgBox, 16, UserRun failed, % "Run failed.`nErrorLevel: " ErrorLevel "`n`nCommand:`n" full
+            return false
+        }
+        return true
+    }
+
+    ; Direct non-elevated path
+    _safeExeD := StrReplace(Executable, """", """""")
+    full := ""
+
+    if (rfp != "") {
+        full := """" rfp """ explorer.exe """ _safeExeD """" argStr
+        Run, %full%, , UseErrorLevel Hide
+        if (ErrorLevel) {
+            MsgBox, 16, UserRun failed, % "Run failed.`nErrorLevel: " ErrorLevel "`n`nCommand:`n" full
+            return false
+        }
+        return true
+    }
+
+    if !ShellRunUserOrFail(Executable, LTrim(argStr), "", "open", 1)
+        return false
+
+    return true
+}
+ShellRunUser(exe, args := "", dir := "", verb := "open", show := 1) {
+    global UserRun_LastError
+    UserRun_LastError := ""
+    try {
+        shell := ComObjCreate("Shell.Application")
+        shell.ShellExecute(exe, args, dir, verb, show)
+        shell := ""
+        return true
+    } catch e {
+        UserRun_LastError := "ShellExecute failed: " e.Message
+        return false
+    }
+}
+ShellRunUserOrFail(exe, args := "", dir := "", verb := "open", show := 1) {
+    if !ShellRunUser(exe, args, dir, verb, show) {
+        MsgBox, 16, UserRun failed, % UserRun_LastError
+        return false
+    }
+    return true
 }
 
 ; Check if a process is running elevated
