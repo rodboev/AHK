@@ -273,7 +273,7 @@ Return
   If (ahk_class = "Progman")
     path := A_Desktop
   Else If (ahk_class != "CabinetWClass" || path = "")
-    path := G_UserProfile
+    path := A_MyDocuments
 
   ; Activate existing e++ window for this path, or open new
   pid := ProcessExistsByCommandLine("files-stable.exe"" " . path)

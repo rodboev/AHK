@@ -13,35 +13,33 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Architecture
 
-`AutoHotkey.ahk` is the parent entrypoint. It `#Include`s five module files at the bottom:
+`AutoHotkey.ahk` is the parent entrypoint. It `#Include`s four module files at the bottom:
 
-| File                    | Purpose                                                                     |
-| ----------------------- | --------------------------------------------------------------------------- |
-| `AutoHotkey.ahk`        | Parent: config directives, helpers, bindings, misc hotkeys                  |
-| `scroll-guard.ahk`      | WT scroll guard (jump detection, restore, ScrollLock lock, unfocused wheel) |
-| `terminal-anywhere.ahk` | Windows Terminal from anywhere (`F10` variants) — user/admin/SYSTEM         |
-| `extended-spy.ahk`      | Extended Window Spy (`#w`) — tooltip/dialog with window/control info        |
-| `mbutton-scroll.ahk`    | MButton smooth scroll (hotkeys, timer, scroll methods)                      |
-| `window-spawning.ahk`   | Shell hook window spawning (WS_Init, hooks, move logic, Alt+Tab)            |
+| File                    | Purpose                                                            |
+| ----------------------- | ------------------------------------------------------------------ |
+| `AutoHotkey.ahk`        | Parent: config directives, helpers, bindings, misc hotkeys         |
+| `terminal-anywhere.ahk` | Windows Terminal from anywhere (`F10` variants) — user/admin/SYSTEM|
+| `extended-spy.ahk`      | Extended Window Spy (`#w`) — tooltip/dialog with window/control info |
+| `mbutton-scroll.ahk`    | MButton smooth scroll (hotkeys, timer, scroll methods)             |
+| `window-spawning.ahk`   | Shell hook window spawning (WS_Init, hooks, move logic, Alt+Tab)   |
 
 The `community-scripts/` directory contains reference libraries (loosely coupled, mostly for inspiration).
 
 ### Key Regions in AutoHotkey.ahk
 
-- **Configuration directives**: `#Requires`, `#SingleInstance`, etc., remote session guard, `WS_Init()` call
+- **Auto-execute section**: Directives, `G_UIA` init, `OnExit` handlers, `WS_Init()`, `TerminalInit()`
 - **Bindings / remaps**: Script control, editor-specific, global hotkeys, scroll accel
 - **Process management / privilege escalation**: `^+\``, `#+e`, `#c`, `^+=` hotkeys
 - **Helper functions**: `GetExePath`, `GetMonitor`, `HasVal`, `FindInPath`, etc.
 - **Safe run / elevation**: `UserRun()` + `IsProcessElevated()`
-- **Module includes**: `#Include` directives for the five module files
+- **Module includes**: `#Include` directives at EOF for the four module files
 
 ### Core Features
 
 1. **Explorer Smooth Scroll** (`MButton + drag`) — 4-method system: UIA, WHEEL, WHEEL_CTRL, VSCROLL — in `mbutton-scroll.ahk`
 2. **Window Spawning** — Shell hook + WinEvent hooks move new windows to cursor's monitor — in `window-spawning.ahk`
 3. **Extended Window Spy** (`Win+W`) — Persistent tooltip with window/control info — in `extended-spy.ahk`
-4. **Terminal/Elevation** (`F10`, `Alt+F10`, `Shift+F10`, `Ctrl+F10`, `Ctrl+Alt+Shift+F10`, `Ctrl+Shift+Plus`) — Context-aware terminal launching with auto WSL detection (UNC paths), force-WSL mode, Claude CLI, admin elevation, and SYSTEM via ti.exe — in `terminal-anywhere.ahk` (F10 variants) and `AutoHotkey.ahk` (`Ctrl+Shift+Plus`)
-5. **WT Scroll Guard** — Always-on protection against CC viewport hijacking. 50ms timer detects abrupt jumps to 0% (always restores) or 100% (restores if idle >2s) via UIA `RangeValuePattern::SetValue` on `ScrollBar.Vertical`. ScrollLock freezes position indefinitely. Unfocused wheel forwarding: `#If SG_HoverCheck()` posts `WM_MOUSEWHEEL` to WT under cursor when not active. Extended Spy shows live scroll %. See `ui-automation.md` for UIA architecture — in `scroll-guard.ahk`
+4. **Terminal/Elevation** (`F10`, `Alt+F10`, `Shift+F10`, `Ctrl+Alt+Shift+F10`, `Ctrl+Shift+Plus`) — Context-aware terminal launching with admin elevation and SYSTEM via ti.exe — in `terminal-anywhere.ahk` (F10 variants) and `AutoHotkey.ahk` (`Ctrl+Shift+Plus`)
 
 ## Running & Debugging
 
@@ -160,10 +158,8 @@ DllCall(NumGet(NumGet(ptr+0)+N*A_PtrSize), ..., "Ptr*", outVar)
 
 `ElementFromHandle` (vtable 6) and `ElementFromPoint` (vtable 7) return **different UIA elements** for the same window:
 
-- **`ElementFromHandle(hwnd)`**: Returns the UIA element associated with the window handle — typically the top-level XAML host. Use this as the root for `FindFirst`/`FindAll` searches. For WT scroll position, the WT scroll guard uses `ElementFromHandle(window_hwnd)` + `FindAll(ControlType=ScrollBar)` to find `ScrollBar.Vertical`, then reads its `RangeValuePattern` (10003) for Value/Min/Max.
+- **`ElementFromHandle(hwnd)`**: Returns the UIA element associated with the window handle — typically the top-level XAML host. Use this as the root for `FindFirst`/`FindAll` searches.
 - **`ElementFromPoint(x, y)`**: Returns the **deepest** hit-testable leaf element at screen coordinates. Walking up the tree from this leaf traverses the visual tree, which may NOT include host-level elements. Use for Extended Spy (identifying what's under cursor), not for pattern searches.
-
-**For WT scroll position**: Use `FindAll` with a `CreatePropertyCondition` (vtable 23) for ControlType=ScrollBar (50029) on the `ElementFromHandle` root. Iterate results, find `Name="Vertical"`, get `RangeValuePattern` (10003). Value is in line units; normalize with `(Value - Min) / (Max - Min) * 100`. The `mbutton-scroll.ahk` approach (ElementFromHandle → GetCurrentPattern for ScrollPattern 10004) does NOT work for WT's XAML ScrollBar — WT uses `RangeValuePattern`, not `ScrollPattern`.
 
 ### FileDelete/FileAppend with Object Properties
 
@@ -178,9 +174,14 @@ _logFile := WS.LogFile
 FileDelete, %_logFile%
 ```
 
-### Auto-Execute Section
+### Auto-Execute Section (CRITICAL)
 
 In AHK v1.1, the auto-execute section runs from line 1 until the first hotkey label. Code placed between hotkey subroutines is **unreachable dead code**. Global config must be in the auto-execute section.
+
+**#Include placement matters**: Since `#Include` directives are at the **bottom** of AutoHotkey.ahk (after all hotkeys), any auto-execute code at the top of included files is dead code. Only functions and hotkey labels in included files are reachable. For this reason:
+- `OnExit()` handlers must be registered in AutoHotkey.ahk's auto-execute section
+- Global initialization (like `G_UIA`) must be in AutoHotkey.ahk's auto-execute section
+- Module files should only contain functions and hotkey labels, not top-level executable code
 
 ### Configuration Arrays
 
@@ -209,12 +210,10 @@ No automated tests. Manual verification required:
 1. **MButton scroll**: Test in Windows Explorer (file lists + nav tree) and VS Code
 2. **Window spawning**: Open a new window — should appear on cursor's monitor
 3. **Window Spy**: Press `Win+W`, hover different windows, click tooltip to copy
-4. **Terminal hotkeys**: Test `F10` from Explorer (WSL UNC + Windows paths), Desktop, and applications
-5. **Force WSL**: `Alt+F10` from Windows path → opens WSL with `/mnt/c/...` directory
-6. **Claude hotkey**: `Ctrl+F10` from WSL path → launches Claude CLI in WSL
-7. **TI elevation**: `Ctrl+Alt+Shift+F10` → MsgBox with full wt.exe path → Terminal opens as SYSTEM
-8. **TI relaunch**: Focus any app → `Ctrl+Shift+Plus` → MsgBox with full exe path → relaunches as SYSTEM
-9. **Alt+Tab**: Press `Alt+Tab` — switcher should appear on cursor's monitor
+4. **Terminal hotkeys**: Test `F10` from Explorer, Desktop, and applications
+5. **TI elevation**: `Ctrl+Alt+Shift+F10` → Terminal opens as SYSTEM
+6. **TI relaunch**: Focus any app → `Ctrl+Shift+Plus` → relaunches as SYSTEM
+7. **Alt+Tab**: Press `Alt+Tab` — switcher should appear on cursor's monitor
 
 ## Key Helper Functions
 
@@ -228,11 +227,6 @@ No automated tests. Manual verification required:
 | `HasVal(arr, val)`                    | `AutoHotkey.ahk`        | Check if array contains value (partial match)                                      |
 | `ProcessExistsByCommandLine(cmdLine)` | `AutoHotkey.ahk`        | Find PID by command line match via WMI                                             |
 | `GetUIAProcessId(hwnd)`               | `AutoHotkey.ahk`        | UIA content process PID (resolves UWP/Electron host)                               |
-| `SG_ScrollInit()`                     | `scroll-guard.ahk`      | Initialize scroll guard globals and start 50ms timer                               |
-| `SG_GetScrollPattern()`               | `scroll-guard.ahk`      | Get RangeValuePattern for WT ScrollBar.Vertical via FindAll(ControlType=ScrollBar) |
-| `SG_GetScrollPct()`                   | `scroll-guard.ahk`      | WT vertical scroll percent (0-100) from Value/Min/Max, -1 if unavailable           |
-| `SG_SetScrollPct(pct)`                | `scroll-guard.ahk`      | Set WT scroll position from percentage using RangeValuePattern::SetValue           |
-| `SG_HoverCheck()`                     | `scroll-guard.ahk`      | Returns true when cursor hovers over unfocused WT window (#If condition)           |
 | `GetUIAElementInfo(x, y)`             | `extended-spy.ahk`      | UIA element properties at screen coordinates                                       |
 | `GetScrollPos(hwnd)`                  | `mbutton-scroll.ahk`    | Win32 vertical scroll position                                                     |
 | `HasWin32Scrollbar(hwnd)`             | `mbutton-scroll.ahk`    | Checks if Win32 scrollbar exists                                                   |
@@ -240,12 +234,8 @@ No automated tests. Manual verification required:
 | `CleanWindowText(text)`               | `extended-spy.ahk`      | Removes non-ASCII, dedupes long text                                               |
 | `FilterLongItems(text, maxLen)`       | `extended-spy.ahk`      | Removes items >maxLen from list                                                    |
 | `SortList(text)`                      | `extended-spy.ahk`      | Sorts comma-separated items alphabetically                                         |
-| `OpenTerminal(opts)`                  | `terminal-anywhere.ahk` | Open WT with WSL auto-detect, force-WSL, elevation, Claude                         |
+| `OpenTerminal(opts)`                  | `terminal-anywhere.ahk` | Open WT with elevation options                                                     |
 | `GetTerminalDir()`                    | `terminal-anywhere.ahk` | Working directory from active window context                                       |
-| `GetDefaultWSLDistro()`               | `terminal-anywhere.ahk` | Default WSL distro name from registry                                              |
-| `GetWTFirstProfile()`                 | `terminal-anywhere.ahk` | First non-hidden WT profile from settings.json                                     |
-| `ParseWSLPath(path)`                  | `terminal-anywhere.ahk` | UNC path → `{distro, dir}` or `""`                                                 |
-| `WinToWSLPath(path)`                  | `terminal-anywhere.ahk` | `C:\path` → `/mnt/c/path` for WSL                                                  |
 
 ## Conventions
 
