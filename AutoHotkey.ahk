@@ -20,9 +20,16 @@ SetTitleMatchMode, 2
 
 ; Disable hotkeys inside remote sessions (RDP, Hyper-V, VMWare)
 #If IsRemoteSession()
-  If !IsRemoteSession()
+  If !IsRemoteSession() {
+    ; Initialize UIA (used by mbutton-scroll and extended-spy)
+    global G_UIA
+    If (!G_UIA)
+      G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
+    OnExit("G_UIACleanup")
+    OnExit("MB_Cleanup")
     WS_Init() ; Init window spawning
     TerminalInit()
+  }
   Return
 #If
 
@@ -93,7 +100,7 @@ Return
 #IfWinActive
 
 #If WinActive("ahk_class CabinetWClass") || WinActive("ahk_class #32770")
-  ^e:: ; [ Ctrl+E ] -> Edit selected file in Sublime Text (Explorer or file dialog)
+  ^e:: ; [ Ctrl+E ] -> Edit selected file in Notepad
     _selected := _GetSelectedFile()
     If (_selected = "")
       Return
@@ -103,43 +110,27 @@ Return
       _ShowProperties(_selected)
       Return
     }
-    ; WSL paths: edit directly (permissions managed by Linux)
-    If (SubStr(_selected, 1, 6) = "\\wsl$" || SubStr(_selected, 1, 15) = "\\wsl.localhost") {
-      UserRun("notepad", _selected)
-      Return
-    }
-    ; Binary files: open with default handler (Open With dialog), not text editor
-    If (_IsBinaryFile(_selected)) {
-      Run "%_selected%"
-      Return
-    }
     ; Check write access and prompt if needed
     If (!_HasWriteAccess(_selected)) {
-      If (SubStr(_selected, 1, 2) = "\\") {
-        MsgBox, 0x31, Edit Network File, Write access is needed to edit this file. Note that network paths can slow down access changes. Do you wish to change permissions?`n`n%_selected%
-        IfMsgBox Cancel
-        {
-          UserRun("notepad", _selected)
-          Return
-        }
-      } Else {
-        MsgBox, 0x31, Edit Protected File, Full write access must be granted to edit this file.`n`n%_selected%
-        IfMsgBox Cancel
-          Return
-      }
+      MsgBox, 0x31, Edit Protected File, Grant write access to edit this file?`n`n%_selected%
+      IfMsgBox Cancel
+        Return
       _GrantWriteAccess(_selected)
+      SplitPath, _selected, _fileName
+      ToolTip, ACL granted: %_fileName%
+      SetTimer, RemoveToolTip, -2000
     }
     UserRun("notepad", _selected)
   Return
-  ^+e:: ; [ Ctrl+Shift+E ] -> Force edit in Sublime Text (skip binary check)
+  ^+e:: ; [ Ctrl+Shift+E ] -> Force edit in Notepad (grant access without prompt)
     _selected := _GetSelectedFile()
     If (_selected = "")
       Return
     If (!_HasWriteAccess(_selected)) {
-      ; MsgBox, 0x31, Edit Protected File, Full write access must be granted to edit this file.`n`n%_selected%
-      ; IfMsgBox Cancel
-      ;  Return
       _GrantWriteAccess(_selected)
+      SplitPath, _selected, _fileName
+      ToolTip, ACL granted: %_fileName%
+      SetTimer, RemoveToolTip, -2000
     }
     UserRun("notepad", _selected)
   Return
@@ -466,11 +457,6 @@ GetCursorMonitor() {
   Return 1
 }
 
-; => Start up G_UIA
-global G_UIA
-If (!G_UIA) {
-  G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
-}
 G_UIACleanup() {
   If (G_UIA) {
     ObjRelease(G_UIA)
@@ -710,17 +696,6 @@ _FixAdvertisedShortcut(lnkPath) {
     Return true
   }
   Return false
-}
-
-; ⇒ Check if file is binary using file.exe --mime-type (libmagic signature database)
-_IsBinaryFile(filePath) {
-  _fp := filePath
-  _outFile := A_Temp . "\ahk_mime_check.txt"
-  RunWait, %ComSpec% /c ""%A_ProgramFiles%\Git\usr\bin\file.exe" --mime-type "%_fp%"" > "%_outFile%" 2>&1,, Hide
-  FileRead, _output, %_outFile%
-  FileDelete, %_outFile%
-  ; file.exe outputs: "filepath: mime/type" — text files start with "text/"
-  Return !InStr(_output, ": text/")
 }
 
 ; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓

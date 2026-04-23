@@ -8,8 +8,8 @@
 ; Author: @rodboev
 ; Version: 3.0
 
-MB_Debug := 0 ; MButton scroll debug tooltips (0=off, 1=on)
-OnExit("MB_Cleanup")
+; MB_Debug: MButton scroll debug tooltips (0=off, 1=on) — set in *MButton::
+; OnExit("MB_Cleanup") — registered in AutoHotkey.ahk auto-execute section
 
 ; Get vertical scroll position for a control (cross-process safe)
 GetScrollPos(hwnd) {
@@ -24,6 +24,7 @@ HasWin32Scrollbar(hwnd) {
 
 ; -> [ MButton + drag ] -> Invoke smooth scrolling on any app; release to stop.
 *MButton::
+  global MB_Debug := 0  ; Debug tooltips (0=off, 1=on)
   global MB_X1, MB_Y1, MB_Win, MB_ClassName, MB_Triggered
   global MB_ScrollPattern := 0, MB_Element := 0, MB_Ctrl
   global MB_Disabled := 0, MB_DeferredDown := 0, MB_ViewSize := 10.0, MB_AccumPct := -1
@@ -110,7 +111,7 @@ Return
 
 MBScrollTimer:
   Critical ; Prevent MButton Up from interrupting mid-DllCall (race condition safety)
-  global MB_AccumPct, MB_Method, MB_ViewSize, MB_Ctrl, MB_FallbackChecked
+  global MB_Debug, MB_AccumPct, MB_Method, MB_ViewSize, MB_Ctrl, MB_FallbackChecked
   global MB_NativeProbe, MB_InitScrollPos, MB_InitScrollPct, MB_InitHCursor
   ; Safety check: if MButton released, stop immediately
   If !GetKeyState("MButton", "P") {
