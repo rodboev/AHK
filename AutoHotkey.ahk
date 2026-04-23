@@ -23,7 +23,6 @@ SetTitleMatchMode, 2
   If !IsRemoteSession()
     WS_Init() ; Init window spawning
     TerminalInit()
-    SG_ScrollInit()
   Return
 #If
 
@@ -818,7 +817,9 @@ UserRun(Executable, Args*) {
                 return true
             }
 
-            ; Fallback: Explorer shell
+            ; Fallback: Explorer shell (may inherit elevation)
+            ToolTip, UserRun: PS + elevated + ShellExecute (no RFP)
+            SetTimer, RemoveToolTip, -3000
             if !ShellRunUserOrFail("cmd.exe", "/C " Chr(34) psPrefix psExeQ " " psArg Chr(34), "", "open", 0)
                 return false
 
@@ -839,6 +840,8 @@ UserRun(Executable, Args*) {
             return true
         }
 
+        ToolTip, UserRun: PS + non-elevated + ShellExecute (no RFP)
+        SetTimer, RemoveToolTip, -3000
         if !ShellRunUserOrFail("cmd.exe", "/C " Chr(34) psPrefix psExeQ " " psArg Chr(34), "", "open", 0)
             return false
 
@@ -881,6 +884,8 @@ UserRun(Executable, Args*) {
                 return true
             }
 
+            ToolTip, UserRun: Direct + elevated + PS + ShellExecute (no RFP)
+            SetTimer, RemoveToolTip, -3000
             if !ShellRunUserOrFail("cmd.exe", "/C " Chr(34) psPrefix psExeQ " " psArg Chr(34), "", "open", 0)
                 return false
 
@@ -924,6 +929,8 @@ UserRun(Executable, Args*) {
         return true
     }
 
+    ToolTip, UserRun: Direct + non-elevated + ShellExecute (no RFP)
+    SetTimer, RemoveToolTip, -3000
     if !ShellRunUserOrFail(Executable, LTrim(argStr), "", "open", 1)
         return false
 
@@ -971,7 +978,6 @@ RemoveToolTip:
 Return
 
 ; === Module Includes ===
-#Include %A_ScriptDir%\scroll-guard.ahk
 #Include %A_ScriptDir%\terminal-anywhere.ahk
 #Include %A_ScriptDir%\extended-spy.ahk
 #Include %A_ScriptDir%\mbutton-scroll.ahk
