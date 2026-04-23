@@ -16,6 +16,7 @@ WS_Init() {
   WS.LogFile := A_Temp . "\WS_Debug.log"
   WS.LastForegroundHwnd := 0
   WS.OverlayTick := 0              ; A_TickCount when non-movable overlay activated
+  WS.ZOrderFallbackTick := 0       ; A_TickCount when foreground destroyed (z-order fallback imminent)
   WS.RecentExes := {}              ; Tier 1: exe name -> A_TickCount (brief process detected)
   WS.RecentCreated := {}           ; Tier 1: hwnd -> {exe, tick} (window lifespan tracking)
   WS.Pending := {}                 ; Deferred windows: hwnd -> {mon, tick}
@@ -80,10 +81,12 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
 
   ; --- Destruction: clean up tracking, detect brief processes (Tier 1) ---
   if (isDestroyed) {
-    ; Clear overlay tick when foreground window closes — prevents Tier 2 from
-    ; triggering on the subsequent Z-order fallback activation.
-    if (lParam == WS.LastForegroundHwnd)
+    ; Clear intent signals when foreground window closes — prevents false positives
+    ; on the subsequent Z-order fallback activation.
+    if (lParam == WS.LastForegroundHwnd) {
       WS.OverlayTick := 0
+      WS.ZOrderFallbackTick := A_TickCount
+    }
     ; Brief-process detection: if a recently-created window dies quickly,
     ; its exe is a single-instance app that just bounced a re-launch.
     if (WS.RecentCreated.HasKey(lParam + 0)) {
@@ -134,6 +137,15 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
     }
 
     ; --- Positive intent detection (default: no move) ---
+    ; Z-order fallback guard: if foreground was just destroyed, this activation
+    ; is Windows selecting the next window in z-order, not user intent.
+    if (WS.ZOrderFallbackTick && (A_TickCount - WS.ZOrderFallbackTick) < 200) {
+      WS.ZOrderFallbackTick := 0
+      if (WS.Debug)
+        WS_Log("SKIP (z-order-fallback): hwnd=" . lParam)
+      return
+    }
+    WS.ZOrderFallbackTick := 0
     prevHwnd := WS.LastForegroundHwnd
     WS.LastForegroundHwnd := lParam
     ; Clear overlay tick if previous window was minimized (Z-order fallback, not user launch)

@@ -398,7 +398,9 @@ When a single-instance Win32 app is re-launched, a new process briefly exists (1
 UWP apps don't create a new process on re-launch (shell uses `IApplicationActivationManager`).
 If overlay (Start menu) was recently visible (`WS.OverlayTick` < 2s) AND a **different** window activates (`lParam != prevHwnd`) → **move**.
 
-**Z-order fallback protection**: `WS.OverlayTick` is cleared when the foreground window is destroyed (prevents false Tier 2 on close-fallback) and when the previous window was minimized (prevents false Tier 2 on minimize-fallback).
+**Z-order fallback protection**: When the foreground window is destroyed, `WS.ZOrderFallbackTick` is set and all intent detection (Tier 1 and Tier 2) is skipped for the next 200ms — the subsequent activation is Windows selecting the next z-order window, not user intent. Additionally, `WS.OverlayTick` is cleared on foreground destruction and when the previous window was minimized (belt-and-suspenders for Tier 2).
+
+*Note: Z-order fallback protection was added based on observed false positives where closing a window caused the bottom-most WT to move. If similar issues recur, enable `WS.Debug := 1` and check `%TEMP%\WS_Debug.log` for the event sequence.*
 
 **Retained guards** (not intent-based):
 
@@ -454,6 +456,7 @@ If overlay (Start menu) was recently visible (`WS.OverlayTick` < 2s) AND a **dif
 | `WS.RecentExes`         | exe name → `A_TickCount` — brief-process signal for Tier 1        |
 | `WS.LastForegroundHwnd` | Last movable foreground hwnd (Tier 2 overlay detection)           |
 | `WS.OverlayTick`        | `A_TickCount` when overlay/infrastructure detected (Tier 2)       |
+| `WS.ZOrderFallbackTick` | `A_TickCount` when foreground destroyed (skips intent detection)  |
 | `WS.EventHookShow`      | Handle from `SetWinEventHook` (EVENT_OBJECT_SHOW)                 |
 | `WS.EventHookUncloak`   | Handle from `SetWinEventHook` (EVENT_OBJECT_UNCLOAKED)            |
 | `WS.EventHookCreate`    | Handle from `SetWinEventHook` (EVENT_OBJECT_CREATE)               |
