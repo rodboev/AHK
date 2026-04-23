@@ -855,13 +855,11 @@ UserRun(Executable, Args*) {
             return true
         }
 
-        ; AHK is not elevated - use PowerShell Start-Process -Verb RunAs (UAC expected)
-        ; Pattern from working git history: double-quote outer -Command, single-quote ArgumentList string
-        _safeExe2 := StrReplace(Executable, "'", "''")
-        _safeArgs2 := StrReplace(argStr, "'", "''")
-        full := "powershell -NoProfile -Command ""Start-Process '" _safeExe2 "' -ArgumentList '" _safeArgs2 "' -Verb RunAs"""
+        ; AHK is not elevated - use AHK's *RunAs verb (simpler than PowerShell Start-Process)
+        _safeExeD := StrReplace(Executable, """", """""")
+        full := "*RunAs """ _safeExeD """" argStr
 
-        FileAppend, % A_Now . " | UserRun elevated (UAC): " . full . "`n", %_logFile%
+        FileAppend, % A_Now . " | UserRun elevated (UAC) full: " . full . "`n", %_logFile%
         Run, %full%, , UseErrorLevel
         if (ErrorLevel) {
             MsgBox, 16, UserRun failed, % "Run failed.`nErrorLevel: " ErrorLevel "`n`nCommand:`n" full
@@ -873,8 +871,6 @@ UserRun(Executable, Args*) {
     ; Direct non-elevated path
     _safeExeD := StrReplace(Executable, """", """""")
     full := ""
-
-    ; DEBUG: Log direct path
     _logFile := A_Temp . "\TA_Debug.log"
     FileAppend, % A_Now . " | UserRun direct path: exe=" . Executable . " argStr=" . argStr . "`n", %_logFile%
 
