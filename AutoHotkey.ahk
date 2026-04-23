@@ -839,14 +839,10 @@ UserRun(Executable, Args*) {
     }
 
     if (elevate) {
-        ; DEBUG log
-        _logFile := A_Temp . "\TA_Debug.log"
-
-        ; If AHK is already elevated, run directly - no PowerShell needed
+        ; If AHK is already elevated, run directly
         if (IsProcessElevated(DllCall("GetCurrentProcessId"))) {
             _safeExeD := StrReplace(Executable, """", """""")
             full := """" _safeExeD """" argStr
-            FileAppend, % A_Now . " | UserRun elevated (AHK admin): " . full . "`n", %_logFile%
             Run, %full%, , UseErrorLevel
             if (ErrorLevel) {
                 MsgBox, 16, UserRun failed, % "Run failed.`nErrorLevel: " ErrorLevel "`n`nCommand:`n" full
@@ -858,8 +854,6 @@ UserRun(Executable, Args*) {
         ; AHK is not elevated - use AHK's *RunAs verb (simpler than PowerShell Start-Process)
         _safeExeD := StrReplace(Executable, """", """""")
         full := "*RunAs """ _safeExeD """" argStr
-
-        FileAppend, % A_Now . " | UserRun elevated (UAC) full: " . full . "`n", %_logFile%
         Run, %full%, , UseErrorLevel
         if (ErrorLevel) {
             MsgBox, 16, UserRun failed, % "Run failed.`nErrorLevel: " ErrorLevel "`n`nCommand:`n" full
@@ -871,14 +865,10 @@ UserRun(Executable, Args*) {
     ; Direct non-elevated path
     _safeExeD := StrReplace(Executable, """", """""")
     full := ""
-    _logFile := A_Temp . "\TA_Debug.log"
-    FileAppend, % A_Now . " | UserRun direct path: exe=" . Executable . " argStr=" . argStr . "`n", %_logFile%
 
     if (rfp != "") {
-        ; Build inner command for cmd.exe /C - needs to be a single string
         innerCmd := _safeExeD . argStr
         full := """" rfp """ explorer.exe conhost.exe --headless cmd.exe /C " innerCmd
-        FileAppend, % A_Now . " | UserRun direct full: " . full . "`n", %_logFile%
         Run, %full%, , UseErrorLevel Hide
         if (ErrorLevel) {
             MsgBox, 16, UserRun failed, % "Run failed.`nErrorLevel: " ErrorLevel "`n`nCommand:`n" full

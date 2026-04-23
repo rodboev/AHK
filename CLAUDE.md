@@ -122,31 +122,28 @@ Use `UserRun(Executable, Args*)` for all process execution—handles elevation, 
 
 **Shell operators**: `UserRun` is a single-executable runner. Shell operators like `&&`, `||`, `|` are not interpreted. To chain commands, route through `cmd`: `UserRun("cmd", "/c", "command1 && command2")`.
 
-**PowerShell Start-Process Quoting (CRITICAL)**: When using `Start-Process -ArgumentList -Verb RunAs`, multiple parsing layers mangle arguments:
+**Elevation Quoting (CRITICAL)**: Use AHK's `*RunAs` verb, NOT PowerShell `Start-Process -Verb RunAs`.
 
-1. **Windows command-line parsing**: Only `"..."` groups arguments. Single quotes `'...'` are literal characters with NO grouping effect.
-2. **PowerShell -ArgumentList**: Whether array or string, it joins/passes to `CreateProcess()` as a single string WITHOUT adding quotes. Array `@('-p', 'Command Prompt')` becomes `-p Command Prompt` (spaces unprotected).
-3. **-Verb RunAs re-parsing**: UAC elevation creates a new process that RE-PARSES the command line, potentially mangling quotes again.
+PowerShell's `Start-Process -ArgumentList` works as designed but requires understanding Windows process creation:
+- `-ArgumentList` joins arrays into a **single space-separated string** (by design, per MS docs)
+- Windows `CreateProcess` API receives this string; the **target process** parses it using `CommandLineToArgvW` rules
+- PowerShell's quoting rules don't apply — you must manually embed double quotes for args with spaces: `'"-p" "Command Prompt"'`
+- Documentation gap (GitHub #7701): Many assume array syntax preserves argument boundaries like Unix — it doesn't
 
-**Known issues** (PowerShell GitHub #5576, #7701, #8898):
-- `-ArgumentList` does NOT preserve argument boundaries or quoting
-- `-Verb RunAs` adds an extra parsing layer that breaks quoted arguments
-- There is NO reliable way to pass arguments with spaces through `Start-Process -Verb RunAs` using standard quoting
+**Why AHK's *RunAs is simpler**: AHK's `Run` passes the command string directly to `ShellExecuteEx`. Standard double-quote escaping works without needing to account for PowerShell's string-joining behavior.
 
-**Workarounds**:
+**Working pattern in UserRun**:
 ```autohotkey
-; Option 1: Use AHK's Run with runas verb (triggers UAC, simpler quoting)
-Run, *RunAs "wt" "-p" "Command Prompt" "-d" "C:\path"
-
-; Option 2: If AHK is already admin, run directly (no Start-Process needed)
-Run, "wt" "-p" "Command Prompt" "-d" "C:\path"
-
-; Option 3: Use temp .ps1 file to bypass command-line parsing entirely
-FileAppend, Start-Process 'wt' -ArgumentList '-p', 'Command Prompt', '-d', 'C:\path', %tempFile%
-Run, powershell -ExecutionPolicy Bypass -File "%tempFile%"
+if (elevate) {
+    if (IsProcessElevated(DllCall("GetCurrentProcessId"))) {
+        ; AHK already admin → run directly
+        Run, "exe" "-flag" "arg with spaces"
+    } else {
+        ; AHK not admin → *RunAs triggers UAC, quotes preserved
+        Run, *RunAs "exe" "-flag" "arg with spaces"
+    }
+}
 ```
-
-**Status**: The non-elevated-AHK → elevated-process path via PowerShell Start-Process remains problematic. The elevated-AHK path works by running directly.
 
 **SYSTEM PATH resolution (CRITICAL)**: When `ti.exe` runs a command as `NT AUTHORITY\SYSTEM`, the SYSTEM account's PATH is minimal (`%SystemRoot%\system32` and a few others) — user-installed programs like Windows Terminal are not included. Any executable passed to `ti.exe` must be resolved to its **full absolute path** before launching. Use `FindInPath()` (which runs in AHK's admin context with the user's full PATH) or `GetExePath()` + regex replacement on WMI command lines to resolve short names like `wt` to their full paths (e.g., `C:\Program Files\WindowsTerminalPreview\wt.exe`).
 
