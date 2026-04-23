@@ -122,7 +122,19 @@ Use `UserRun(Executable, Args*)` for all process execution—handles elevation, 
 
 **Shell operators**: `UserRun` is a single-executable runner. Shell operators like `&&`, `||`, `|` are not interpreted. To chain commands, route through `cmd`: `UserRun("cmd", "/c", "command1 && command2")`.
 
-**Elevated quoting (CRITICAL)**: The PowerShell elevated path wraps `psCmd` inside `-ArgumentList '...'` (single-quoted). Since `psCmd` itself contains single-quoted arguments, the inner quotes MUST be escaped (`'` → `''`) before embedding. Without this, inner `'wt'` terminates the outer `-ArgumentList` string early, silently breaking the command.
+**PowerShell Quoting Chain (CRITICAL)**: When running `AHK Run → PowerShell -Command → Start-Process`, three parsers handle the string. The failure mode is always the same: **spaces in arguments get split**.
+
+**Universal rule**: Single-quote the outer `-Command` value. Double quotes break because Windows command-line parsing splits on spaces inside `"..."` when nested quotes are involved.
+
+```autohotkey
+; ✅ WORKS - Single-quoted outer wrapper preserves spaces
+psArg := "-Command 'Start-Process ''wt'' -ArgumentList @(''-p'', ''Command Prompt'') -Verb RunAs'"
+
+; ❌ BREAKS - Double-quoted outer wrapper, "Command Prompt" splits into "Command" + "Prompt"  
+psArg := "-Command ""Start-Process 'wt' -ArgumentList @('-p', 'Command Prompt') -Verb RunAs"""
+```
+
+**Edge case**: If an argument itself contains a literal `'` (e.g., `O'Brien`), escape it as `''` before wrapping — that's PowerShell's escape for `'` inside `'...'`. Most arguments don't need this.
 
 **SYSTEM PATH resolution (CRITICAL)**: When `ti.exe` runs a command as `NT AUTHORITY\SYSTEM`, the SYSTEM account's PATH is minimal (`%SystemRoot%\system32` and a few others) — user-installed programs like Windows Terminal are not included. Any executable passed to `ti.exe` must be resolved to its **full absolute path** before launching. Use `FindInPath()` (which runs in AHK's admin context with the user's full PATH) or `GetExePath()` + regex replacement on WMI command lines to resolve short names like `wt` to their full paths (e.g., `C:\Program Files\WindowsTerminalPreview\wt.exe`).
 

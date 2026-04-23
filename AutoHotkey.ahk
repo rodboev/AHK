@@ -724,11 +724,11 @@ UserRun(Executable, Args*) {
         Args.RemoveAt(1)
     }
 
-    ; Check if any arg needs PowerShell for env var expansion or special handling
+    ; Check if any arg needs PowerShell for env var expansion
     needsPowerShell := false
     Loop % Args.Length() {
         arg := Args[A_Index]
-        if (RegExMatch(arg, "%(.*?)%") || InStr(arg, "$env:") || RegExMatch(arg, "(?i)^\s*-d\s")) {
+        if (RegExMatch(arg, "%(.*?)%") || InStr(arg, "$env:")) {
             needsPowerShell := true
             break
         }
@@ -805,8 +805,13 @@ UserRun(Executable, Args*) {
         psExeQ := """" psPath """"
         psArg := "-NoProfile -Command " Chr(34) psCmd Chr(34)
 
+        ; DEBUG: Log the constructed command
+        _logFile := A_Temp . "\TA_Debug.log"
+        FileAppend, % A_Now . " | UserRun PS path: psCmd=" . psCmd . "`n", %_logFile%
+
         if (rfp != "") {
             full := """" rfp """ explorer.exe conhost.exe --headless cmd.exe /C """ psPrefix psExeQ " " psArg """"
+            FileAppend, % A_Now . " | UserRun full cmd: " . full . "`n", %_logFile%
             Run, %full%, , UseErrorLevel Hide
             if (ErrorLevel) {
                 MsgBox, 16, UserRun failed, % "Run failed.`nErrorLevel: " ErrorLevel "`n`nCommand:`n" full
@@ -834,55 +839,30 @@ UserRun(Executable, Args*) {
     }
 
     if (elevate) {
-        ; Prefer PowerShell Start-Process when available
-        psPath := FindInPath("powershell.exe")
-        if (psPath = "")
-            psPath := FindInPath("pwsh.exe")
+        ; DEBUG log
+        _logFile := A_Temp . "\TA_Debug.log"
 
-        if (psPath != "") {
-            psPrefix := ""
-            if RegExMatch(psPath, "(?i)\\pwsh\.exe$")
-                psPrefix := "set DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 && "
-
-            _safeExe2 := StrReplace(Executable, "'", "''")
-            _safeArgs2 := StrReplace(argStr, "'", "''")
-            psExeQ := """" psPath """"
-            psArg := "-NoProfile -Command ""Start-Process '" _safeExe2 "' -ArgumentList '" _safeArgs2 "' -Verb RunAs -WindowStyle Hidden"""
-
-            if (rfp != "") {
-                full := """" rfp """ explorer.exe conhost.exe --headless cmd.exe /C """ psPrefix psExeQ " " psArg """"
-                Run, %full%, , UseErrorLevel Hide
-                if (ErrorLevel) {
-                    MsgBox, 16, UserRun failed, % "Run failed.`nErrorLevel: " ErrorLevel "`n`nCommand:`n" full
-                    return false
-                }
-                return true
-            }
-
-            ToolTip, UserRun: Direct + elevated + PS + ShellExecute (no RFP)
-            SetTimer, RemoveToolTip, -3000
-            if !ShellRunUserOrFail("cmd.exe", "/C " Chr(34) psPrefix psExeQ " " psArg Chr(34), "", "open", 0)
+        ; If AHK is already elevated, run directly - no PowerShell needed
+        if (IsProcessElevated(DllCall("GetCurrentProcessId"))) {
+            _safeExeD := StrReplace(Executable, """", """""")
+            full := """" _safeExeD """" argStr
+            FileAppend, % A_Now . " | UserRun elevated (AHK admin): " . full . "`n", %_logFile%
+            Run, %full%, , UseErrorLevel
+            if (ErrorLevel) {
+                MsgBox, 16, UserRun failed, % "Run failed.`nErrorLevel: " ErrorLevel "`n`nCommand:`n" full
                 return false
-
+            }
             return true
         }
 
-        ; Fallback: elevate.exe
-        elevatePath := FindInPath("elevate.exe")
-        if (elevatePath = "") {
-            MsgBox, 16, UserRun failed, Neither PowerShell nor elevate.exe was found for elevated launch.
-            return false
-        }
+        ; AHK is not elevated - use PowerShell Start-Process -Verb RunAs (UAC expected)
+        ; Pattern from working git history: double-quote outer -Command, single-quote ArgumentList string
+        _safeExe2 := StrReplace(Executable, "'", "''")
+        _safeArgs2 := StrReplace(argStr, "'", "''")
+        full := "powershell -NoProfile -Command ""Start-Process '" _safeExe2 "' -ArgumentList '" _safeArgs2 "' -Verb RunAs"""
 
-        _safeElevate := StrReplace(elevatePath, """", """""")
-        _safeExeD := StrReplace(Executable, """", """""")
-        full := """" _safeElevate """ """ _safeExeD """" argStr
-
-        if (rfp != "") {
-            full := """" rfp """ explorer.exe " full
-        }
-
-        Run, %full%, , UseErrorLevel Hide
+        FileAppend, % A_Now . " | UserRun elevated (UAC): " . full . "`n", %_logFile%
+        Run, %full%, , UseErrorLevel
         if (ErrorLevel) {
             MsgBox, 16, UserRun failed, % "Run failed.`nErrorLevel: " ErrorLevel "`n`nCommand:`n" full
             return false
@@ -894,8 +874,15 @@ UserRun(Executable, Args*) {
     _safeExeD := StrReplace(Executable, """", """""")
     full := ""
 
+    ; DEBUG: Log direct path
+    _logFile := A_Temp . "\TA_Debug.log"
+    FileAppend, % A_Now . " | UserRun direct path: exe=" . Executable . " argStr=" . argStr . "`n", %_logFile%
+
     if (rfp != "") {
-        full := """" rfp """ explorer.exe """ _safeExeD """" argStr
+        ; Build inner command for cmd.exe /C - needs to be a single string
+        innerCmd := _safeExeD . argStr
+        full := """" rfp """ explorer.exe conhost.exe --headless cmd.exe /C " innerCmd
+        FileAppend, % A_Now . " | UserRun direct full: " . full . "`n", %_logFile%
         Run, %full%, , UseErrorLevel Hide
         if (ErrorLevel) {
             MsgBox, 16, UserRun failed, % "Run failed.`nErrorLevel: " ErrorLevel "`n`nCommand:`n" full

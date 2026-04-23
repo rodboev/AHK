@@ -25,7 +25,7 @@ F10::OpenTerminal({elevate: false})
   IfMsgBox No
     Return
   If (TA.WTProfile)
-    UserRun("elevate", "ti", _wtPath, "-p", TA.WTProfile, "-d " . _dir)
+    UserRun("elevate", "ti", _wtPath, "-p " . TA.WTProfile, "-d " . _dir)
   Else
     UserRun("elevate", "ti", _wtPath, "-d " . _dir)
 Return
@@ -34,7 +34,11 @@ Return
 TerminalInit() {
   global TA
   TA := {}
+  ; Clear debug log on init
+  _logFile := A_Temp . "\TA_Debug.log"
+  FileDelete, %_logFile%
   TA.WTProfile := GetWTFirstProfile()
+  TA_Log("TerminalInit: WTProfile=" . TA.WTProfile)
 }
 
 ; ⇒ Open Windows Terminal with optional elevation
@@ -43,27 +47,47 @@ OpenTerminal(opts) {
   ;   elevate  true  = run as Administrator (UAC prompt)
 
   global TA
+  _dir := GetTerminalDir()
   _args := []
   If (opts.elevate)
     _args.Push("elevate")
   _args.Push("wt")
-  If (TA.WTProfile)
-    _args.Push("-p", TA.WTProfile)
-  _args.Push("-d " . GetTerminalDir())
+  If (TA.WTProfile) {
+    _args.Push("-p")
+    _args.Push(TA.WTProfile)
+  }
+  _args.Push("-d")
+  _args.Push(_dir)
+
+  TA_Log("OpenTerminal: elevate=" . (opts.elevate ? "true" : "false") . " dir=" . _dir)
+
   UserRun(_args*)
 }
 
 ; ⇒ Resolve working directory from active window context
 GetTerminalDir() {
   WinGetClass, _class, A
+  TA_Log("GetTerminalDir: class=" . _class)
   If (_class = "Progman")
     Return A_Desktop
   If (_class = "CabinetWClass") {
     _path := GetExplorerPath()
-    Return _path ? _path : A_MyDocuments
+    TA_Log("GetExplorerPath returned: " . _path)
+    _path := _path ? _path : A_MyDocuments
+  } Else {
+    _exe := GetExePath()
+    _path := _exe.dir ? _exe.dir : A_MyDocuments
   }
-  _exe := GetExePath()
-  Return _exe.dir ? _exe.dir : A_MyDocuments
+  ; For root paths like C:\, add trailing dot to avoid \" escape issue when quoted
+  If (RegExMatch(_path, "^[A-Za-z]:\\$"))
+    _path .= "."
+  Return _path
+}
+
+; ⇒ Debug logging to temp file
+TA_Log(msg) {
+  static logFile := A_Temp . "\TA_Debug.log"
+  FileAppend, % A_Now . " | " . msg . "`n", %logFile%
 }
 
 ; ⇒ Read first non-hidden profile name from Windows Terminal settings.json
