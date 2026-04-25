@@ -39,7 +39,50 @@ The `community-scripts/` directory contains reference libraries (loosely coupled
 1. **Explorer Smooth Scroll** (`MButton + drag`) — 4-method system: UIA, WHEEL, WHEEL_CTRL, VSCROLL — in `mbutton-scroll.ahk`
 2. **Window Spawning** — Shell hook + WinEvent hooks move new windows to cursor's monitor — in `window-spawning.ahk`
 3. **Extended Window Spy** (`Win+W`) — Persistent tooltip with window/control info — in `extended-spy.ahk`
-4. **Terminal/Elevation** (`F10`, `Alt+F10`, `Shift+F10`, `Ctrl+Alt+Shift+F10`, `Ctrl+Shift+Plus`) — Context-aware terminal launching with admin elevation and SYSTEM via ti.exe — in `terminal-anywhere.ahk` (F10 variants) and `AutoHotkey.ahk` (`Ctrl+Shift+Plus`)
+4. **Terminal/Elevation** (`F10`, `Shift+F10`, `Ctrl+Alt+Shift+F10`, `Ctrl+Shift+Plus`) — Context-aware terminal launching with admin elevation and SYSTEM via ti.exe — in `terminal-anywhere.ahk` (F10 variants) and `AutoHotkey.ahk` (`Ctrl+Shift+Plus`)
+
+## Design Rationale
+
+### Why Raw COM Vtable Calls (No Wrapper Library)
+
+This codebase calls COM interfaces via direct `DllCall` to vtable offsets rather than using wrapper libraries like Descolada's UIA-v2:
+
+1. **Performance** — MButton scroll runs on a 10ms timer; wrapper overhead adds latency
+2. **Minimal dependencies** — No external files to manage or version
+3. **Transparency** — The actual Win32/COM calls are visible in the code, not hidden behind abstractions
+
+The tradeoff is maintainability: vtable offsets are magic numbers. Mitigate by documenting offsets inline (see "UIA Vtable Offsets" section below) with links to the source.
+
+### Why UIA for Explorer Scrolling
+
+Windows Explorer uses DirectUI (an internal Microsoft UI framework), not standard Win32 controls. This means:
+- `WM_MOUSEWHEEL` sent to the window doesn't reach the list view
+- `WM_VSCROLL` works but only in line increments (jerky)
+- `GetScrollPos`/`SetScrollPos` don't work (no Win32 scrollbar)
+
+UIA's `IUIAutomationScrollPattern::SetScrollPercent` talks directly to the DirectUI layer, enabling fractional-percent smooth scrolling.
+
+### Why the Scroll Method Fallback Chain
+
+Different apps expose scrolling differently:
+
+| App Type | UIA ScrollPattern | WM_MOUSEWHEEL | WM_VSCROLL |
+|----------|-------------------|---------------|------------|
+| Explorer (DirectUI) | Yes | No | Jerky |
+| VS Code (Electron) | No | Yes (sub-120 delta) | No |
+| Classic Win32 | Sometimes | Usually | Yes |
+| Tree views | No | No | Yes |
+
+The fallback chain (UIA → WHEEL → WHEEL_CTRL → VSCROLL) probes each method and uses the first that works, determined empirically per control at runtime.
+
+### Why Window Spawning Has Intent Detection
+
+Moving ALL activated windows to cursor's monitor would be wrong — activating an existing window (Alt+Tab, taskbar click) shouldn't relocate it. The intent detection system distinguishes:
+
+- **New windows** (shell hook CREATED) — Always move
+- **Re-launched single-instance apps** (brief-process heuristic) — Move (user explicitly launched)
+- **Overlay dismissal activations** (Start menu → app) — Move (user explicitly launched)
+- **Z-order fallback activations** (close window → next window activates) — Don't move (system behavior, not user intent)
 
 ## Running & Debugging
 
@@ -116,36 +159,16 @@ ObjRelease(_el)
 
 ### UserRun Helper
 
-Use `UserRun(Executable, Args*)` for all process execution—handles elevation, env var expansion, and PowerShell argument parsing consistently.
+Use `UserRun(Executable, Args*)` for all process execution — handles elevation, env var expansion, and argument quoting.
 
-**Argument quoting**: All arguments are unconditionally quoted — single-quoted in PowerShell paths (with `'` escaped as `''`), double-quoted in direct execution paths. The executable path is also quoted in the direct execution branch. This prevents command injection via metacharacters (`&`, `;`, `$`, `|`) regardless of whether the argument contains spaces.
+**Key behaviors**:
+- All arguments are unconditionally quoted (single-quoted in PowerShell, double-quoted in direct paths)
+- Shell operators (`&&`, `|`) not interpreted — use `UserRun("cmd", "/c", "cmd1 && cmd2")` to chain
+- For elevation, uses AHK's `*RunAs` verb, NOT PowerShell `Start-Process -Verb RunAs`
 
-**Shell operators**: `UserRun` is a single-executable runner. Shell operators like `&&`, `||`, `|` are not interpreted. To chain commands, route through `cmd`: `UserRun("cmd", "/c", "command1 && command2")`.
+**Why not PowerShell elevation**: `Start-Process -ArgumentList` joins arrays into a single space-separated string (by design). The target process parses via `CommandLineToArgvW`, not PowerShell rules. This causes quoting bugs. AHK's `*RunAs` passes the command string directly to `ShellExecuteEx`, avoiding this.
 
-**Elevation Quoting (CRITICAL)**: Use AHK's `*RunAs` verb, NOT PowerShell `Start-Process -Verb RunAs`.
-
-PowerShell's `Start-Process -ArgumentList` works as designed but requires understanding Windows process creation:
-- `-ArgumentList` joins arrays into a **single space-separated string** (by design, per MS docs)
-- Windows `CreateProcess` API receives this string; the **target process** parses it using `CommandLineToArgvW` rules
-- PowerShell's quoting rules don't apply — you must manually embed double quotes for args with spaces: `'"-p" "Command Prompt"'`
-- Documentation gap (GitHub #7701): Many assume array syntax preserves argument boundaries like Unix — it doesn't
-
-**Why AHK's *RunAs is simpler**: AHK's `Run` passes the command string directly to `ShellExecuteEx`. Standard double-quote escaping works without needing to account for PowerShell's string-joining behavior.
-
-**Working pattern in UserRun**:
-```autohotkey
-if (elevate) {
-    if (IsProcessElevated(DllCall("GetCurrentProcessId"))) {
-        ; AHK already admin → run directly
-        Run, "exe" "-flag" "arg with spaces"
-    } else {
-        ; AHK not admin → *RunAs triggers UAC, quotes preserved
-        Run, *RunAs "exe" "-flag" "arg with spaces"
-    }
-}
-```
-
-**SYSTEM PATH resolution (CRITICAL)**: When `ti.exe` runs a command as `NT AUTHORITY\SYSTEM`, the SYSTEM account's PATH is minimal (`%SystemRoot%\system32` and a few others) — user-installed programs like Windows Terminal are not included. Any executable passed to `ti.exe` must be resolved to its **full absolute path** before launching. Use `FindInPath()` (which runs in AHK's admin context with the user's full PATH) or `GetExePath()` + regex replacement on WMI command lines to resolve short names like `wt` to their full paths (e.g., `C:\Program Files\WindowsTerminalPreview\wt.exe`).
+**SYSTEM PATH resolution**: `ti.exe` runs as `NT AUTHORITY\SYSTEM` whose PATH lacks user-installed programs. Resolve exe names to full paths via `FindInPath()` before passing to `ti.exe`.
 
 ### Message Synthesis
 
@@ -203,6 +226,26 @@ In AHK v1.1, the auto-execute section runs from line 1 until the first hotkey la
 - `OnExit()` handlers for startup-critical cleanup must be registered in AutoHotkey.ahk's auto-execute section
 - Module files should only contain functions and hotkey labels, not top-level executable code
 - Lazy initialization (like `G_UIA` in mbutton-scroll.ahk) can register `OnExit()` on first use inside a hotkey
+
+### Remote Session Guard Pattern
+
+The auto-execute section uses a dual-purpose `#If` pattern:
+
+```autohotkey
+#If IsRemoteSession()
+  If !IsRemoteSession() {
+    ; ... initialization code ...
+  }
+  Return
+#If
+```
+
+**What this does**:
+1. **`#If IsRemoteSession()`** — Context directive that disables all subsequent hotkeys when inside RDP/Hyper-V/VMware (prevents conflicts with host machine hotkeys)
+2. **`If !IsRemoteSession()`** — Runtime guard that skips initialization when in a remote session (the auto-execute code runs regardless of `#If` context)
+3. **`#If`** (bare) — Clears the context so hotkeys after this point are always active
+
+**Why both**: The `#If` directive only affects hotkey activation, not auto-execute flow. The inner `If` prevents initializing hooks and timers that would be useless (and potentially problematic) in remote sessions.
 
 ### Configuration Arrays
 
@@ -280,18 +323,48 @@ DllCall("SetWindowLong", ..., "Ptr", style | 0x80000)
 
 - **Mixed subsystems**: Don't put UI Automation and Shell constants in the same documentation block
 - **Orphaned constants**: Don't define constants at file top if they're only used in one function — document at usage site
-- **Vtable-only docs**: If documenting vtable offsets, also document the interface they belong to and where the offset list lives (e.g., `.claude/ui-automation.md`)
+- **Vtable-only docs**: If documenting vtable offsets, also document the interface they belong to (see "UIA Vtable Offsets" section)
 - **Magic without provenance**: Never introduce a GUID or hex value without noting which Windows API it comes from
 
-### Reference Files
+### UIA Vtable Offsets (Used in Code)
 
-For subsystems with many constants (pattern IDs, property IDs, vtable offsets), use a dedicated reference file rather than bloating inline comments:
+UI Automation COM interfaces are called via `DllCall` to vtable offsets. The offset number is the method's position in the interface's vtable (after IUnknown's 3 methods).
 
-| File | Contents |
-|------|----------|
-| `.claude/ui-automation.md` | IUIAutomation/Element/Pattern vtable offsets, property IDs, pattern IDs |
+**How to read**: `DllCall(NumGet(NumGet(ptr+0)+OFFSET*A_PtrSize), "Ptr", ptr, ...params...)`
 
-These files are for **reference lookup**, not auto-execute code. The in-code documentation block should point to the reference file for details.
+Source: [Descolada UIA-v2](https://github.com/Descolada/UIA-v2)
+
+**IUIAutomation** — root object from `ComObjCreate(CLSID, IID)`:
+
+| Offset | Method | Used In |
+|--------|--------|---------|
+| 6 | `ElementFromHandle(hwnd)` → element | mbutton-scroll, GetUIAProcessId |
+| 7 | `ElementFromPoint(x, y)` → element | extended-spy |
+
+**IUIAutomationElement** — returned by ElementFrom*:
+
+| Offset | Method | Used In |
+|--------|--------|---------|
+| 10 | `GetCurrentPropertyValue(propId, &variant)` | extended-spy, GetUIAProcessId |
+| 16 | `GetCurrentPattern(patternId)` → pattern | mbutton-scroll |
+
+**IScrollPattern** — returned by `GetCurrentPattern(10004)`:
+
+| Offset | Method | Used In |
+|--------|--------|---------|
+| 4 | `SetScrollPercent(hPct, vPct)` | mbutton-scroll (smooth scroll) |
+| 6 | `get_CurrentVerticalScrollPercent(double*)` | native scroll probe |
+| 8 | `get_CurrentVerticalViewSize(double*)` | scroll normalization |
+
+**Property IDs** — first arg to GetCurrentPropertyValue:
+
+| ID | Name | Returns |
+|----|------|---------|
+| 30002 | ProcessId | VT_I4 (int) |
+| 30004 | LocalizedControlType | VT_BSTR (string) |
+| 30005 | Name | VT_BSTR |
+| 30011 | AutomationId | VT_BSTR |
+| 30012 | ClassName | VT_BSTR |
 
 ## Testing
 
@@ -315,6 +388,9 @@ No automated tests. Manual verification required:
 | `IsProcessElevated(pid)`              | `AutoHotkey.ahk`        | Checks admin privileges via token                                                  |
 | `UserRun(exe, args*)`                 | `AutoHotkey.ahk`        | Smart process execution with elevation and quoting                                 |
 | `HasVal(arr, val)`                    | `AutoHotkey.ahk`        | Check if array contains value (partial match)                                      |
+| `IsRemoteSession()`                   | `AutoHotkey.ahk`        | Returns true if inside RDP/Hyper-V/VMware (checks window class)                    |
+| `FindInPath(exe)`                     | `AutoHotkey.ahk`        | Resolves exe name (e.g., `"wt.exe"`) to full PATH entry, or `""` if not found      |
+| `GetExplorerPath()`                   | `AutoHotkey.ahk`        | Active Explorer window's filesystem path (tab-aware); `""` if not filesystem       |
 | `ProcessExistsByCommandLine(cmdLine)` | `AutoHotkey.ahk`        | Find PID by command line match via WMI                                             |
 | `GetUIAProcessId(hwnd)`               | `AutoHotkey.ahk`        | UIA content process PID (resolves UWP/Electron host)                               |
 | `GetUIAElementInfo(x, y)`             | `extended-spy.ahk`      | UIA element properties at screen coordinates                                       |
@@ -422,8 +498,6 @@ Persistent tooltip showing Active Window + Window Under Cursor info. Toggled wit
 
 ## Window Spawning (`window-spawning.ahk`)
 
-Design documents at `.claude/window-spawning/`.
-
 ### Key Functions
 
 | Function/Label       | Purpose                                                                                                                                            |
@@ -436,7 +510,7 @@ Design documents at `.claude/window-spawning/`.
 | `WS_MoveToMonitor()` | Position mapping across monitors (relative or cursor-centered), taskbar-aware clamping, maximized/minimized handling, inline opacity reveal        |
 | `WS_Reveal()`        | Idempotent opacity restore + sentinel set                                                                                                          |
 | `WS_Log()`           | Debug logging to `%TEMP%\WS_Debug.log`                                                                                                             |
-| `WS_CleanPrePending` | Timer: stale entry cleanup for PrePending, Hidden, OwnerSentinel, RecentCreated, RecentExes                                                        |
+| `WS_SweepTracking`   | Timer (1s): expires stale entries in PrePending, Hidden, OwnerSentinel, RecentCreated, RecentExes                                                  |
 | `WS_Cleanup()`       | OnExit: unhook WinEvents, reveal hidden windows, CoUninitialize                                                                                    |
 | `~!Tab::`            | Alt+Tab passthrough hotkey with non-blocking WinEvent detection                                                                                    |
 
@@ -561,13 +635,8 @@ This architecture is relevant to:
 - **Tier 2 overlay detection**: Start menu CoreWindow doesn't fire shell hooks, so overlay detection relies on empty-class infrastructure events and `WS.OverlayTick`
 - **Brief-process detection**: UWP re-launch doesn't create a new process (Tier 1 misses), hence Tier 2 exists
 
-## Related Documentation
-
-- `README.md` — Feature showcase and release notes
-- `ui-automation.md` — UIA three-layer scroll architecture, vtable references, property IDs
-- `.claude/terminal-anywhere/` — Terminal-anywhere architecture and task tracking
-- `.claude/window-spawning/` — Window spawning design documents and task tracking
-
 ## Housekeeping
 
-**Temp file cleanup**: Claude Code's atomic write operations (`*.tmp.*` files) can orphan on race conditions or interrupts. These are gitignored but accumulate. At session start or end, delete them: `rm *.tmp.*`
+**CLAUDE.md size limit**: Keep under ~40KB (`wc -c CLAUDE.md`). Compress or remove content when adding.
+
+**Temp file cleanup**: `*.tmp.*` files from atomic writes can orphan. Clean between turns and at session end: `rm *.tmp.*`

@@ -48,15 +48,15 @@ WS_Init() {
   WS.EventHookShow := DllCall("SetWinEventHook"
     , "UInt", 0x8002, "UInt", 0x8002   ; EVENT_OBJECT_SHOW
     , "Ptr", 0, "Ptr", WS.WinEventCB
-    , "UInt", 0, "UInt", 0, "UInt", 0x0002, "Ptr")
+    , "UInt", 0, "UInt", 0, "UInt", 0x0002, "Ptr")  ; WINEVENT_OUTOFCONTEXT
   WS.EventHookUncloak := DllCall("SetWinEventHook"
     , "UInt", 0x8018, "UInt", 0x8018   ; EVENT_OBJECT_UNCLOAKED
     , "Ptr", 0, "Ptr", WS.WinEventCB
-    , "UInt", 0, "UInt", 0, "UInt", 0x0002, "Ptr")
+    , "UInt", 0, "UInt", 0, "UInt", 0x0002, "Ptr")  ; WINEVENT_OUTOFCONTEXT
   WS.EventHookCreate := DllCall("SetWinEventHook"
     , "UInt", 0x8000, "UInt", 0x8000   ; EVENT_OBJECT_CREATE
     , "Ptr", 0, "Ptr", WS.WinEventCB
-    , "UInt", 0, "UInt", 0, "UInt", 0x0002, "Ptr")
+    , "UInt", 0, "UInt", 0, "UInt", 0x0002, "Ptr")  ; WINEVENT_OUTOFCONTEXT
   if (WS.Debug) {
     _logFile := WS.LogFile
     FileDelete, %_logFile%
@@ -64,7 +64,7 @@ WS_Init() {
       . " UNCLOAK=" . (WS.EventHookUncloak ? "OK" : "FAIL")
       . " CREATE=" . (WS.EventHookCreate ? "OK" : "FAIL"))
   }
-  SetTimer, WS_CleanStale, 1000
+  SetTimer, WS_SweepTracking, 1000
   OnExit("WS_Cleanup")
 }
 
@@ -340,7 +340,7 @@ WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTim
     _ppExStyle := DllCall("GetWindowLong", "Ptr", hwnd, "Int", -20)  ; GWL_EXSTYLE
     _hadLayered := !!(_ppExStyle & 0x80000)  ; WS_EX_LAYERED
     if (!_hadLayered)
-      DllCall("SetWindowLong", "Ptr", hwnd, "Int", -20, "Ptr", _ppExStyle | 0x80000)
+      DllCall("SetWindowLong", "Ptr", hwnd, "Int", -20, "Ptr", _ppExStyle | 0x80000)  ; +WS_EX_LAYERED
     DllCall("SetLayeredWindowAttributes", "Ptr", hwnd, "UInt", 0
       , "UChar", WS.Debug ? 128 : 0, "UInt", 0x2)  ; LWA_ALPHA
     WS.Hidden[hwnd] := _hadLayered
@@ -467,7 +467,7 @@ WS_TimeoutPending(hwnd) {
 }
 
 ; Periodic cleanup of stale entries
-WS_CleanStale:
+WS_SweepTracking:
   _now := A_TickCount
 
   ; Stale PrePending (windows created but never shown)
@@ -505,7 +505,7 @@ WS_CleanStale:
         WS_Log("ORPHAN-REVEAL: hwnd=" . _h)
       DllCall("SetLayeredWindowAttributes", "Ptr", _h, "UInt", 0, "UChar", 255, "UInt", 0x2)
       if (!_val)
-        WinSet, ExStyle, -0x80000, ahk_id %_h%
+        WinSet, ExStyle, -0x80000, ahk_id %_h%  ; -WS_EX_LAYERED (restore)
     }
   }
   for _i, _k in _staleKeys

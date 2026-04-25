@@ -316,7 +316,7 @@ MBScrollTimer:
       magnitude := Max(1, Min(119, Floor(curveValue / 2)))
       Delta := (SignedDist > 0) ? -magnitude : magnitude
       wParam := Delta << 16
-      PostMessage, 0x20A, %wParam%, %lParam%,, ahk_id %target%
+      PostMessage, 0x20A, %wParam%, %lParam%,, ahk_id %target%  ; WM_MOUSEWHEEL
 
       ; Check for fallback on first scroll only
       If (!MB_FallbackChecked) {
@@ -330,7 +330,7 @@ MBScrollTimer:
           SetTimer, MBScrollTimer, 150
           ; Revert the jump by scrolling opposite direction
           revertDir := (posAfter > posBefore) ? 0 : 1  ; 0=up, 1=down
-          PostMessage, 0x115, %revertDir%, 0,, ahk_id %target%
+          PostMessage, 0x115, %revertDir%, 0,, ahk_id %target%  ; WM_VSCROLL
           If (MB_Debug)
             ToolTip, % "WHEEL_CTRL→VSCROLL (jumped " scrolledUnits " units)"
         }
