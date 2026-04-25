@@ -1,0 +1,2 @@
+# Claude Code atomic write temp files (orphaned on race conditions/interrupts)
+*.tmp.*

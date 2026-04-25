@@ -32,6 +32,20 @@ HasWin32Scrollbar(hwnd) {
   global MB_FallbackChecked := 0  ; Check fallback once per drag
   global MB_NativeProbe := 0, MB_InitScrollPos := 0, MB_InitScrollPct := 0.0, MB_InitHCursor := 0
 
+  ; ===========================================
+  ; UI Automation (UIA) — Lazy init on first MButton use
+  ; Docs: https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-entry
+  ; ===========================================
+  ; COM Class/Interface (from UIAutomationClient.h)
+  ;   CLSID_CUIAutomation = {ff48dba4-60ef-4201-aa87-54103eef594e}
+  ;   IID_IUIAutomation   = {30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}
+
+  global G_UIA
+  If (!G_UIA) {
+    G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
+    OnExit("G_UIACleanup")  ; Register cleanup (G_UIACleanup defined in AutoHotkey.ahk)
+  }
+
   MouseGetPos,,, MB_Win, MB_ClassName
   WinGetClass, ahk_class, ahk_id %MB_Win%
 

@@ -124,6 +124,9 @@ CollectWindowInfo(hwnd) {
 ; Returns {name, type, autoId, className} for the element under the cursor
 GetUIAElementInfo(x, y) {
   result := {name: "", type: "", autoId: "", className: "", pid: 0}
+  global G_UIA
+  If (!G_UIA)  ; UIA not initialized (MButton scroll not yet used)
+    Return result
   Try {
     _el := 0
     ; IUIAutomation::ElementFromPoint (vtable 7)

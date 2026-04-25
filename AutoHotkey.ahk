@@ -21,17 +21,17 @@ SetTitleMatchMode, 2
 ; Disable hotkeys inside remote sessions (RDP, Hyper-V, VMWare)
 #If IsRemoteSession()
   If !IsRemoteSession() {
-    ; Initialize UIA (used by mbutton-scroll and extended-spy)
-    global G_UIA
-    If (!G_UIA)
-      G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
-    OnExit("G_UIACleanup")
     OnExit("MB_Cleanup")
     WS_Init() ; Init window spawning
     TerminalInit()
   }
   Return
 #If
+
+; ════════════════════════════════════════════════════════════════════════════
+; END OF AUTO-EXECUTE
+; Startup code / #Include files after hotkey declaration below are ignored.
+; ════════════════════════════════════════════════════════════════════════════
 
 ; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ; ┃ === BINDINGS / REMAPS === ┃
@@ -154,7 +154,7 @@ Return
 ; ⇒ Media / hardware
 +!l:: ; [ Shift+Alt+L ] -> Turn off monitor
   Sleep 200
-  SendMessage, 0x112, 0xF170, 2,, Program Manager
+  SendMessage, 0x112, 0xF170, 2,, Program Manager  ; WM_SYSCOMMAND, SC_MONITORPOWER, POWEROFF
 Return
 
 ; Global Volume controls on mouse side buttons
@@ -384,6 +384,17 @@ FindInPath(exe) {
   Return ""
 }
 
+; ╔══════════════════════════════════════════════════════════════════════════╗
+; ║  Shell Automation — Programmatic access to Explorer windows/folders      ║
+; ║  Used by: Terminal hotkeys (F10) to get current Explorer directory       ║
+; ║  Docs: https://learn.microsoft.com/en-us/windows/win32/shell/shell-entry ║
+; ╚══════════════════════════════════════════════════════════════════════════╝
+; COM Interface (from ShObjIdl.h)
+;   IID_IShellBrowser = {000214E2-0000-0000-C000-000000000046}
+;
+; Used in ComObjQuery(window, SID, IID) where SID=IID for direct interface access.
+; Needed for tabbed Explorer: IOleWindow::GetWindow (vtable 3) returns tab HWND.
+
 ; ⇒ Get current path of active Explorer window (tab-aware for Win11 22H2+)
 GetExplorerPath() {
   static shell := ComObjCreate("Shell.Application")
@@ -470,6 +481,9 @@ GetUIAProcessId(hwnd) {
   WinGet, _winPid, PID, ahk_id %hwnd%
   If (!_winPid)
     Return 0
+  global G_UIA
+  If (!G_UIA)
+    Return _winPid ? _winPid : 0
   Try {
     _el := 0
     ; IUIAutomation::ElementFromHandle (vtable 6)
@@ -907,11 +921,11 @@ ShellRunUserOrFail(exe, args := "", dir := "", verb := "open", show := 1) {
 
 ; Check if a process is running elevated
 IsProcessElevated(pid) {
-  hProcess := DllCall("OpenProcess", "UInt", 0x0400, "Int", false, "UInt", pid, "Ptr")
+  hProcess := DllCall("OpenProcess", "UInt", 0x0400, "Int", false, "UInt", pid, "Ptr")  ; PROCESS_QUERY_INFORMATION
   If (!hProcess)
     Return false
   hToken := 0
-  DllCall("advapi32\OpenProcessToken", "Ptr", hProcess, "UInt", 0x0008, "Ptr*", hToken)
+  DllCall("advapi32\OpenProcessToken", "Ptr", hProcess, "UInt", 0x0008, "Ptr*", hToken)  ; TOKEN_QUERY
   DllCall("CloseHandle", "Ptr", hProcess)
   If (!hToken)
     Return false

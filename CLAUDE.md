@@ -200,9 +200,9 @@ FileDelete, %_logFile%
 In AHK v1.1, the auto-execute section runs from line 1 until the first hotkey label. Code placed between hotkey subroutines is **unreachable dead code**. Global config must be in the auto-execute section.
 
 **#Include placement matters**: Since `#Include` directives are at the **bottom** of AutoHotkey.ahk (after all hotkeys), any auto-execute code at the top of included files is dead code. Only functions and hotkey labels in included files are reachable. For this reason:
-- `OnExit()` handlers must be registered in AutoHotkey.ahk's auto-execute section
-- Global initialization (like `G_UIA`) must be in AutoHotkey.ahk's auto-execute section
+- `OnExit()` handlers for startup-critical cleanup must be registered in AutoHotkey.ahk's auto-execute section
 - Module files should only contain functions and hotkey labels, not top-level executable code
+- Lazy initialization (like `G_UIA` in mbutton-scroll.ahk) can register `OnExit()` on first use inside a hotkey
 
 ### Configuration Arrays
 
@@ -223,6 +223,75 @@ When asked to **move**, **extract**, or **refactor** code:
 - If you see an improvement opportunity, mention it separately and ask first
 - Never silently replace one working API/pattern with a different one
 - "Move to a new file" means copy+delete, not redesign
+
+## Constants and Magic Values
+
+### Subsystem Separation Principle
+
+Windows exposes functionality through multiple independent COM/Win32 subsystems. **Document constants alongside their owning subsystem, not in a single global block.** Mixing unrelated APIs (e.g., UI Automation GUIDs next to Shell IShellBrowser) creates false associations and obscures provenance.
+
+| Subsystem | Owner File | Scope |
+|-----------|------------|-------|
+| UI Automation | `mbutton-scroll.ahk` | UIA COM object, pattern IDs, property IDs, vtable offsets |
+| Shell Automation | `AutoHotkey.ahk` (near GetExplorerPath) | IShellBrowser, Shell.Application |
+| Window Spawning | `window-spawning.ahk` | WinEvent IDs, window styles, shell hook constants |
+| Win32 General | Inline at usage site | One-off constants (WM_SYSCOMMAND, token flags, etc.) |
+
+### Documentation Requirements
+
+When introducing a GUID, hex constant, or numeric ID:
+
+1. **Name it** — Use the official SDK constant name (e.g., `WS_EX_LAYERED`, not just `0x80000`). This enables grep verification against Microsoft docs.
+
+2. **Source it** — Note the SDK header file (e.g., `UIAutomationClient.h`, `ShObjIdl.h`, `WinUser.h`).
+
+3. **Scope it** — Place documentation near the code that owns the concept, not at file top or in a distant reference file.
+
+4. **Link it** — For complex subsystems (UIA, Shell), include the MS Learn documentation URL.
+
+### Format for COM Subsystems
+
+Use a box header when initializing a COM object or introducing a subsystem:
+
+```autohotkey
+; ╔══════════════════════════════════════════════════════════════════════════╗
+; ║  [Subsystem Name] — [One-line purpose]                                   ║
+; ║  Docs: [MS Learn URL]                                                    ║
+; ╚══════════════════════════════════════════════════════════════════════════╝
+; COM Class/Interface (from [Header].h)
+;   CLSID_Name = {guid}
+;   IID_Name   = {guid}
+```
+
+### Format for Inline Constants
+
+For one-off Win32 values, inline comment with SDK name suffices:
+
+```autohotkey
+; ✅ GOOD
+DllCall("SetWindowLong", ..., "Ptr", style | 0x80000)  ; WS_EX_LAYERED
+SendMessage, 0x112, 0xF170, 2,, Program Manager  ; WM_SYSCOMMAND, SC_MONITORPOWER
+
+; ❌ BAD — No SDK name, unverifiable
+DllCall("SetWindowLong", ..., "Ptr", style | 0x80000)
+```
+
+### Anti-Patterns
+
+- **Mixed subsystems**: Don't put UI Automation and Shell constants in the same documentation block
+- **Orphaned constants**: Don't define constants at file top if they're only used in one function — document at usage site
+- **Vtable-only docs**: If documenting vtable offsets, also document the interface they belong to and where the offset list lives (e.g., `.claude/ui-automation.md`)
+- **Magic without provenance**: Never introduce a GUID or hex value without noting which Windows API it comes from
+
+### Reference Files
+
+For subsystems with many constants (pattern IDs, property IDs, vtable offsets), use a dedicated reference file rather than bloating inline comments:
+
+| File | Contents |
+|------|----------|
+| `.claude/ui-automation.md` | IUIAutomation/Element/Pattern vtable offsets, property IDs, pattern IDs |
+
+These files are for **reference lookup**, not auto-execute code. The in-code documentation block should point to the reference file for details.
 
 ## Testing
 
@@ -498,3 +567,7 @@ This architecture is relevant to:
 - `ui-automation.md` — UIA three-layer scroll architecture, vtable references, property IDs
 - `.claude/terminal-anywhere/` — Terminal-anywhere architecture and task tracking
 - `.claude/window-spawning/` — Window spawning design documents and task tracking
+
+## Housekeeping
+
+**Temp file cleanup**: Claude Code's atomic write operations (`*.tmp.*` files) can orphan on race conditions or interrupts. These are gitignored but accumulate. At session start or end, delete them: `rm *.tmp.*`
