@@ -18,20 +18,29 @@ SendMode, Input
 SetWorkingDir, %A_ScriptDir%
 SetTitleMatchMode, 2
 
+; Debug flags
+DebugTooltips := 1
+DebugLogEvents := 1
+DebugLogPath := A_Temp "\AHK_Debug.log"
+
 ; Disable hotkeys inside remote sessions (RDP, Hyper-V, VMWare)
 #If IsRemoteSession()
   If !IsRemoteSession() {
     OnExit("MB_Cleanup")
     WS_Init() ; Init window spawning
     TerminalInit()
+    ; Clear debug log on reload
+    If (DebugLogEvents)
+      FileDelete, %DebugLogPath%
   }
   Return
 #If
 
-; ════════════════════════════════════════════════════════════════════════════
+; --------------------------------------------------------------------------
 ; END OF AUTO-EXECUTE
-; Startup code / #Include files after hotkey declaration below are ignored.
-; ════════════════════════════════════════════════════════════════════════════
+; Startup code below hotkey declarations is ignored, including within
+; #Include files
+; --------------------------------------------------------------------------
 
 ; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ; ┃ === BINDINGS / REMAPS === ┃
@@ -61,7 +70,7 @@ Return
 #IfWinActive
 
 ; ⇒ VSCode + forks
-#If (WinActive("ahk_exe code.exe") or WinActive("ahk_exe cursor.exe") or WinActive("ahk_exe antigravity.exe") or WinActive("ahk_exe vscodium.exe") OR WinActive("ahk_exe vsc.exe"))
+#If (WinActive("ahk_exe code.exe") OR WinActive("ahk_exe vscodium.exe") OR WinActive("ahk_exe cursor.exe"))
   ^w::Send {Alt Down}z{AltUp} ; [ Ctrl+W ] -> Toggle word wrap
   ^Tab::Send {Ctrl Down}{PgDn}{Ctrl Up} ; [ Ctrl+Tab ] -> Next tab
   +^Tab::Send {Ctrl Down}{PgUp}{Ctrl Up} ; [ ShIft+Ctrl+Tab ] -> Previous tab
@@ -194,7 +203,6 @@ Return
 Return
 
 #IfWinActive ahk_exe Everything.exe
-Esc::
 !F4::
   If WinExist("ahk_class EVERYTHING_DROPDOWNLIST")
     WinClose
@@ -202,62 +210,47 @@ Esc::
 Return
 #IfWinActive
 
-; Accelerated scrolling in MPC
-; https://autohotkey.com/board/topic/48426-accelerated-scrolling-script/?p=333222
-; TODO: Need to merge with scroll control under mouse
-; TODO: Alt+WheelUp/Down = Scroll horizontally
-; #If (WinActive("ahk_exe explorer.exe") or WinActive("ahk_class PROCMON_WINDOW_CLASS") or WinActive("ahk_class MPC-BE") or WinActive("ahk_class MediaPlayerClassicW"))
-#IfWinActive ahk_class MediaPlayerClassicW
-  ; WheelUp/Down scroll with acceleraation (10x with ShIft)
+; MPC: Wheel → accelerated arrow keys (track skip), Alt+Wheel → volume (normal wheel)
+#If MouseIsOver("ahk_class MediaPlayerClassicW")
   WheelUp::
   WheelDown::
-    ; The length of a scrolling session. Keep scrolling within this time to accumulate boost. ; Default: 500. Recommended between 400 and 1000.
-    timeout := 500
+    MouseGetPos,,, mpcHwnd
+    key := (A_ThisHotkey = "WheelUp") ? "Left" : "Right"
+    v := GetScrollAccelMPC()
+    ControlSend,, {%key% %v%}, ahk_id %mpcHwnd%
+  Return
+  +WheelUp::
+  +WheelDown::
+    MouseGetPos,,, mpcHwnd
+    key := (A_ThisHotkey = "+WheelUp") ? "Left" : "Right"
+    ControlSend,, {%key% 10}, ahk_id %mpcHwnd%
+  Return
+  !WheelUp::
+  !WheelDown::
+    MouseGetPos,,, mpcHwnd
+    wheel := (A_ThisHotkey = "!WheelUp") ? "WheelUp" : "WheelDown"
+    ControlSend,, {%wheel%}, ahk_id %mpcHwnd%
+  Return
+#If
 
-    ; If you scroll a long distance in one session, apply additional boost factor. The higher the ; value, the longer it takes to activate, and the slower it accumulates. ; Set to zero to disable ; completely. Default: 30.
-    boost := 3
-
-    ; Spamming applications with hundreds of individual scroll events can slow them down. This sets ; the maximum number of scrolls sent per click, i.e. max velocity. ; Default: 60.
-    limit := 30
-    distance := 0
-    vmax := 1
-    t := A_TimeSincePriorHotkey
-    If (A_PriorHotkey = A_ThisHotkey && t < timeout) {
-        ; ToolTip, t: %t% timeout: 500
-        ; t := A_TimeSincePriorHotkey
-        distance++
-        v := (t < 80 && t > 1) ? (250.0 / t) - 1 : 1
-        If (boost > 1 && distance > boost)
-        {
-          If (v > vmax)
-            vmax := v
-          Else
-            v := vmax
-          v *= distance / boost
-        }
-        QuickToolTip(v, 500)
-        v := (v > 1) ? ((v > limit) ? limit : Floor(v)) : 1
-        MouseClick, %A_ThisHotkey%, , , v
-      QuickToolTip(text, delay)
-      {
-        ToolTip, ScrollAccel: %text%
-        SetTimer ToolTipOff, %delay%
-        Return
-        ToolTipOff:
-        SetTimer ToolTipOff, Off
-        ToolTip
-        Return
-      }
-    }
-    Else {
-        ; QuickToolTip("normal", 500)
-        MouseClick, %A_ThisHotkey%
-    }
-    ; #If
+; Accelerated scrolling for specific apps
+#If MouseIsOver("ahk_exe Code.exe") || MouseIsOver("ahk_exe sublime_text.exe") || MouseIsOver("ahk_exe WindowsTerminal.exe") || MouseIsOver("ahk_exe Merge.exe") || MouseIsOver("ahk_exe chrome.exe")
+  WheelUp::
+  WheelDown::
+    MouseGetPos,,, _hwnd
+    WinGet, ahk_exe, ProcessName, ahk_id %_hwnd%
+    divisors := {Merge.exe: 250, chrome.exe: 150}
+    divisor := divisors.HasKey(ahk_exe) ? divisors[ahk_exe] : 120
+    v := GetScrollAccel(divisor)
+    MouseClick, %A_ThisHotkey%, , , %v%
   Return
   +WheelUp::Send {Click WheelUp 10}
   +WheelDown::Send {Click WheelDown 10}
-#IfWinActive
+  !WheelUp::Send {WheelLeft}
+  !WheelDown::Send {WheelRight}
+  !+WheelUp::Send {WheelLeft 10}
+  !+WheelDown::Send {WheelRight 10}
+#If
 
 
 ; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
@@ -363,6 +356,123 @@ HasVal(arr, val) {
         If (InStr(val, v))
             Return true
     Return false
+}
+
+; ⇒ Check if mouse cursor is over a window matching winTitle
+MouseIsOver(winTitle) {
+  MouseGetPos,,, hwnd
+  Return WinExist(winTitle " ahk_id " hwnd)
+}
+
+; ⇒ Calculate scroll acceleration (gentler curve for general apps)
+; Based on: https://autohotkey.com/board/topic/48426-accelerated-scrolling-script/?p=333222
+; Same formula as MPC but no distance multiplier, lower cap
+; divisor: higher = steeper curve (75 gentle, 250 steep)
+GetScrollAccel(divisor := 120) {
+  global DebugTooltips, DebugLogEvents, DebugLogPath
+  static lastV := 1, lastDirection := "", directionCount := 0
+  static lastTickUp := 0, lastTickDn := 0
+  timeout := 400  ; Session window (ms) — beyond this resets to single step
+  limit := 7      ; Max velocity cap (gentler than MPC's 30)
+
+  now := A_TickCount
+  isUp := (A_ThisHotkey = "WheelUp")
+
+  ; Debounce direction changes — require 2+ consecutive events to confirm new direction
+  If (A_ThisHotkey = lastDirection) {
+    directionCount++
+  } Else {
+    directionCount := 1
+  }
+  lastDirection := A_ThisHotkey
+  directionConfirmed := (directionCount >= 2)
+
+  ; Per-direction timing — spurious opposite events don't break the timing chain
+  lastTick := isUp ? lastTickUp : lastTickDn
+  t := (lastTick > 0) ? (now - lastTick) : 999
+
+  ; Filter spurious t=0/1ms events (duplicates or event coalescing)
+  If (t <= 1) {
+    If (DebugLogEvents) {
+      FormatTime, _ts,, HH:mm:ss
+      FileAppend, %_ts% | ScrollAccel | SKIP t=%t%ms (using lastV=%lastV%)`n, %DebugLogPath%
+    }
+    Return lastV
+  }
+
+  ; Update this direction's tick (even on debounce — maintains timing for next same-direction event)
+  If (isUp) {
+    lastTickUp := now
+  } Else {
+    lastTickDn := now
+  }
+
+  ; Capture target window info before any tooltip appears
+  MouseGetPos, _mx, _my, _hwnd
+  WinGet, _exe, ProcessName, ahk_id %_hwnd%
+  WinGetClass, _class, ahk_id %_hwnd%
+
+  If (t > timeout) {
+    v := 1
+    reason := "timeout"
+  } Else If (!directionConfirmed) {
+    ; Single spurious mismatch — continue with last velocity
+    v := lastV
+    reason := "debounce"
+  } Else {
+    ; Confirmed direction (same or changed) — calculate acceleration
+    vRaw := (t < 80) ? (divisor / t) - 1 : 1
+    v := (vRaw > 1) ? ((vRaw > limit) ? limit : Floor(vRaw)) : 1
+    reason := (t >= 80) ? "t>=80" : "accel"
+  }
+  lastV := v
+
+  If (DebugTooltips) {
+    ; Offset tooltip 50px right and 30px down to avoid cursor interference
+    _tx := _mx + 50
+    _ty := _my + 30
+    ToolTip, ScrollAccel: v=%v% t=%t%ms div=%divisor% %reason%`n%_exe% [%_class%], %_tx%, %_ty%
+    SetTimer, ScrollAccelTooltipOff, -800
+  }
+  If (DebugLogEvents) {
+    dir := (A_ThisHotkey = "WheelUp") ? "UP" : "DN"
+    FormatTime, _ts,, HH:mm:ss
+    FileAppend, %_ts% | ScrollAccel | %dir% | v=%v% t=%t%ms div=%divisor% cnt=%directionCount% %reason%`n, %DebugLogPath%
+  }
+  Return v
+
+  ScrollAccelTooltipOff:
+    ToolTip
+  Return
+}
+
+; ⇒ Calculate scroll acceleration (steep curve for MPC track skipping)
+; Aggressive curve with distance accumulator, peak boost of 30x
+GetScrollAccelMPC() {
+  static distance := 0, vmax := 1
+  timeout := 500  ; Session window (ms)
+  boost := 3      ; Distance threshold before extra boost kicks in
+  limit := 30     ; Max velocity cap
+
+  t := A_TimeSincePriorHotkey
+  If (A_PriorHotkey = A_ThisHotkey && t < timeout) {
+    distance++
+    v := (t < 80 && t > 1) ? (250.0 / t) - 1 : 1
+    If (boost > 1 && distance > boost) {
+      If (v > vmax)
+        vmax := v
+      Else
+        v := vmax
+      v *= distance / boost
+    }
+    v := (v > 1) ? ((v > limit) ? limit : Floor(v)) : 1
+  }
+  Else {
+    distance := 0
+    vmax := 1
+    v := 1
+  }
+  Return v
 }
 
 ; ⇒ Search for executable in PATH
