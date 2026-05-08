@@ -211,25 +211,25 @@ Return
 #IfWinActive
 
 ; MPC: Wheel → accelerated arrow keys (track skip), Alt+Wheel → volume (normal wheel)
-#If MouseIsOver("ahk_class MediaPlayerClassicW")
+#If MouseIsOver("ahk_exe mpc-hc64.exe")
   WheelUp::
   WheelDown::
-    MouseGetPos,,, mpcHwnd
+    MouseGetPos,,, _hwnd
+    v := GetScrollAccel(250)
     key := (A_ThisHotkey = "WheelUp") ? "Left" : "Right"
-    v := GetScrollAccelMPC()
-    ControlSend,, {%key% %v%}, ahk_id %mpcHwnd%
+    ControlSend,, {%key% %v%}, ahk_id %_hwnd%
   Return
   +WheelUp::
   +WheelDown::
-    MouseGetPos,,, mpcHwnd
+    MouseGetPos,,, _hwnd
     key := (A_ThisHotkey = "+WheelUp") ? "Left" : "Right"
-    ControlSend,, {%key% 10}, ahk_id %mpcHwnd%
+    ControlSend,, {%key% 10}, ahk_id %_hwnd%
   Return
   !WheelUp::
   !WheelDown::
-    MouseGetPos,,, mpcHwnd
+    MouseGetPos,,, _hwnd
     wheel := (A_ThisHotkey = "!WheelUp") ? "WheelUp" : "WheelDown"
-    ControlSend,, {%wheel%}, ahk_id %mpcHwnd%
+    ControlSend,, {%wheel%}, ahk_id %_hwnd%
   Return
 #If
 
@@ -239,8 +239,8 @@ Return
   WheelDown::
     MouseGetPos,,, _hwnd
     WinGet, ahk_exe, ProcessName, ahk_id %_hwnd%
-    divisors := {Merge.exe: 250, chrome.exe: 150}
-    divisor := divisors.HasKey(ahk_exe) ? divisors[ahk_exe] : 75
+    divisors := {"Merge.exe": 250, "chrome.exe": 125, "mpc-hc64.exe": 500}
+    divisor := divisors.HasKey(ahk_exe) ? divisors[ahk_exe] : 100
     v := GetScrollAccel(divisor)
     MouseClick, %A_ThisHotkey%, , , %v%
   Return
@@ -364,19 +364,18 @@ MouseIsOver(winTitle) {
   Return WinExist(winTitle " ahk_id " hwnd)
 }
 
-; ⇒ Calculate scroll acceleration (gentler curve for general apps)
-; Based on: https://autohotkey.com/board/topic/48426-accelerated-scrolling-script/?p=333222
-; Same formula as MPC but no distance multiplier, lower cap
-; divisor: higher = steeper curve (75 gentle, 250 steep)
-GetScrollAccel(divisor := 75) {
+; ⇒ Calculate scroll acceleration
+; Based on https://autohotkey.com/board/topic/48426-accelerated-scrolling-script/?p=333222
+; Higher divisor = steeper curve (75 gentle, 250 steep)
+GetScrollAccel(divisor := 100) {
   global DebugTooltips, DebugLogEvents, DebugLogPath
   static lastV := 1, lastDirection := "", directionCount := 0
   static lastTickUp := 0, lastTickDn := 0
-  timeout := 400  ; Session window (ms) — beyond this resets to single step
-  limit := 7      ; Max velocity cap (gentler than MPC's 30)
+  timeout := 400
+  limit := 7
 
   now := A_TickCount
-  isUp := (A_ThisHotkey = "WheelUp")
+  isUp := (A_ThisHotkey = "WheelUp") || (A_ThisHotkey = "+WheelUp")
 
   ; Debounce direction changes — require 2+ consecutive events to confirm new direction
   If (A_ThisHotkey = lastDirection) {
@@ -400,28 +399,22 @@ GetScrollAccel(divisor := 75) {
     Return lastV
   }
 
-  ; Update this direction's tick (even on debounce — maintains timing for next same-direction event)
+  ; Update this direction's tick
   If (isUp) {
     lastTickUp := now
   } Else {
     lastTickDn := now
   }
 
-  ; Capture target window info before any tooltip appears
-  MouseGetPos, _mx, _my, _hwnd
-  WinGet, _exe, ProcessName, ahk_id %_hwnd%
-  WinGetClass, _class, ahk_id %_hwnd%
-
   If (t > timeout) {
     v := 1
     reason := "timeout"
   } Else If (!directionConfirmed) {
-    ; Single spurious mismatch — continue with last velocity
     v := lastV
     reason := "debounce"
   } Else {
-    ; Confirmed direction — UP gets 1.25x boost to compensate for hardware encoder asymmetry
-    effectiveDivisor := isUp ? (divisor * 1.4) : divisor
+    ; UP gets 1.35x boost to compensate for hardware encoder asymmetry
+    effectiveDivisor := isUp ? (divisor * 1.35) : divisor
     vRaw := (t < 80) ? (effectiveDivisor / t) : 1
     v := (vRaw > 1) ? ((vRaw > limit) ? limit : Floor(vRaw)) : 1
     reason := (t >= 80) ? "t>=80" : "accel"
@@ -429,14 +422,16 @@ GetScrollAccel(divisor := 75) {
   lastV := v
 
   If (DebugTooltips) {
-    ; Offset tooltip 50px right and 30px down to avoid cursor interference
+    MouseGetPos, _mx, _my, _hwnd
+    WinGet, _exe, ProcessName, ahk_id %_hwnd%
+    WinGetClass, _class, ahk_id %_hwnd%
     _tx := _mx + 50
     _ty := _my + 30
     ToolTip, ScrollAccel: v=%v% t=%t%ms div=%divisor% %reason%`n%_exe% [%_class%], %_tx%, %_ty%
     SetTimer, ScrollAccelTooltipOff, -800
   }
   If (DebugLogEvents) {
-    dir := (A_ThisHotkey = "WheelUp") ? "UP" : "DN"
+    dir := isUp ? "UP" : "DN"
     FormatTime, _ts,, HH:mm:ss
     FileAppend, %_ts% | ScrollAccel | %dir% | v=%v% t=%t%ms div=%divisor% cnt=%directionCount% %reason%`n, %DebugLogPath%
   }
@@ -445,35 +440,6 @@ GetScrollAccel(divisor := 75) {
   ScrollAccelTooltipOff:
     ToolTip
   Return
-}
-
-; ⇒ Calculate scroll acceleration (steep curve for MPC track skipping)
-; Aggressive curve with distance accumulator, peak boost of 30x
-GetScrollAccelMPC() {
-  static distance := 0, vmax := 1
-  timeout := 500  ; Session window (ms)
-  boost := 3      ; Distance threshold before extra boost kicks in
-  limit := 30     ; Max velocity cap
-
-  t := A_TimeSincePriorHotkey
-  If (A_PriorHotkey = A_ThisHotkey && t < timeout) {
-    distance++
-    v := (t < 80 && t > 1) ? (250.0 / t) - 1 : 1
-    If (boost > 1 && distance > boost) {
-      If (v > vmax)
-        vmax := v
-      Else
-        v := vmax
-      v *= distance / boost
-    }
-    v := (v > 1) ? ((v > limit) ? limit : Floor(v)) : 1
-  }
-  Else {
-    distance := 0
-    vmax := 1
-    v := 1
-  }
-  Return v
 }
 
 ; ⇒ Search for executable in PATH
