@@ -19,8 +19,8 @@ SetWorkingDir, %A_ScriptDir%
 SetTitleMatchMode, 2
 
 ; Debug flags
-DebugTooltips := 1
-DebugLogEvents := 1
+DebugTooltips := 0
+DebugLogEvents := 0
 DebugLogPath := A_Temp "\AHK_Debug.log"
 
 ; Disable hotkeys inside remote sessions (RDP, Hyper-V, VMWare)
@@ -233,14 +233,14 @@ Return
   Return
 #If
 
-; Accelerated scrolling for specific apps
-#If MouseIsOver("ahk_exe Code.exe") || MouseIsOver("ahk_exe sublime_text.exe") || MouseIsOver("ahk_exe WindowsTerminal.exe") || MouseIsOver("ahk_exe Merge.exe") || MouseIsOver("ahk_exe chrome.exe")
+; Accelerated scrolling
+; #If MouseIsOver("ahk_exe Code.exe") || MouseIsOver("ahk_exe sublime_text.exe") || MouseIsOver("ahk_exe WindowsTerminal.exe") || MouseIsOver("ahk_exe Merge.exe") || MouseIsOver("ahk_exe chrome.exe")
   WheelUp::
   WheelDown::
     MouseGetPos,,, _hwnd
     WinGet, ahk_exe, ProcessName, ahk_id %_hwnd%
     divisors := {Merge.exe: 250, chrome.exe: 150}
-    divisor := divisors.HasKey(ahk_exe) ? divisors[ahk_exe] : 120
+    divisor := divisors.HasKey(ahk_exe) ? divisors[ahk_exe] : 75
     v := GetScrollAccel(divisor)
     MouseClick, %A_ThisHotkey%, , , %v%
   Return
@@ -250,7 +250,7 @@ Return
   !WheelDown::Send {WheelRight}
   !+WheelUp::Send {WheelLeft 10}
   !+WheelDown::Send {WheelRight 10}
-#If
+; #If
 
 
 ; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
@@ -368,7 +368,7 @@ MouseIsOver(winTitle) {
 ; Based on: https://autohotkey.com/board/topic/48426-accelerated-scrolling-script/?p=333222
 ; Same formula as MPC but no distance multiplier, lower cap
 ; divisor: higher = steeper curve (75 gentle, 250 steep)
-GetScrollAccel(divisor := 120) {
+GetScrollAccel(divisor := 75) {
   global DebugTooltips, DebugLogEvents, DebugLogPath
   static lastV := 1, lastDirection := "", directionCount := 0
   static lastTickUp := 0, lastTickDn := 0
@@ -420,8 +420,9 @@ GetScrollAccel(divisor := 120) {
     v := lastV
     reason := "debounce"
   } Else {
-    ; Confirmed direction (same or changed) — calculate acceleration
-    vRaw := (t < 80) ? (divisor / t) - 1 : 1
+    ; Confirmed direction — UP gets 1.25x boost to compensate for hardware encoder asymmetry
+    effectiveDivisor := isUp ? (divisor * 1.4) : divisor
+    vRaw := (t < 80) ? (effectiveDivisor / t) : 1
     v := (vRaw > 1) ? ((vRaw > limit) ? limit : Floor(vRaw)) : 1
     reason := (t >= 80) ? "t>=80" : "accel"
   }
