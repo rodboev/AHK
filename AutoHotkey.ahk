@@ -211,7 +211,7 @@ Return
 #IfWinActive
 
 ; MPC: Wheel → accelerated arrow keys (track skip), Alt+Wheel → volume (normal wheel)
-#If MouseIsOver("ahk_exe mpc-hc64.exe")
+#If MouseIsOver("ahk_class MediaPlayerClassicW")
   WheelUp::
   WheelDown::
     MouseGetPos,,, _hwnd
@@ -234,13 +234,23 @@ Return
 #If
 
 ; Accelerated scrolling
-; #If MouseIsOver("ahk_exe Code.exe") || MouseIsOver("ahk_exe sublime_text.exe") || MouseIsOver("ahk_exe WindowsTerminal.exe") || MouseIsOver("ahk_exe Merge.exe") || MouseIsOver("ahk_exe chrome.exe")
+; MouseIsOver("ahk_exe sublime_text.exe") || MouseIsOver("ahk_exe WindowsTerminal.exe") || MouseIsOver("ahk_exe Merge.exe")
   WheelUp::
   WheelDown::
     MouseGetPos,,, _hwnd
-    WinGet, ahk_exe, ProcessName, ahk_id %_hwnd%
-    divisors := {"Merge.exe": 250, "chrome.exe": 125, "mpc-hc64.exe": 500}
-    divisor := divisors.HasKey(ahk_exe) ? divisors[ahk_exe] : 100
+    WinGet, _exe, ProcessName, ahk_id %_hwnd%
+    WinGetClass, _class, ahk_id %_hwnd%
+    divisors := [{ahk_class: "Chrome_WidgetWin_1", divisor: 0}
+               , {ahk_class: "MediaPlayerClassicW", divisor: 500}
+               , {ahk_exe: "Code.exe", divisor: 100}
+               , {ahk_exe: "Merge.exe", divisor: 250}]
+    divisor := 100 ; default
+    for _, entry in divisors
+      if (entry.ahk_class && entry.ahk_class == _class)
+        divisor := entry.divisor
+    for _, entry in divisors
+      if (entry.ahk_exe && entry.ahk_exe == _exe)
+        divisor := entry.divisor
     v := GetScrollAccel(divisor)
     MouseClick, %A_ThisHotkey%, , , %v%
   Return
@@ -358,7 +368,8 @@ HasVal(arr, val) {
     Return false
 }
 
-; ⇒ Check if mouse cursor is over a window matching winTitle
+; ⇒ Check if mouse cursor is over a window (by title, ahk_exe, ahk_class, etc.)
+; Reference: https://www.autohotkey.com/docs/v1/misc/WinTitle.htm#ahk_
 MouseIsOver(winTitle) {
   MouseGetPos,,, hwnd
   Return WinExist(winTitle " ahk_id " hwnd)
@@ -366,8 +377,10 @@ MouseIsOver(winTitle) {
 
 ; ⇒ Calculate scroll acceleration
 ; Based on https://autohotkey.com/board/topic/48426-accelerated-scrolling-script/?p=333222
-; Higher divisor = steeper curve (75 gentle, 250 steep)
+; Higher divisor = steeper curve (75 gentle, 250 steep); 0 = disabled
 GetScrollAccel(divisor := 100) {
+  If (divisor = 0)
+    Return 1
   global DebugTooltips, DebugLogEvents, DebugLogPath
   static lastV := 1, lastDirection := "", directionCount := 0
   static lastTickUp := 0, lastTickDn := 0
