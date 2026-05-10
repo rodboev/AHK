@@ -109,6 +109,10 @@ HasWin32Scrollbar(hwnd) {
       DllCall(NumGet(NumGet(MB_ScrollPattern+0)+8*A_PtrSize), "Ptr", MB_ScrollPattern, "Double*", MB_ViewSize)
       If (MB_ViewSize < 1)
         MB_ViewSize := 10.0
+      ; Horizontal ViewSize (vtable offset 7)
+      DllCall(NumGet(NumGet(MB_ScrollPattern+0)+7*A_PtrSize), "Ptr", MB_ScrollPattern, "Double*", MB_ViewSizeH)
+      If (MB_ViewSizeH < 1)
+        MB_ViewSizeH := 10.0
     }
   }
 
@@ -126,7 +130,7 @@ Return
 
 MBScrollTimer:
   Critical ; Prevent MButton Up from interrupting mid-DllCall (race condition safety)
-  global MB_Debug, MB_AccumPct, MB_Method, MB_ViewSize, MB_Ctrl, MB_FallbackChecked
+  global MB_Debug, MB_AccumPct, MB_AccumPctH, MB_Method, MB_ViewSize, MB_ViewSizeH, MB_Ctrl, MB_FallbackChecked
   global MB_NativeProbe, MB_InitScrollPos, MB_InitScrollPct, MB_InitHCursor
   ; Safety check: if MButton released, stop immediately
   If !GetKeyState("MButton", "P") {
@@ -248,8 +252,13 @@ MBScrollTimer:
         SetTimer, MBScrollTimer, Off
         Return
       }
+      ; Initialize vertical accumulator
       If (MB_AccumPct < 0) {
         DllCall(NumGet(NumGet(MB_ScrollPattern+0)+6*A_PtrSize), "Ptr", MB_ScrollPattern, "Double*", MB_AccumPct)
+      }
+      ; Initialize horizontal accumulator (vtable offset 5)
+      If (MB_AccumPctH < 0) {
+        DllCall(NumGet(NumGet(MB_ScrollPattern+0)+5*A_PtrSize), "Ptr", MB_ScrollPattern, "Double*", MB_AccumPctH)
       }
 
       ; Capture Win32 scroll position BEFORE UIA scroll (for cross-validation)
@@ -258,19 +267,31 @@ MBScrollTimer:
         MB_UIAVerifyPos := GetScrollPos(uiaTarget)
       }
 
-      ; Normalize scroll speed based on ViewSize:
+      ; Normalize scroll speed based on ViewSize (applies to both axes):
       ; - ViewSize = 100%: only 1 item visible (small list), scroll FAST
       ; - ViewSize = 1%: 100 items visible (huge list), scroll SLOW
-      ; Formula: mult = ViewSize / 3 (5x amplified from /15)
-      ; Examples: ViewSize=50% → mult=16.7, ViewSize=15% → mult=5, ViewSize=3% → mult=1
-      viewMultiplier := MB_ViewSize / 3.0
-      viewMultiplier := Max(0.25, Min(viewMultiplier, 50.0))  ; Clamp 0.25x to 50x
-      deltaPct := signDir * curveValue * 0.006 * viewMultiplier
-      MB_AccumPct := MB_AccumPct + deltaPct
+      ; Formula: mult = ViewSize / 3, clamped 0.25x to 50x
+
+      ; Vertical scroll delta
+      signDirY := (SignedDistY > 0) ? 1 : -1
+      viewMultiplierY := MB_ViewSize / 3.0
+      viewMultiplierY := Max(0.25, Min(viewMultiplierY, 50.0))
+      deltaPctY := signDirY * curveValueY * 0.006 * viewMultiplierY
+      MB_AccumPct := MB_AccumPct + deltaPctY
       MB_AccumPct := (MB_AccumPct < 0) ? 0 : (MB_AccumPct > 100) ? 100 : MB_AccumPct
+
+      ; Horizontal scroll delta
+      signDirX := (SignedDistX > 0) ? 1 : -1
+      viewMultiplierH := MB_ViewSizeH / 3.0
+      viewMultiplierH := Max(0.25, Min(viewMultiplierH, 50.0))
+      deltaPctH := signDirX * curveValueX * 0.006 * viewMultiplierH
+      MB_AccumPctH := MB_AccumPctH + deltaPctH
+      MB_AccumPctH := (MB_AccumPctH < 0) ? 0 : (MB_AccumPctH > 100) ? 100 : MB_AccumPctH
+
       If (MB_Debug)
-        ToolTip, % "UIA: " Round(MB_AccumPct, 1) "%% (view=" Round(MB_ViewSize,1) "%% mult=" Round(viewMultiplier,2) ")"
-      DllCall(NumGet(NumGet(MB_ScrollPattern+0)+4*A_PtrSize), "Ptr", MB_ScrollPattern, "Double", -1.0, "Double", MB_AccumPct)
+        ToolTip, % "UIA: V=" Round(MB_AccumPct, 1) "%% H=" Round(MB_AccumPctH, 1) "%%"
+      ; SetScrollPercent(hPct, vPct) - vtable offset 4
+      DllCall(NumGet(NumGet(MB_ScrollPattern+0)+4*A_PtrSize), "Ptr", MB_ScrollPattern, "Double", MB_AccumPctH, "Double", MB_AccumPct)
 
       ; Verify UIA is actually working (two-tick verification)
       If (MB_FallbackChecked = 0) {
