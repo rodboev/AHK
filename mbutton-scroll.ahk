@@ -379,21 +379,31 @@ MBScrollTimer:
 
     } Else If (MB_Method = "VSCROLL") {
       ; ===========================================
-      ; WM_VSCROLL LINE - dynamic timer based on drag distance
+      ; WM_VSCROLL/HSCROLL LINE - dynamic timer based on drag distance
       ; No fractional scrolling, most compatible
       ; ===========================================
-      scrollDir := (SignedDist > 0) ? 1 : 0
       target := MB_Ctrl ? MB_Ctrl : MB_Win
 
-      ; Dynamic timer: 300ms at 8px (slow), 20ms at 300px+ (fast)
-      ; Map AbsDist 8-200 to timer 20-300
-      timerMs := 300 - Floor((Min(AbsDist, 300) - 8) * (100 / 192))
+      ; Dynamic timer: use max of both axes for speed calculation
+      maxDist := (AbsDistY > AbsDistX) ? AbsDistY : AbsDistX
+      timerMs := 300 - Floor((Min(maxDist, 300) - 8) * (100 / 192))
       timerMs := Max(20, Min(300, timerMs / 2))
       SetTimer, MBScrollTimer, %timerMs%
 
+      ; Vertical: WM_VSCROLL (0x115)
+      If (AbsDistY >= 8) {
+        scrollDirY := (SignedDistY > 0) ? 1 : 0
+        PostMessage, 0x115, %scrollDirY%, 0,, ahk_id %target%
+      }
+
+      ; Horizontal: WM_HSCROLL (0x114)
+      If (AbsDistX >= 8) {
+        scrollDirX := (SignedDistX > 0) ? 1 : 0
+        PostMessage, 0x114, %scrollDirX%, 0,, ahk_id %target%
+      }
+
       If (MB_Debug)
-        ToolTip, % "VSCROLL: dir=" scrollDir " timer=" timerMs "ms"
-      PostMessage, 0x115, %scrollDir%, 0,, ahk_id %target%
+        ToolTip, % "VSCROLL: dirY=" (AbsDistY >= 8 ? scrollDirY : "-") " dirX=" (AbsDistX >= 8 ? scrollDirX : "-") " timer=" timerMs "ms"
 
     } Else {
       ; ===========================================
