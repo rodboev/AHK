@@ -24,7 +24,7 @@ HasWin32Scrollbar(hwnd) {
 
 ; -> [ MButton + drag ] -> Invoke smooth scrolling on any app; release to stop.
 *MButton::
-  global MB_Debug := 0  ; Debug tooltips (0=off, 1=on)
+  global MB_Debug := 1  ; Debug tooltips (0=off, 1=on)
   global MB_X1, MB_Y1, MB_Win, MB_ClassName, MB_Triggered
   global MB_ScrollPattern := 0, MB_Element := 0, MB_Ctrl
   global MB_Disabled := 0, MB_DeferredDown := 0, MB_ViewSize := 10.0, MB_AccumPct := -1
@@ -157,8 +157,10 @@ MBScrollTimer:
 
     If (!nativeDetected) {
       CoordMode, Mouse, Screen
-      MouseGetPos,, probeY
-      probeDrag := Abs(probeY - MB_Y1)
+      MouseGetPos, probeX, probeY
+      probeDragY := Abs(probeY - MB_Y1)
+      probeDragX := Abs(probeX - MB_X1)
+      probeDrag := (probeDragY > probeDragX) ? probeDragY : probeDragX
 
       ; Signals 2 & 3: check after 3px (filters cursor jitter)
       If (probeDrag >= 3) {
@@ -366,9 +368,9 @@ MBScrollTimer:
         MB_FallbackChecked := 1
       }
 
-      ; Horizontal: WM_MOUSEHWHEEL (0x20E) — positive delta = right, negative = left
+      ; Horizontal: WM_MOUSEHWHEEL (0x20E) — 2x multiplier for perceptual parity with vertical
       If (AbsDistX >= 8) {
-        magnitudeX := Max(1, Min(119, Floor(curveValueX / 2)))
+        magnitudeX := Max(1, Min(119, Floor(curveValueX)))  ; 2x: removed /2
         DeltaX := (SignedDistX > 0) ? magnitudeX : -magnitudeX
         wParamX := DeltaX << 16
         PostMessage, 0x20E, %wParamX%, %lParam%,, ahk_id %target%
@@ -396,14 +398,17 @@ MBScrollTimer:
         PostMessage, 0x115, %scrollDirY%, 0,, ahk_id %target%
       }
 
-      ; Horizontal: WM_HSCROLL (0x114)
+      ; Horizontal: WM_MOUSEHWHEEL (0x20E) — 5x multiplier with acceleration
       If (AbsDistX >= 8) {
-        scrollDirX := (SignedDistX > 0) ? 1 : 0
-        PostMessage, 0x114, %scrollDirX%, 0,, ahk_id %target%
+        lParamV := ((MB_Y1 & 0xFFFF) << 16) | (MB_X1 & 0xFFFF)
+        magnitudeX := Max(30, Min(360, Floor(curveValueX * 5)))  ; 5x, cap at 3 notches
+        DeltaX := (SignedDistX > 0) ? magnitudeX : -magnitudeX
+        wParamX := DeltaX << 16
+        PostMessage, 0x20E, %wParamX%, %lParamV%,, ahk_id %target%
       }
 
       If (MB_Debug)
-        ToolTip, % "VSCROLL: dirY=" (AbsDistY >= 8 ? scrollDirY : "-") " dirX=" (AbsDistX >= 8 ? scrollDirX : "-") " timer=" timerMs "ms"
+        ToolTip, % "VSCROLL: dirY=" (AbsDistY >= 8 ? scrollDirY : "-") " dX=" (AbsDistX >= 8 ? DeltaX : "-") " timer=" timerMs "ms"
 
     } Else {
       ; ===========================================
@@ -436,9 +441,9 @@ MBScrollTimer:
         PostMessage, 0x20A, %wParamY%, %lParam%,, ahk_id %MB_Win%
       }
 
-      ; Horizontal: WM_MOUSEHWHEEL (0x20E) — positive delta = right, negative = left
+      ; Horizontal: WM_MOUSEHWHEEL (0x20E) — 2x multiplier for perceptual parity with vertical
       If (AbsDistX >= 8) {
-        magnitudeX := Max(1, Min(119, Floor(curveValueX / 2)))
+        magnitudeX := Max(1, Min(119, Floor(curveValueX)))  ; 2x: removed /2
         DeltaX := (SignedDistX > 0) ? magnitudeX : -magnitudeX
         wParamX := DeltaX << 16
         PostMessage, 0x20E, %wParamX%, %lParam%,, ahk_id %MB_Win%
