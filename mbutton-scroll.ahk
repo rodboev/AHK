@@ -340,12 +340,12 @@ MBScrollTimer:
         posBefore := GetScrollPos(target)
       }
 
-      ; Send WHEEL message
+      ; Send WHEEL message (vertical)
       lParam := ((MB_Y1 & 0xFFFF) << 16) | (MB_X1 & 0xFFFF)
-      magnitude := Max(1, Min(119, Floor(curveValue / 2)))
-      Delta := (SignedDist > 0) ? -magnitude : magnitude
-      wParam := Delta << 16
-      PostMessage, 0x20A, %wParam%, %lParam%,, ahk_id %target%  ; WM_MOUSEWHEEL
+      magnitudeY := Max(1, Min(119, Floor(curveValueY / 2)))
+      DeltaY := (SignedDistY > 0) ? -magnitudeY : magnitudeY
+      wParamY := DeltaY << 16
+      PostMessage, 0x20A, %wParamY%, %lParam%,, ahk_id %target%  ; WM_MOUSEWHEEL
 
       ; Check for fallback on first scroll only
       If (!MB_FallbackChecked) {
@@ -366,8 +366,16 @@ MBScrollTimer:
         MB_FallbackChecked := 1
       }
 
+      ; Horizontal: WM_MOUSEHWHEEL (0x20E) — positive delta = right, negative = left
+      If (AbsDistX >= 8) {
+        magnitudeX := Max(1, Min(119, Floor(curveValueX / 2)))
+        DeltaX := (SignedDistX > 0) ? magnitudeX : -magnitudeX
+        wParamX := DeltaX << 16
+        PostMessage, 0x20E, %wParamX%, %lParam%,, ahk_id %target%
+      }
+
       If (MB_Debug && MB_Method = "WHEEL_CTRL")
-        ToolTip, % "WHEEL_CTRL: d=" Delta
+        ToolTip, % "WHEEL_CTRL: dY=" DeltaY " dX=" (AbsDistX >= 8 ? DeltaX : 0)
 
     } Else If (MB_Method = "VSCROLL") {
       ; ===========================================
@@ -394,15 +402,15 @@ MBScrollTimer:
       ; ===========================================
       lParam := ((MB_Y1 & 0xFFFF) << 16) | (MB_X1 & 0xFFFF)
       ; MUST cap below 120 for smooth scrolling (120 = 1 notch = 3 lines)
-      magnitude := Max(1, Min(119, Floor(curveValue / 2)))
-      Delta := (SignedDist > 0) ? -magnitude : magnitude
-      wParam := Delta << 16
+      magnitudeY := Max(1, Min(119, Floor(curveValueY / 2)))
+      DeltaY := (SignedDistY > 0) ? -magnitudeY : magnitudeY
+      wParamY := DeltaY << 16
 
       If (!MB_FallbackChecked) {
         ; Test if window-level WHEEL actually scrolls (first scroll only)
         ctrlTarget := MB_Ctrl ? MB_Ctrl : MB_Win
         posBefore := GetScrollPos(ctrlTarget)
-        PostMessage, 0x20A, %wParam%, %lParam%,, ahk_id %MB_Win%
+        PostMessage, 0x20A, %wParamY%, %lParam%,, ahk_id %MB_Win%
         Sleep, 15
         posAfter := GetScrollPos(ctrlTarget)
         If (posBefore = posAfter) {
@@ -415,11 +423,19 @@ MBScrollTimer:
           MB_FallbackChecked := 1
         }
       } Else {
-        PostMessage, 0x20A, %wParam%, %lParam%,, ahk_id %MB_Win%
+        PostMessage, 0x20A, %wParamY%, %lParam%,, ahk_id %MB_Win%
+      }
+
+      ; Horizontal: WM_MOUSEHWHEEL (0x20E) — positive delta = right, negative = left
+      If (AbsDistX >= 8) {
+        magnitudeX := Max(1, Min(119, Floor(curveValueX / 2)))
+        DeltaX := (SignedDistX > 0) ? magnitudeX : -magnitudeX
+        wParamX := DeltaX << 16
+        PostMessage, 0x20E, %wParamX%, %lParam%,, ahk_id %MB_Win%
       }
 
       If (MB_Debug && MB_Method = "WHEEL")
-        ToolTip, % "WHEEL: d=" Delta
+        ToolTip, % "WHEEL: dY=" DeltaY " dX=" (AbsDistX >= 8 ? DeltaX : 0)
     }
   }
 Return
