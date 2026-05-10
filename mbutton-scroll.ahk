@@ -28,6 +28,7 @@ HasWin32Scrollbar(hwnd) {
   global MB_X1, MB_Y1, MB_Win, MB_ClassName, MB_Triggered
   global MB_ScrollPattern := 0, MB_Element := 0, MB_Ctrl
   global MB_Disabled := 0, MB_DeferredDown := 0, MB_ViewSize := 10.0, MB_AccumPct := -1
+  global MB_ViewSizeH := 10.0, MB_AccumPctH := -1
   global MB_Method := "VSCROLL" ; Default fallback
   global MB_FallbackChecked := 0  ; Check fallback once per drag
   global MB_NativeProbe := 0, MB_InitScrollPos := 0, MB_InitScrollPct := 0.0, MB_InitHCursor := 0
@@ -214,20 +215,27 @@ MBScrollTimer:
   }
 
   CoordMode, Mouse, Screen
-  MouseGetPos,, Y2
-  SignedDist := Y2 - MB_Y1
-  AbsDist := Abs(SignedDist)
+  MouseGetPos, MB_X2, Y2
+  SignedDistY := Y2 - MB_Y1
+  SignedDistX := MB_X2 - MB_X1
+  AbsDistY := Abs(SignedDistY)
+  AbsDistX := Abs(SignedDistX)
 
-  If (AbsDist >= 8) {
+  If (AbsDistY >= 8 or AbsDistX >= 8) {
     MB_Triggered := 1
-    signDir := (SignedDist > 0) ? 1 : -1
-    absEffective := AbsDist
 
-    ; Double curve: responsive up to 100px, soft cap beyond
-    If (absEffective <= 100) {
-      curveValue := absEffective ** 0.8
+    ; Vertical power curve
+    If (AbsDistY <= 100) {
+      curveValueY := AbsDistY ** 0.8
     } Else {
-      curveValue := (100 ** 0.8) + ((absEffective - 100) ** 0.6)
+      curveValueY := (100 ** 0.8) + ((AbsDistY - 100) ** 0.6)
+    }
+
+    ; Horizontal power curve
+    If (AbsDistX <= 100) {
+      curveValueX := AbsDistX ** 0.8
+    } Else {
+      curveValueX := (100 ** 0.8) + ((AbsDistX - 100) ** 0.6)
     }
 
     If (MB_Method = "UIA") {
