@@ -20,7 +20,7 @@ SetTitleMatchMode, 2
 
 ; Debug flags
 DebugTooltips := 0
-DebugLogEvents := 0
+DebugLogEvents := 1
 DebugLogPath := A_Temp "\AHK_Debug.log"
 
 ; Disable hotkeys inside remote sessions (RDP, Hyper-V, VMWare)
@@ -210,29 +210,6 @@ Return
 Return
 #IfWinActive
 
-; MPC: Wheel → accelerated arrow keys (track skip), Alt+Wheel → volume (normal wheel)
-#If MouseIsOver("ahk_class MediaPlayerClassicW")
-  WheelUp::
-  WheelDown::
-    MouseGetPos,,, _hwnd
-    v := GetScrollAccel(250)
-    key := (A_ThisHotkey = "WheelUp") ? "Left" : "Right"
-    ControlSend,, {%key% %v%}, ahk_id %_hwnd%
-  Return
-  +WheelUp::
-  +WheelDown::
-    MouseGetPos,,, _hwnd
-    key := (A_ThisHotkey = "+WheelUp") ? "Left" : "Right"
-    ControlSend,, {%key% 10}, ahk_id %_hwnd%
-  Return
-  !WheelUp::
-  !WheelDown::
-    MouseGetPos,,, _hwnd
-    wheel := (A_ThisHotkey = "!WheelUp") ? "WheelUp" : "WheelDown"
-    ControlSend,, {%wheel%}, ahk_id %_hwnd%
-  Return
-#If
-
 ; Accelerated scrolling
 ; MouseIsOver("ahk_exe sublime_text.exe") || MouseIsOver("ahk_exe WindowsTerminal.exe") || MouseIsOver("ahk_exe Merge.exe")
   WheelUp::
@@ -284,26 +261,6 @@ Return
     WinActivate, ahk_pid %pid%
   } Else {
     UserRun("files-stable", path)
-  }
-Return
-
-; Win + C: Copy command line of active window to clipboard
-#c::
-  cmdLine := GetActiveWindowCommandLine()
-  explorerPath := GetExplorerPath()
-  If (cmdLine && cmdLine != "") {
-    Clipboard := ""
-    Clipboard := cmdLine
-    ClipWait, 1
-    If (ErrorLevel) {
-      ToolTip, Failed to copy command line to clipboard
-    } Else {
-      ToolTip, >> %cmdLine%`nPath: %explorerPath%
-    }
-    SetTimer, RemoveToolTip, -3000
-  } Else {
-    ToolTip, Could not get command line`nPath: %explorerPath%
-    SetTimer, RemoveToolTip, -2000
   }
 Return
 
@@ -1032,5 +989,5 @@ Return
 ; === Module Includes ===
 #Include %A_ScriptDir%\terminal-anywhere.ahk
 #Include %A_ScriptDir%\extended-spy.ahk
-#Include %A_ScriptDir%\mbutton-scroll.ahk
+#Include %A_ScriptDir%\mbutton-drag.ahk
 #Include %A_ScriptDir%\window-spawning.ahk

@@ -15,13 +15,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `AutoHotkey.ahk` is the parent entrypoint. It `#Include`s four module files at the bottom:
 
-| File                    | Purpose                                                            |
-| ----------------------- | ------------------------------------------------------------------ |
-| `AutoHotkey.ahk`        | Parent: config directives, helpers, bindings, misc hotkeys         |
-| `terminal-anywhere.ahk` | Windows Terminal from anywhere (`F10` variants) — user/admin/SYSTEM|
+| File                    | Purpose                                                              |
+| ----------------------- | -------------------------------------------------------------------- |
+| `AutoHotkey.ahk`        | Parent: config directives, helpers, bindings, misc hotkeys           |
+| `terminal-anywhere.ahk` | Windows Terminal from anywhere (`F10` variants) — user/admin/SYSTEM  |
 | `extended-spy.ahk`      | Extended Window Spy (`#w`) — tooltip/dialog with window/control info |
-| `mbutton-scroll.ahk`    | MButton smooth scroll (hotkeys, timer, scroll methods)             |
-| `window-spawning.ahk`   | Shell hook window spawning (WS_Init, hooks, move logic, Alt+Tab)   |
+| `mbutton-drag.ahk`      | MButton smooth scroll (hotkeys, timer, scroll methods)               |
+| `window-spawning.ahk`   | Shell hook window spawning (WS_Init, hooks, move logic, Alt+Tab)     |
 
 The `community-scripts/` directory contains reference libraries (loosely coupled, mostly for inspiration).
 
@@ -36,7 +36,7 @@ The `community-scripts/` directory contains reference libraries (loosely coupled
 
 ### Core Features
 
-1. **Explorer Smooth Scroll** (`MButton + drag`) — 4-method system: UIA, WHEEL, WHEEL_CTRL, VSCROLL — in `mbutton-scroll.ahk`
+1. **Explorer Smooth Scroll** (`MButton + drag`) — 4-method system: UIA, WHEEL, WHEEL_CTRL, VSCROLL — in `mbutton-drag.ahk`
 2. **Window Spawning** — Shell hook + WinEvent hooks move new windows to cursor's monitor — in `window-spawning.ahk`
 3. **Extended Window Spy** (`Win+W`) — Persistent tooltip with window/control info — in `extended-spy.ahk`
 4. **Terminal/Elevation** (`F10`, `Shift+F10`, `Ctrl+Alt+Shift+F10`, `Ctrl+Shift+Plus`) — Context-aware terminal launching with admin elevation and SYSTEM via ti.exe — in `terminal-anywhere.ahk` (F10 variants) and `AutoHotkey.ahk` (`Ctrl+Shift+Plus`)
@@ -56,6 +56,7 @@ The tradeoff is maintainability: vtable offsets are magic numbers. Mitigate by d
 ### Why UIA for Explorer Scrolling
 
 Windows Explorer uses DirectUI (an internal Microsoft UI framework), not standard Win32 controls. This means:
+
 - `WM_MOUSEWHEEL` sent to the window doesn't reach the list view
 - `WM_VSCROLL` works but only in line increments (jerky)
 - `GetScrollPos`/`SetScrollPos` don't work (no Win32 scrollbar)
@@ -66,12 +67,12 @@ UIA's `IUIAutomationScrollPattern::SetScrollPercent` talks directly to the Direc
 
 Different apps expose scrolling differently:
 
-| App Type | UIA ScrollPattern | WM_MOUSEWHEEL | WM_VSCROLL |
-|----------|-------------------|---------------|------------|
-| Explorer (DirectUI) | Yes | No | Jerky |
-| VS Code (Electron) | No | Yes (sub-120 delta) | No |
-| Classic Win32 | Sometimes | Usually | Yes |
-| Tree views | No | No | Yes |
+| App Type            | UIA ScrollPattern | WM_MOUSEWHEEL       | WM_VSCROLL |
+| ------------------- | ----------------- | ------------------- | ---------- |
+| Explorer (DirectUI) | Yes               | No                  | Jerky      |
+| VS Code (Electron)  | No                | Yes (sub-120 delta) | No         |
+| Classic Win32       | Sometimes         | Usually             | Yes        |
+| Tree views          | No                | No                  | Yes        |
 
 The fallback chain (UIA → WHEEL → WHEEL_CTRL → VSCROLL) probes each method and uses the first that works, determined empirically per control at runtime.
 
@@ -162,6 +163,7 @@ ObjRelease(_el)
 Use `UserRun(Executable, Args*)` for all process execution — handles elevation, env var expansion, and argument quoting.
 
 **Key behaviors**:
+
 - All arguments are unconditionally quoted (single-quoted in PowerShell, double-quoted in direct paths)
 - Shell operators (`&&`, `|`) not interpreted — use `UserRun("cmd", "/c", "cmd1 && cmd2")` to chain
 - For elevation, uses AHK's `*RunAs` verb, NOT PowerShell `Start-Process -Verb RunAs`
@@ -223,9 +225,10 @@ FileDelete, %_logFile%
 In AHK v1.1, the auto-execute section runs from line 1 until the first hotkey label. Code placed between hotkey subroutines is **unreachable dead code**. Global config must be in the auto-execute section.
 
 **#Include placement matters**: Since `#Include` directives are at the **bottom** of AutoHotkey.ahk (after all hotkeys), any auto-execute code at the top of included files is dead code. Only functions and hotkey labels in included files are reachable. For this reason:
+
 - `OnExit()` handlers for startup-critical cleanup must be registered in AutoHotkey.ahk's auto-execute section
 - Module files should only contain functions and hotkey labels, not top-level executable code
-- Lazy initialization (like `G_UIA` in mbutton-scroll.ahk) can register `OnExit()` on first use inside a hotkey
+- Lazy initialization (like `G_UIA` in mbutton-drag.ahk) can register `OnExit()` on first use inside a hotkey
 
 ### Remote Session Guard Pattern
 
@@ -241,6 +244,7 @@ The auto-execute section uses a dual-purpose `#If` pattern:
 ```
 
 **What this does**:
+
 1. **`#If IsRemoteSession()`** — Context directive that disables all subsequent hotkeys when inside RDP/Hyper-V/VMware (prevents conflicts with host machine hotkeys)
 2. **`If !IsRemoteSession()`** — Runtime guard that skips initialization when in a remote session (the auto-execute code runs regardless of `#If` context)
 3. **`#If`** (bare) — Clears the context so hotkeys after this point are always active
@@ -273,12 +277,12 @@ When asked to **move**, **extract**, or **refactor** code:
 
 Windows exposes functionality through multiple independent COM/Win32 subsystems. **Document constants alongside their owning subsystem, not in a single global block.** Mixing unrelated APIs (e.g., UI Automation GUIDs next to Shell IShellBrowser) creates false associations and obscures provenance.
 
-| Subsystem | Owner File | Scope |
-|-----------|------------|-------|
-| UI Automation | `mbutton-scroll.ahk` | UIA COM object, pattern IDs, property IDs, vtable offsets |
-| Shell Automation | `AutoHotkey.ahk` (near GetExplorerPath) | IShellBrowser, Shell.Application |
-| Window Spawning | `window-spawning.ahk` | WinEvent IDs, window styles, shell hook constants |
-| Win32 General | Inline at usage site | One-off constants (WM_SYSCOMMAND, token flags, etc.) |
+| Subsystem        | Owner File                              | Scope                                                     |
+| ---------------- | --------------------------------------- | --------------------------------------------------------- |
+| UI Automation    | `mbutton-drag.ahk`                      | UIA COM object, pattern IDs, property IDs, vtable offsets |
+| Shell Automation | `AutoHotkey.ahk` (near GetExplorerPath) | IShellBrowser, Shell.Application                          |
+| Window Spawning  | `window-spawning.ahk`                   | WinEvent IDs, window styles, shell hook constants         |
+| Win32 General    | Inline at usage site                    | One-off constants (WM_SYSCOMMAND, token flags, etc.)      |
 
 ### Documentation Requirements
 
@@ -336,35 +340,35 @@ Source: [Descolada UIA-v2](https://github.com/Descolada/UIA-v2)
 
 **IUIAutomation** — root object from `ComObjCreate(CLSID, IID)`:
 
-| Offset | Method | Used In |
-|--------|--------|---------|
-| 6 | `ElementFromHandle(hwnd)` → element | mbutton-scroll, GetUIAProcessId |
-| 7 | `ElementFromPoint(x, y)` → element | extended-spy |
+| Offset | Method                              | Used In                       |
+| ------ | ----------------------------------- | ----------------------------- |
+| 6      | `ElementFromHandle(hwnd)` → element | mbutton-drag, GetUIAProcessId |
+| 7      | `ElementFromPoint(x, y)` → element  | extended-spy                  |
 
-**IUIAutomationElement** — returned by ElementFrom*:
+**IUIAutomationElement** — returned by ElementFrom\*:
 
-| Offset | Method | Used In |
-|--------|--------|---------|
-| 10 | `GetCurrentPropertyValue(propId, &variant)` | extended-spy, GetUIAProcessId |
-| 16 | `GetCurrentPattern(patternId)` → pattern | mbutton-scroll |
+| Offset | Method                                      | Used In                       |
+| ------ | ------------------------------------------- | ----------------------------- |
+| 10     | `GetCurrentPropertyValue(propId, &variant)` | extended-spy, GetUIAProcessId |
+| 16     | `GetCurrentPattern(patternId)` → pattern    | mbutton-drag                  |
 
 **IScrollPattern** — returned by `GetCurrentPattern(10004)`:
 
-| Offset | Method | Used In |
-|--------|--------|---------|
-| 4 | `SetScrollPercent(hPct, vPct)` | mbutton-scroll (smooth scroll) |
-| 6 | `get_CurrentVerticalScrollPercent(double*)` | native scroll probe |
-| 8 | `get_CurrentVerticalViewSize(double*)` | scroll normalization |
+| Offset | Method                                      | Used In                      |
+| ------ | ------------------------------------------- | ---------------------------- |
+| 4      | `SetScrollPercent(hPct, vPct)`              | mbutton-drag (smooth scroll) |
+| 6      | `get_CurrentVerticalScrollPercent(double*)` | native scroll probe          |
+| 8      | `get_CurrentVerticalViewSize(double*)`      | scroll normalization         |
 
 **Property IDs** — first arg to GetCurrentPropertyValue:
 
-| ID | Name | Returns |
-|----|------|---------|
-| 30002 | ProcessId | VT_I4 (int) |
+| ID    | Name                 | Returns          |
+| ----- | -------------------- | ---------------- |
+| 30002 | ProcessId            | VT_I4 (int)      |
 | 30004 | LocalizedControlType | VT_BSTR (string) |
-| 30005 | Name | VT_BSTR |
-| 30011 | AutomationId | VT_BSTR |
-| 30012 | ClassName | VT_BSTR |
+| 30005 | Name                 | VT_BSTR          |
+| 30011 | AutomationId         | VT_BSTR          |
+| 30012 | ClassName            | VT_BSTR          |
 
 ## Testing
 
@@ -380,28 +384,28 @@ No automated tests. Manual verification required:
 
 ## Key Helper Functions
 
-| Function                              | File                    | Purpose                                                                            |
-| ------------------------------------- | ----------------------- | ---------------------------------------------------------------------------------- |
-| `GetExePath(winTitle)`                | `AutoHotkey.ahk`        | Returns `{path, dir}` for process                                                  |
-| `GetMonitor(winTitle)`                | `AutoHotkey.ahk`        | Returns 1-based monitor number                                                     |
-| `GetCursorMonitor()`                  | `AutoHotkey.ahk`        | Returns 1-based monitor index for cursor                                           |
-| `IsProcessElevated(pid)`              | `AutoHotkey.ahk`        | Checks admin privileges via token                                                  |
-| `UserRun(exe, args*)`                 | `AutoHotkey.ahk`        | Smart process execution with elevation and quoting                                 |
-| `HasVal(arr, val)`                    | `AutoHotkey.ahk`        | Check if array contains value (partial match)                                      |
-| `IsRemoteSession()`                   | `AutoHotkey.ahk`        | Returns true if inside RDP/Hyper-V/VMware (checks window class)                    |
-| `FindInPath(exe)`                     | `AutoHotkey.ahk`        | Resolves exe name (e.g., `"wt.exe"`) to full PATH entry, or `""` if not found      |
-| `GetExplorerPath()`                   | `AutoHotkey.ahk`        | Active Explorer window's filesystem path (tab-aware); `""` if not filesystem       |
-| `ProcessExistsByCommandLine(cmdLine)` | `AutoHotkey.ahk`        | Find PID by command line match via WMI                                             |
-| `GetUIAProcessId(hwnd)`               | `AutoHotkey.ahk`        | UIA content process PID (resolves UWP/Electron host)                               |
-| `GetUIAElementInfo(x, y)`             | `extended-spy.ahk`      | UIA element properties at screen coordinates                                       |
-| `GetScrollPos(hwnd)`                  | `mbutton-scroll.ahk`    | Win32 vertical scroll position                                                     |
-| `HasWin32Scrollbar(hwnd)`             | `mbutton-scroll.ahk`    | Checks if Win32 scrollbar exists                                                   |
-| `WrapList(text, delim, maxLen)`       | `extended-spy.ahk`      | Wraps delimited text preserving items                                              |
-| `CleanWindowText(text)`               | `extended-spy.ahk`      | Removes non-ASCII, dedupes long text                                               |
-| `FilterLongItems(text, maxLen)`       | `extended-spy.ahk`      | Removes items >maxLen from list                                                    |
-| `SortList(text)`                      | `extended-spy.ahk`      | Sorts comma-separated items alphabetically                                         |
-| `OpenTerminal(opts)`                  | `terminal-anywhere.ahk` | Open WT with elevation options                                                     |
-| `GetTerminalDir()`                    | `terminal-anywhere.ahk` | Working directory from active window context                                       |
+| Function                              | File                    | Purpose                                                                       |
+| ------------------------------------- | ----------------------- | ----------------------------------------------------------------------------- |
+| `GetExePath(winTitle)`                | `AutoHotkey.ahk`        | Returns `{path, dir}` for process                                             |
+| `GetMonitor(winTitle)`                | `AutoHotkey.ahk`        | Returns 1-based monitor number                                                |
+| `GetCursorMonitor()`                  | `AutoHotkey.ahk`        | Returns 1-based monitor index for cursor                                      |
+| `IsProcessElevated(pid)`              | `AutoHotkey.ahk`        | Checks admin privileges via token                                             |
+| `UserRun(exe, args*)`                 | `AutoHotkey.ahk`        | Smart process execution with elevation and quoting                            |
+| `HasVal(arr, val)`                    | `AutoHotkey.ahk`        | Check if array contains value (partial match)                                 |
+| `IsRemoteSession()`                   | `AutoHotkey.ahk`        | Returns true if inside RDP/Hyper-V/VMware (checks window class)               |
+| `FindInPath(exe)`                     | `AutoHotkey.ahk`        | Resolves exe name (e.g., `"wt.exe"`) to full PATH entry, or `""` if not found |
+| `GetExplorerPath()`                   | `AutoHotkey.ahk`        | Active Explorer window's filesystem path (tab-aware); `""` if not filesystem  |
+| `ProcessExistsByCommandLine(cmdLine)` | `AutoHotkey.ahk`        | Find PID by command line match via WMI                                        |
+| `GetUIAProcessId(hwnd)`               | `AutoHotkey.ahk`        | UIA content process PID (resolves UWP/Electron host)                          |
+| `GetUIAElementInfo(x, y)`             | `extended-spy.ahk`      | UIA element properties at screen coordinates                                  |
+| `GetScrollPos(hwnd)`                  | `mbutton-drag.ahk`      | Win32 vertical scroll position                                                |
+| `HasWin32Scrollbar(hwnd)`             | `mbutton-drag.ahk`      | Checks if Win32 scrollbar exists                                              |
+| `WrapList(text, delim, maxLen)`       | `extended-spy.ahk`      | Wraps delimited text preserving items                                         |
+| `CleanWindowText(text)`               | `extended-spy.ahk`      | Removes non-ASCII, dedupes long text                                          |
+| `FilterLongItems(text, maxLen)`       | `extended-spy.ahk`      | Removes items >maxLen from list                                               |
+| `SortList(text)`                      | `extended-spy.ahk`      | Sorts comma-separated items alphabetically                                    |
+| `OpenTerminal(opts)`                  | `terminal-anywhere.ahk` | Open WT with elevation options                                                |
+| `GetTerminalDir()`                    | `terminal-anywhere.ahk` | Working directory from active window context                                  |
 
 ## Conventions
 
@@ -414,7 +418,7 @@ No automated tests. Manual verification required:
 
 ---
 
-## Explorer Smooth Scroll (`mbutton-scroll.ahk`)
+## Explorer Smooth Scroll (`mbutton-drag.ahk`)
 
 The MButton scroll system intercepts middle-click-drag and converts it to smooth scrolling. It uses a **10ms timer** (`MBScrollTimer`) for continuous scrolling while the button is held, with a power-curve acceleration model (`absEffective^0.8` up to 100px, `+ (excess)^0.6` beyond).
 
@@ -543,7 +547,7 @@ If overlay (Start menu) was recently visible (`WS.OverlayTick` < 2s) AND a **dif
 
 **Z-order fallback protection**: When the foreground window is destroyed, `WS.ZOrderFallbackTick` is set and all intent detection (Tier 1 and Tier 2) is skipped for the next 200ms — the subsequent activation is Windows selecting the next z-order window, not user intent. Additionally, `WS.OverlayTick` is cleared on foreground destruction and when the previous window was minimized (belt-and-suspenders for Tier 2).
 
-*Note: Z-order fallback protection was added based on observed false positives where closing a window caused the bottom-most WT to move. If similar issues recur, enable `WS.Debug := 1` and check `%TEMP%\WS_Debug.log` for the event sequence.*
+_Note: Z-order fallback protection was added based on observed false positives where closing a window caused the bottom-most WT to move. If similar issues recur, enable `WS.Debug := 1` and check `%TEMP%\WS_Debug.log` for the event sequence._
 
 **Retained guards** (not intent-based):
 
