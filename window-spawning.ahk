@@ -10,10 +10,8 @@
 ;   Tier 2 — Overlay-launch detection (UWP apps via Start menu / Action Center)
 
 WS_Init() {
-  global WS
+  global WS, DebugLogEvents, DebugLogPath
   WS := {}
-  WS.Debug := 0                    ; Debug logging (0=off, 1=on)
-  WS.LogFile := A_Temp . "\WS_Debug.log"
   WS.LastForegroundHwnd := 0
   WS.OverlayTick := 0              ; A_TickCount when non-movable overlay activated
   WS.ZOrderFallbackTick := 0       ; A_TickCount when foreground destroyed (z-order fallback imminent)
@@ -57,13 +55,10 @@ WS_Init() {
     , "UInt", 0x8000, "UInt", 0x8000   ; EVENT_OBJECT_CREATE
     , "Ptr", 0, "Ptr", WS.WinEventCB
     , "UInt", 0, "UInt", 0, "UInt", 0x0002, "Ptr")  ; WINEVENT_OUTOFCONTEXT
-  if (WS.Debug) {
-    _logFile := WS.LogFile
-    FileDelete, %_logFile%
+  if (DebugLogEvents)
     WS_Log("INIT: SHOW=" . (WS.EventHookShow ? "OK" : "FAIL")
       . " UNCLOAK=" . (WS.EventHookUncloak ? "OK" : "FAIL")
       . " CREATE=" . (WS.EventHookCreate ? "OK" : "FAIL"))
-  }
   SetTimer, WS_SweepTracking, 1000
   OnExit("WS_Cleanup")
 }
@@ -94,7 +89,7 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
       _rcAge := A_TickCount - _rcEntry.tick
       if (_rcAge < 3000) {
         WS.RecentExes[_rcEntry.exe] := A_TickCount
-        if (WS.Debug)
+        if (DebugLogEvents)
           WS_Log("INTENT-SIGNAL: exe=" . _rcEntry.exe . " lived=" . _rcAge . "ms")
       }
     }
@@ -113,13 +108,13 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
       WinGetClass, _nmClass, ahk_id %lParam%
       if (_nmClass == "") {
         WS.OverlayTick := A_TickCount
-        if (WS.Debug)
+        if (DebugLogEvents)
           WS_Log("OVERLAY (infra): hwnd=" . lParam)
         return
       }
       if (_nmClass == "Shell_TrayWnd" || _nmClass == "Shell_SecondaryTrayWnd") {
         WS.OverlayTick := A_TickCount
-        if (WS.Debug)
+        if (DebugLogEvents)
           WS_Log("OVERLAY (taskbar): hwnd=" . lParam)
         return
       }
@@ -129,7 +124,7 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
           return
       }
       WS.OverlayTick := A_TickCount
-      if (WS.Debug) {
+      if (DebugLogEvents) {
         WinGet, _nmExe, ProcessName, ahk_id %lParam%
         WS_Log("OVERLAY: class=" . _nmClass . " exe=" . _nmExe . " hwnd=" . lParam)
       }
@@ -141,7 +136,7 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
     ; is Windows selecting the next window in z-order, not user intent.
     if (WS.ZOrderFallbackTick && (A_TickCount - WS.ZOrderFallbackTick) < 200) {
       WS.ZOrderFallbackTick := 0
-      if (WS.Debug)
+      if (DebugLogEvents)
         WS_Log("SKIP (z-order-fallback): hwnd=" . lParam)
       return
     }
@@ -163,7 +158,7 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
       if (_intentAge < 5000) {
         _hasIntent := true
         WS.RecentExes.Delete(_actExe)
-        if (WS.Debug)
+        if (DebugLogEvents)
           WS_Log("INTENT (brief-process): exe=" . _actExe . " age=" . _intentAge . "ms")
       }
     }
@@ -173,14 +168,14 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
       _overlayAge := A_TickCount - WS.OverlayTick
       if (_overlayAge < 2000 && lParam != prevHwnd) {
         _hasIntent := true
-        if (WS.Debug)
+        if (DebugLogEvents)
           WS_Log("INTENT (overlay-launch): exe=" . _actExe . " overlay=" . _overlayAge . "ms ago")
       }
     }
     WS.OverlayTick := 0
 
     if (!_hasIntent) {
-      if (WS.Debug) {
+      if (DebugLogEvents) {
         WinGetTitle, _dbgTitle, ahk_id %lParam%
         WS_Log("SKIP (no-intent): """ . _dbgTitle . """ exe=" . _actExe)
       }
@@ -191,7 +186,7 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
     MouseGetPos,,, _mouseWin
     WinGetClass, _mouseClass, ahk_id %_mouseWin%
     if (_mouseClass == "Shell_TrayWnd" || _mouseClass == "Shell_SecondaryTrayWnd") {
-      if (WS.Debug) {
+      if (DebugLogEvents) {
         WinGetTitle, _dbgTitle, ahk_id %lParam%
         WS_Log("SKIP (taskbar-click): """ . _dbgTitle . """")
       }
@@ -202,7 +197,7 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
     if (windowMon == cursorMon)
       return
     WS_MoveToMonitor(lParam, windowMon, cursorMon)
-    if (WS.Debug) {
+    if (DebugLogEvents) {
       WinGetTitle, _dbgTitle, ahk_id %lParam%
       WS_Log("MOVED (activate): """ . _dbgTitle . """ mon " . windowMon . " -> " . cursorMon)
     }
@@ -219,7 +214,7 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
   ; Use pre-registered target from CREATE event if available
   if (WS.PrePending.HasKey(lParam + 0)) {
     ppEntry := WS.PrePending.Delete(lParam + 0)
-    if (WS.Debug) {
+    if (DebugLogEvents) {
       ctDeltaUs := Round((WS_QPC() - ppEntry.qpc) * 1000000 / WS.QPCFreq)
       WS_Log("SHELL: hwnd=" . lParam . " create-to-shell=" . ctDeltaUs . "µs")
     }
@@ -229,11 +224,11 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
         windowMon := GetMonitor("ahk_id " . lParam)
         if (windowMon != targetMon) {
           WS_MoveToMonitor(lParam, windowMon, targetMon)
-          if (WS.Debug) {
+          if (DebugLogEvents) {
             WinGetTitle, _dbgTitle, ahk_id %lParam%
             WS_Log("MOVED (create-shell): """ . _dbgTitle . """ mon " . windowMon . " -> " . targetMon . " +" . (A_TickCount - ppEntry.tick) . "ms")
           }
-        } else if (WS.Debug) {
+        } else if (DebugLogEvents) {
           WinGetTitle, _dbgTitle, ahk_id %lParam%
           WS_Log("OK (create-shell): """ . _dbgTitle . """ already on mon " . windowMon)
         }
@@ -252,7 +247,7 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
     SetTimer, %_fn%, -200
     _fn2 := Func("WS_TimeoutPending").Bind(lParam + 0)
     SetTimer, %_fn2%, -2000
-    if (WS.Debug) {
+    if (DebugLogEvents) {
       WinGetTitle, _dbgTitle, ahk_id %lParam%
       WinGetClass, _dbgClass, ahk_id %lParam%
       WS_Log("DEFERRED (create-path): hwnd=" . lParam . " """ . _dbgTitle . """ class=" . _dbgClass)
@@ -266,11 +261,11 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
       windowMon := GetMonitor("ahk_id " . lParam)
       if (windowMon != cursorMon) {
         WS_MoveToMonitor(lParam, windowMon, cursorMon)
-        if (WS.Debug) {
+        if (DebugLogEvents) {
           WinGetTitle, _dbgTitle, ahk_id %lParam%
           WS_Log("MOVED (instant): """ . _dbgTitle . """ mon " . windowMon . " -> " . cursorMon)
         }
-      } else if (WS.Debug) {
+      } else if (DebugLogEvents) {
         WinGetTitle, _dbgTitle, ahk_id %lParam%
         WS_Log("OK (instant): """ . _dbgTitle . """ already on mon " . windowMon)
       }
@@ -288,7 +283,7 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
   SetTimer, %_fn%, -200
   _fn2 := Func("WS_TimeoutPending").Bind(lParam + 0)
   SetTimer, %_fn2%, -2000
-  if (WS.Debug) {
+  if (DebugLogEvents) {
     WinGetTitle, _dbgTitle, ahk_id %lParam%
     WinGetClass, _dbgClass, ahk_id %lParam%
     WS_Log("DEFERRED: hwnd=" . lParam . " """ . _dbgTitle . """ class=" . _dbgClass)
@@ -321,7 +316,7 @@ WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTim
     if (_ppOwner && WS.OwnerSentinel.HasKey(_ppOwner + 0)) {
       if (A_TickCount - WS.OwnerSentinel[_ppOwner + 0] < 200) {
         WS.Hidden[hwnd] := -1
-        if (WS.Debug) {
+        if (DebugLogEvents) {
           WinGetClass, _dbgClass, ahk_id %hwnd%
           WS_Log("CREATE-SKIP-OWNER: hwnd=" . hwnd . " class=" . _dbgClass
             . " owner=" . Format("0x{:08X}", _ppOwner))
@@ -342,13 +337,13 @@ WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTim
     if (!_hadLayered)
       DllCall("SetWindowLong", "Ptr", hwnd, "Int", -20, "Ptr", _ppExStyle | 0x80000)  ; +WS_EX_LAYERED
     DllCall("SetLayeredWindowAttributes", "Ptr", hwnd, "UInt", 0
-      , "UChar", WS.Debug ? 128 : 0, "UInt", 0x2)  ; LWA_ALPHA
+      , "UChar", DebugLogEvents ? 128 : 0, "UInt", 0x2)  ; LWA_ALPHA
     WS.Hidden[hwnd] := _hadLayered
     ; Now capture cursor/monitor (safe to do after hide)
     cursorMon := GetCursorMonitor()
     windowMon := GetMonitor("ahk_id " . hwnd)
     WS.PrePending[hwnd] := {mon: cursorMon, tick: A_TickCount, qpc: WS_QPC()}
-    if (WS.Debug) {
+    if (DebugLogEvents) {
       WinGetClass, _dbgClass, ahk_id %hwnd%
       WS_Log("CREATE: hwnd=" . hwnd . " class=" . _dbgClass . " hide mon " . cursorMon
         . (windowMon && windowMon != cursorMon ? " (from " . windowMon . ")" : ""))
@@ -359,7 +354,7 @@ WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTim
   ; --- PrePending SHOW/UNCLOAK fast path ---
   if (WS.PrePending.HasKey(hwnd)) {
     ppEntry := WS.PrePending.Delete(hwnd)
-    if (WS.Debug) {
+    if (DebugLogEvents) {
       _evName := (event == 0x8002) ? "SHOW" : "UNCLOAK"
       WinGetTitle, _dbgTitle, ahk_id %hwnd%
       WinGetClass, _dbgClass, ahk_id %hwnd%
@@ -371,11 +366,11 @@ WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTim
       windowMon := GetMonitor("ahk_id " . hwnd)
       if (windowMon != ppEntry.mon) {
         WS_MoveToMonitor(hwnd, windowMon, ppEntry.mon)
-        if (WS.Debug) {
+        if (DebugLogEvents) {
           WinGetTitle, _dbgTitle, ahk_id %hwnd%
           WS_Log("MOVED (create-show): """ . _dbgTitle . """ mon " . windowMon . " -> " . ppEntry.mon . " +" . (A_TickCount - ppEntry.tick) . "ms")
         }
-      } else if (WS.Debug) {
+      } else if (DebugLogEvents) {
         WinGetTitle, _dbgTitle, ahk_id %hwnd%
         WS_Log("OK (create-show): """ . _dbgTitle . """ already on mon " . windowMon)
       }
@@ -424,7 +419,7 @@ WS_ProcessPending(hwnd, targetMon, source:="event", tick:=0) {
   windowMon := GetMonitor("ahk_id " . hwnd)
   if (windowMon != targetMon) {
     WS_MoveToMonitor(hwnd, windowMon, targetMon)
-    if (WS.Debug) {
+    if (DebugLogEvents) {
       _elapsed := tick ? A_TickCount - tick : 0
       WinGetTitle, _dbgTitle, ahk_id %hwnd%
       WS_Log("MOVED (" . source . "): """ . _dbgTitle . """ mon " . windowMon . " -> " . targetMon . " +" . _elapsed . "ms")
@@ -501,7 +496,7 @@ WS_SweepTracking:
     }
     if (!WS.PrePending.HasKey(_h) && !WS.Pending.HasKey(_h)) {
       _staleKeys.Push(_h)
-      if (WS.Debug)
+      if (DebugLogEvents)
         WS_Log("ORPHAN-REVEAL: hwnd=" . _h)
       DllCall("SetLayeredWindowAttributes", "Ptr", _h, "UInt", 0, "UChar", 255, "UInt", 0x2)
       if (!_val)
@@ -723,7 +718,6 @@ WS_QPC() {
 }
 
 WS_Log(msg) {
-  global WS
-  _logFile := WS.LogFile
-  FileAppend, %A_Hour%:%A_Min%:%A_Sec% [%A_TickCount%] %msg%`n, %_logFile%
+  global DebugLogPath
+  FileAppend, %A_Now% | WS | %msg%`n, %DebugLogPath%
 }
