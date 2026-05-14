@@ -1,2 +1,6 @@
 # Claude Code atomic write temp files (orphaned on race conditions/interrupts)
 *.tmp.*
+
+# Local privilege helper binaries (not tracked - obtain from trusted sources)
+ti.exe
+RunFromProcess-x64.exe

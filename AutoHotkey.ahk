@@ -20,8 +20,10 @@ SetTitleMatchMode, 2
 
 ; Debug flags
 DebugTooltips := 0
-DebugLogEvents := 1
+DebugLogEvents := 0
 DebugLogPath := A_Temp "\AHK_Debug.log"
+If (DebugLogEvents)
+    FileDelete, %DebugLogPath%  ; Clear log on reload
 
 ; Disable hotkeys inside remote sessions (RDP, Hyper-V, VMWare)
 #If IsRemoteSession()
@@ -29,9 +31,6 @@ DebugLogPath := A_Temp "\AHK_Debug.log"
     OnExit("MB_Cleanup")
     WS_Init() ; Init window spawning
     TerminalInit()
-    ; Clear debug log on reload
-    If (DebugLogEvents)
-      FileDelete, %DebugLogPath%
   }
   Return
 #If

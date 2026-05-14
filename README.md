@@ -122,7 +122,7 @@ You can target any combination of these to manipulate any window or control usin
 ### _Peer Review Hardening_
 
 - **UserRun() injection fix** — all arguments are now unconditionally quoted (single-quoted for PowerShell, double-quoted for direct execution) with proper internal-quote escaping. Prevents command injection via metacharacters (`&`, `;`, `$`, `|`) regardless of argument content
-- **MButton timer race condition fix** — `Critical` sections in both `MBScrollTimer` and `MButton Up` prevent pseudo-thread interruption during COM DllCalls. Null guard for `MB_ScrollPattern` provides belt-and-suspenders protection against Access Violations
+- **MButton timer race condition fix** — `Critical` sections in both `MBDragTimer` and `MButton Up` prevent pseudo-thread interruption during COM DllCalls. Null guard for `MB_ScrollPattern` provides belt-and-suspenders protection against Access Violations
 - **`#Requires AutoHotkey v1.1.14+`** — minimum version now enforced, enabling `Try/Finally` blocks
 - **UserRun() executable quoting** — direct-execution path now quotes the executable, preventing breakage on paths with spaces (e.g., `C:\Program Files\Everything 1.5a\Everything.exe`)
 - **Explorer restart via `cmd /c`** — chained `taskkill && start explorer.exe` routed through `cmd` so `&&` is interpreted as a shell operator

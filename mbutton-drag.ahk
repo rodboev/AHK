@@ -32,7 +32,7 @@ ScrollCurve(dist) {
 
 ; -> [ MButton + drag ] -> Invoke smooth scrolling on any app; release to stop.
 *MButton::
-  global MB_Debug := 1  ; Debug tooltips (0=off, 1=on)
+  global MB_Debug := 0  ; Debug tooltips (0=off, 1=on)
   global MB_X1, MB_Y1, MB_Win, MB_ClassName, MB_Triggered, MB_ProcName
   global MB_ScrollPattern := 0, MB_Element := 0, MB_Ctrl
   global MB_Disabled := 0, MB_DeferredDown := 0, MB_ViewSize := 10.0, MB_AccumPct := -1
@@ -41,6 +41,16 @@ ScrollCurve(dist) {
   global MB_FallbackChecked := 0  ; Check fallback once per drag
   global MB_NativeProbe := 0, MB_InitScrollPos := 0, MB_InitScrollPct := 0.0, MB_InitHCursor := 0
   global MB_ScrollTicks := 0, MB_SessionStart := 0  ; For logging
+  ; LVM-specific: row-quantization detection and EMA axis tracking
+  global MB_LVM_Detected := 0       ; 0=not yet, 1=detected
+  global MB_LVM_RowQuantized := 0   ; 0=pixel-level (dual-axis OK), 1=row-quantized (needs EMA restriction)
+  global MB_LVM_RowHeight := 20     ; Detected row height or default
+  global MB_LVM_DetectConfident := 0  ; 1 if detection was high-confidence (ratio-based), prevents SLOW-TICK override
+  global MB_EMA_Y := 0.0, MB_EMA_X := 0.0  ; Movement intensity EMAs for axis determination
+  global MB_PrevDistY := 0, MB_PrevDistX := 0  ; Previous tick's distance (for delta calc)
+  ; Boundary detection: tracks when vertical scrolling hits min/max and stops sending futile messages
+  ; 0=free, -1=stuck at min (can't scroll up), 1=stuck at max (can't scroll down)
+  global MB_LVM_BoundaryY := 0
 
   ; ===========================================
   ; UI Automation (UIA) — Lazy init on first MButton use
@@ -108,7 +118,7 @@ ScrollCurve(dist) {
   If (InStr(MB_ClassName, "SysTreeView32")) {
     MB_Method := "VSCROLL"
     MB_NativeProbe := 0
-    SetTimer, MBScrollTimer, 150
+    SetTimer, MBDragTimer, 150
     Return
   }
 
@@ -121,9 +131,9 @@ ScrollCurve(dist) {
       ToolTip, % "SysListView32 → LVM_SCROLL (pixel-level)"
     If (DebugLogEvents) {
       _ts := A_Now
-      FileAppend, %_ts% | MBScroll | START | proc=%MB_ProcName% method=LVM ctrl=%MB_ClassName%`n, %DebugLogPath%
+      FileAppend, %_ts% | MBDrag | START | proc=%MB_ProcName% method=LVM ctrl=%MB_ClassName%`n, %DebugLogPath%
     }
-    SetTimer, MBScrollTimer, 10
+    SetTimer, MBDragTimer, 10
     Return
   }
 
@@ -152,17 +162,19 @@ ScrollCurve(dist) {
 
   ; Start timer in native probe mode
   MB_NativeProbe := 1
-  SetTimer, MBScrollTimer, 10
+  SetTimer, MBDragTimer, 10
 Return 
 
-MBScrollTimer:
+MBDragTimer:
   Critical ; Prevent MButton Up from interrupting mid-DllCall (race condition safety)
   global MB_Debug, MB_AccumPct, MB_AccumPctH, MB_Method, MB_ViewSize, MB_ViewSizeH, MB_Ctrl, MB_FallbackChecked
   global MB_NativeProbe, MB_InitScrollPos, MB_InitScrollPct, MB_InitHCursor
   global MB_ProcName, MB_ScrollTicks, DebugLogEvents, DebugLogPath
+  global MB_LVM_Detected, MB_LVM_RowQuantized, MB_LVM_RowHeight, MB_LVM_DetectConfident, MB_LVM_BoundaryY
+  global MB_EMA_Y, MB_EMA_X, MB_PrevDistY, MB_PrevDistX
   ; Safety check: if MButton released, stop immediately
   If !GetKeyState("MButton", "P") {
-    SetTimer, MBScrollTimer, Off
+    SetTimer, MBDragTimer, Off
     If (MB_Debug)
       ToolTip
     Return
@@ -222,7 +234,7 @@ MBScrollTimer:
         ObjRelease(MB_Element)
         MB_Element := 0
       }
-      SetTimer, MBScrollTimer, Off
+      SetTimer, MBDragTimer, Off
       If (MB_Debug) {
         VarSetCapacity(ci2, 16 + A_PtrSize, 0)
         NumPut(16 + A_PtrSize, ci2, 0, "UInt")
@@ -248,7 +260,7 @@ MBScrollTimer:
     ; Log session start
     If (DebugLogEvents) {
       _ts := A_Now
-      FileAppend, %_ts% | MBScroll | START | proc=%MB_ProcName% method=%MB_Method% ctrl=%MB_ClassName% pattern=%MB_ScrollPattern% viewV=%MB_ViewSize% viewH=%MB_ViewSizeH%`n, %DebugLogPath%
+      FileAppend, %_ts% | MBDrag | START | proc=%MB_ProcName% method=%MB_Method% ctrl=%MB_ClassName% pattern=%MB_ScrollPattern% viewV=%MB_ViewSize% viewH=%MB_ViewSizeH%`n, %DebugLogPath%
     }
     ; Fall through to custom scroll logic below
   }
@@ -272,7 +284,7 @@ MBScrollTimer:
       ; Two-tick verification: tick 1 captures before-state, tick 2 cross-validates
       ; ===========================================
       If (!MB_ScrollPattern) {
-        SetTimer, MBScrollTimer, Off
+        SetTimer, MBDragTimer, Off
         Return
       }
       ; Initialize vertical accumulator
@@ -297,12 +309,12 @@ MBScrollTimer:
       MB_AccumPct := MB_AccumPct + deltaPctY
       MB_AccumPct := (MB_AccumPct < 0) ? 0 : (MB_AccumPct > 100) ? 100 : MB_AccumPct
 
-      ; Horizontal scroll delta (skip if NoScroll sentinel -1)
+      ; Horizontal scroll delta (skip if NoScroll sentinel -1) — 1.5x faster than vertical
       If (MB_AccumPctH >= 0) {
         signDirX := (SignedDistX > 0) ? 1 : -1
         viewMultiplierH := MB_ViewSizeH / 3.0
         viewMultiplierH := Max(0.25, Min(viewMultiplierH, 50.0))
-        deltaPctH := signDirX * curveValueX * 0.006 * viewMultiplierH
+        deltaPctH := signDirX * curveValueX * 0.006 * viewMultiplierH * 1.5
         MB_AccumPctH := MB_AccumPctH + deltaPctH
         MB_AccumPctH := (MB_AccumPctH < 0) ? 0 : (MB_AccumPctH > 100) ? 100 : MB_AccumPctH
       }
@@ -320,7 +332,7 @@ MBScrollTimer:
         _uiaMs := Round((_qpcAfter - _qpcBefore) * 1000.0 / _qpcFreq, 2)
         _scrollTarget := MB_Ctrl ? MB_Ctrl : MB_Win
         _win32Pos := GetScrollPos(_scrollTarget)
-        FileAppend, % A_Now " | MBScroll | UIA | proc=" MB_ProcName " tick=" MB_ScrollTicks " V=" Round(MB_AccumPct, 1) " H=" Round(MB_AccumPctH, 1) " win32=" _win32Pos " callMs=" _uiaMs "`n", %DebugLogPath%
+        FileAppend, % A_Now " | MBDrag | UIA | proc=" MB_ProcName " tick=" MB_ScrollTicks " V=" Round(MB_AccumPct, 1) " H=" Round(MB_AccumPctH, 1) " win32=" _win32Pos " callMs=" _uiaMs "`n", %DebugLogPath%
       }
 
       ; Verify UIA: only fall back on NoScroll sentinel (-1)
@@ -339,7 +351,7 @@ MBScrollTimer:
           If (MB_Debug)
             ToolTip, % "UIA->WHEEL (NoScroll sentinel)"
           If (DebugLogEvents)
-            FileAppend, % A_Now " | MBScroll | FALLBACK | proc=" MB_ProcName " UIA->WHEEL (NoScroll sentinel)`n", %DebugLogPath%
+            FileAppend, % A_Now " | MBDrag | FALLBACK | proc=" MB_ProcName " UIA->WHEEL (NoScroll sentinel)`n", %DebugLogPath%
         } Else {
           MB_FallbackChecked := 1  ; UIA is valid, no further verification needed
         }
@@ -348,75 +360,232 @@ MBScrollTimer:
     } Else If (MB_Method = "LVM") {
       ; ===========================================
       ; LVM_SCROLL (0x1014) — pixel-level ListView scrolling
-      ; Avoids UIA percentage quantization jitter on short lists
+      ; Detects row-quantized vs pixel-level on first scroll:
+      ;   - Pixel-level (TortoiseGit): dual-axis allowed freely
+      ;   - Row-quantized (FullEventLogView): EMA axis restriction + 2x horizontal
       ; ===========================================
       target := MB_Ctrl ? MB_Ctrl : MB_Win
 
-      ; Apply power curve with scroll speed scaling
-      ; Pixels per tick at 10ms: ~1px at threshold (8px drag), ~25px at 100px drag, ~40px at 300px
-      pixelMultiplier := 0.6  ; Base sensitivity
+      ; Get item count for normalization (more items = slower scroll per tick)
+      SendMessage, 0x1004, 0, 0,, ahk_id %target%  ; LVM_GETITEMCOUNT
+      itemCount := ErrorLevel
 
-      ; SCROLLINFO struct for proper bounds (accounts for page size)
-      ; Max scrollable position = nMax - max(nPage - 1, 0)
-      VarSetCapacity(si, 28, 0)
-      NumPut(28, si, 0, "UInt")  ; cbSize
-      NumPut(0x17, si, 4, "UInt")  ; fMask = SIF_ALL
+      ; Normalize scroll speed based on item count (only for quantized controls)
+      ; - Quantized: sqrt curve, 20 items = 1.0x, range 0.5x to 1.5x
+      ; - Pixel-level: no normalization (1.0x always)
+      If (MB_LVM_RowQuantized) {
+        normMultiplier := (itemCount > 0) ? Max(0.5, Min(1.5, Sqrt(20.0 / itemCount))) : 1.0
+      } Else {
+        normMultiplier := 1.0
+      }
+      pixelMultiplier := 1.0 * normMultiplier
 
-      ; Vertical: only if vertical movement exceeds threshold
+      ; Calculate scroll values (before detection, needed for detection probe)
+      scrollPixelsY := 0
+      scrollPixelsX := 0
       If (AbsDistY >= 8) {
-        scrollPixelsY := Max(1, Floor(curveValueY * pixelMultiplier))
+        scrollPixelsY := Max(1, Min(MB_LVM_RowHeight + 1, Floor(curveValueY * pixelMultiplier)))
         If (SignedDistY < 0)
           scrollPixelsY := -scrollPixelsY
-
-        ; Get scroll info for proper bounds
-        DllCall("GetScrollInfo", "Ptr", target, "Int", 1, "Ptr", &si)  ; SB_VERT=1
-        siMin := NumGet(si, 8, "Int")
-        siMax := NumGet(si, 12, "Int")
-        siPage := NumGet(si, 16, "UInt")
-        siPos := NumGet(si, 20, "Int")
-        ; Actual max position accounts for page size
-        actualMaxY := siMax - (siPage > 1 ? siPage - 1 : 0)
-
-        newPosY := siPos + scrollPixelsY
-        If (newPosY < siMin)
-          scrollPixelsY := siMin - siPos
-        Else If (newPosY > actualMaxY)
-          scrollPixelsY := actualMaxY - siPos
-
-        If (scrollPixelsY != 0)
-          SendMessage, 0x1014, 0, %scrollPixelsY%,, ahk_id %target%
       }
-
-      ; Horizontal: same treatment with bounds check
       If (AbsDistX >= 8) {
-        scrollPixelsX := Max(1, Floor(curveValueX * pixelMultiplier))
+        horizMultiplier := MB_LVM_RowQuantized ? 3.0 : 1.0
+        scrollPixelsX := Max(1, Floor(curveValueX * pixelMultiplier * horizMultiplier))
         If (SignedDistX < 0)
           scrollPixelsX := -scrollPixelsX
+      }
 
-        ; Get scroll info for proper bounds
-        DllCall("GetScrollInfo", "Ptr", target, "Int", 0, "Ptr", &si)  ; SB_HORZ=0
-        siMin := NumGet(si, 8, "Int")
-        siMax := NumGet(si, 12, "Int")
-        siPage := NumGet(si, 16, "UInt")
-        siPos := NumGet(si, 20, "Int")
-        actualMaxX := siMax - (siPage > 1 ? siPage - 1 : 0)
+      ; --- Row-quantization detection on first vertical scroll ---
+      If (!MB_LVM_Detected and AbsDistY >= 8) {
+        posBefore := GetScrollPos(target)
+        SendMessage, 0x1014, 0, %scrollPixelsY%,, ahk_id %target%
+        posAfter := GetScrollPos(target)
+        scrollDelta := Abs(posAfter - posBefore)
+        sentPixels := Abs(scrollPixelsY)
 
-        newPosX := siPos + scrollPixelsX
-        If (newPosX < siMin)
-          scrollPixelsX := siMin - siPos
-        Else If (newPosX > actualMaxX)
-          scrollPixelsX := actualMaxX - siPos
+        ; Check ListView styles for diagnosis
+        WinGet, _lvStyle, Style, ahk_id %target%
+        _isVirtual := (_lvStyle & 0x1000) ? 1 : 0      ; LVS_OWNERDATA
+        _isOwnerDraw := (_lvStyle & 0x0400) ? 1 : 0   ; LVS_OWNERDRAWFIXED
 
-        If (scrollPixelsX != 0)
-          SendMessage, 0x1014, %scrollPixelsX%, 0,, ahk_id %target%
+        ; Detection logic:
+        ; - delta ≈ sentPixels (within 0.3x-1.5x): pixel-level scrolling (HIGH CONFIDENCE)
+        ; - delta=0 with virtual=1: below row threshold → row-quantized (HIGH CONFIDENCE)
+        ; - delta=0 with virtual=0: might be at boundary, assume pixel-level (LOW CONFIDENCE)
+        ; - delta way off from sent: row-quantized
+        deltaRatio := (sentPixels > 0) ? (scrollDelta / sentPixels) : 0
+        If (deltaRatio >= 0.3 and deltaRatio <= 1.5) {
+          ; Pixel-level: delta ≈ sentPixels (high confidence - prevents SLOW-TICK override)
+          MB_LVM_RowQuantized := 0
+          MB_LVM_DetectConfident := 1
+          If (DebugLogEvents)
+            FileAppend, % A_Now " | MBDrag | DETECT | proc=" MB_ProcName " PIXEL-LEVEL delta=" scrollDelta " sent=" sentPixels " ratio=" Round(deltaRatio, 2) " virtual=" _isVirtual "`n", %DebugLogPath%
+        } Else If (scrollDelta = 0 and !_isVirtual) {
+          ; delta=0 on non-virtual ListView: likely at boundary, assume pixel-level (low confidence)
+          MB_LVM_RowQuantized := 0
+          MB_LVM_DetectConfident := 0  ; Allow SLOW-TICK to upgrade if truly slow
+          If (DebugLogEvents)
+            FileAppend, % A_Now " | MBDrag | DETECT | proc=" MB_ProcName " PIXEL-LEVEL (boundary) delta=0 sent=" sentPixels " virtual=" _isVirtual "`n", %DebugLogPath%
+        } Else If (_isVirtual) {
+          ; Virtual ListView with delta off → row-quantized (high confidence)
+          MB_LVM_RowQuantized := 1
+          MB_LVM_DetectConfident := 1
+          MB_LVM_RowHeight := (scrollDelta > 0 and scrollDelta > sentPixels) ? scrollDelta : 20
+          If (DebugLogEvents)
+            FileAppend, % A_Now " | MBDrag | DETECT | proc=" MB_ProcName " ROW-QUANTIZED rowH=" MB_LVM_RowHeight " delta=" scrollDelta " sent=" sentPixels " ratio=" Round(deltaRatio, 2) " virtual=" _isVirtual "`n", %DebugLogPath%
+        } Else {
+          ; Non-virtual with weird ratio: uncertain, stay pixel-level but allow upgrade
+          MB_LVM_RowQuantized := 0
+          MB_LVM_DetectConfident := 0
+          If (DebugLogEvents)
+            FileAppend, % A_Now " | MBDrag | DETECT | proc=" MB_ProcName " PIXEL-LEVEL (uncertain) delta=" scrollDelta " sent=" sentPixels " ratio=" Round(deltaRatio, 2) " virtual=" _isVirtual "`n", %DebugLogPath%
+        }
+        MB_LVM_Detected := 1
+        ; Show detection result in tooltip
+        If (MB_Debug) {
+          _mode := MB_LVM_RowQuantized ? "Q" : "P"
+          ToolTip, % "LVM[" _mode "] detected (delta=" scrollDelta " virt=" _isVirtual ")"
+        }
+        ; Set position variables for tooltip (detection scroll already sent)
+        _posBeforeY := posBefore, _posAfterY := posAfter
+        DllCall("GetScrollRange", "Ptr", target, "Int", 1, "Int*", _scrollMinY, "Int*", _scrollMaxY)
+        _atBoundaryY := false
+        DllCall("QueryPerformanceCounter", "Int64*", _qpcScrollStart)  ; For timing calc
+        ; First vertical scroll already sent, skip to EMA/horizontal below
+        MB_ScrollTicks++
+        Goto, LVM_PostVertical
+      }
+
+      ; --- EMA axis determination (row-quantized apps only) ---
+      scrollAxisY := true
+      scrollAxisX := true
+      If (MB_LVM_RowQuantized) {
+        ; Vertical bias: require horizontal distance >= rowHeight to consider horizontal
+        ; (vertical scrolling is far more common in list views)
+        horizThreshold := MB_LVM_RowHeight
+
+        ; Calculate movement deltas since last tick
+        deltaY := Abs(SignedDistY - MB_PrevDistY)
+        deltaX := Abs(SignedDistX - MB_PrevDistX)
+        MB_PrevDistY := SignedDistY
+        MB_PrevDistX := SignedDistX
+
+        ; Update EMAs (alpha=0.2: responsive but smooth, natural decay when still)
+        alpha := 0.2
+        MB_EMA_Y := alpha * deltaY + (1 - alpha) * MB_EMA_Y
+        MB_EMA_X := alpha * deltaX + (1 - alpha) * MB_EMA_X
+
+        ; Determine dominant axis (1.5x threshold for lock)
+        ; Transition zone allows diagonal - if app chokes, user will notice and drag more deliberately
+        dominanceRatio := 1.5
+        If (MB_EMA_Y > MB_EMA_X * dominanceRatio) {
+          scrollAxisY := true, scrollAxisX := false
+        } Else If (MB_EMA_X > MB_EMA_Y * dominanceRatio and AbsDistX >= horizThreshold) {
+          ; Horizontal only if EMA dominates AND distance exceeds row height
+          scrollAxisY := false, scrollAxisX := true
+        } Else {
+          ; Default to vertical (more common), allow horizontal only if clearly intended
+          scrollAxisY := (AbsDistY >= 8)
+          scrollAxisX := (AbsDistX >= horizThreshold and MB_EMA_X > MB_EMA_Y)
+        }
+      }
+
+      ; --- Boundary detection: clear flag when vertical direction reverses ---
+      ; If stuck at min (boundary=-1) and now scrolling down (pixels>0), clear
+      ; If stuck at max (boundary=1) and now scrolling up (pixels<0), clear
+      If (scrollPixelsY > 0 and MB_LVM_BoundaryY = -1)
+        MB_LVM_BoundaryY := 0
+      Else If (scrollPixelsY < 0 and MB_LVM_BoundaryY = 1)
+        MB_LVM_BoundaryY := 0
+
+      ; --- Send scroll messages with timing for adaptive boost ---
+      DllCall("QueryPerformanceCounter", "Int64*", _qpcScrollStart)
+
+      ; Get current position and range BEFORE scroll (for boundary pre-check)
+      _posBeforeY := GetScrollPos(target)
+      DllCall("GetScrollRange", "Ptr", target, "Int", 1, "Int*", _scrollMinY, "Int*", _scrollMaxY)
+
+      ; Pre-check: if already at boundary, set flag BEFORE attempting scroll
+      ; This prevents the "one scroll overshoot" where we scroll then detect
+      If (scrollPixelsY < 0 and _posBeforeY <= 0) {
+        MB_LVM_BoundaryY := -1
+      } Else If (scrollPixelsY > 0 and _posBeforeY >= _scrollMaxY and _scrollMaxY > 0) {
+        MB_LVM_BoundaryY := 1
+      }
+
+      ; Check if at vertical boundary (used for both scroll skip and tooltip)
+      _atBoundaryY := (scrollPixelsY < 0 and MB_LVM_BoundaryY = -1) or (scrollPixelsY > 0 and MB_LVM_BoundaryY = 1)
+
+      ; Vertical scroll with boundary detection (skip if at boundary)
+      _posAfterY := _posBeforeY  ; default if we skip
+      If (scrollAxisY and AbsDistY >= 8 and !_atBoundaryY) {
+        SendMessage, 0x1014, 0, %scrollPixelsY%,, ahk_id %target%
+        _posAfterY := GetScrollPos(target)
+        ; Post-check: if we landed at boundary, set flag for next tick
+        ; For MIN: position must be <= 0
+        ; For MAX: position >= declared max, OR position didn't change (actual max differs from GetScrollRange)
+        ;          But only if pos > 0 to avoid false positive at pos=0 scrolling down
+        If (scrollPixelsY < 0 and _posAfterY <= 0) {
+          MB_LVM_BoundaryY := -1  ; At min, can't scroll up
+        } Else If (scrollPixelsY > 0 and _posAfterY > 0 and (_posAfterY >= _scrollMaxY or _posBeforeY = _posAfterY)) {
+          MB_LVM_BoundaryY := 1   ; At max (declared or actual), can't scroll down
+        }
+        ; If position didn't change but we're not at a boundary, don't set flag — scroll was just ignored
+        If (MB_LVM_BoundaryY != 0 and DebugLogEvents)
+          FileAppend, % A_Now " | MBDrag | BOUNDARY | Y axis dir=" MB_LVM_BoundaryY " before=" _posBeforeY " after=" _posAfterY " max=" _scrollMaxY "`n", %DebugLogPath%
+      }
+
+      LVM_PostVertical:
+      ; Recalculate horizontal with correct multiplier (2x for row-quantized views)
+      If (AbsDistX >= 8) {
+        horizMultiplier := MB_LVM_RowQuantized ? 3.0 : 1.0
+        scrollPixelsX := Max(1, Floor(curveValueX * pixelMultiplier * horizMultiplier))
+        If (SignedDistX < 0)
+          scrollPixelsX := -scrollPixelsX
+      }
+
+      ; Horizontal scroll (no boundary tracking needed)
+      If (scrollAxisX and AbsDistX >= 8)
+        SendMessage, 0x1014, %scrollPixelsX%, 0,, ahk_id %target%
+
+      ; --- Timing-based detection: slow tick (>50ms) = virtualized/quantized control ---
+      ; Virtualized ListViews are sluggish because they render rows on-demand.
+      ; This triggers: EMA axis restriction + 2x horizontal boost (same as row-quantized)
+      DllCall("QueryPerformanceCounter", "Int64*", _qpcScrollEnd)
+      DllCall("QueryPerformanceFrequency", "Int64*", _qpcFreq)
+      _scrollMs := (_qpcScrollEnd - _qpcScrollStart) * 1000.0 / _qpcFreq
+      ; Only upgrade if: slow (>50ms), not already quantized, AND detection wasn't confident
+      ; This prevents system hiccups from overriding a solid pixel-level detection
+      If (_scrollMs > 50 and !MB_LVM_RowQuantized and !MB_LVM_DetectConfident) {
+        ; Slow tick = virtualized control, needs axis restriction + horizontal boost
+        MB_LVM_Detected := 1
+        MB_LVM_RowQuantized := 1
+        If (DebugLogEvents)
+          FileAppend, % A_Now " | MBDrag | DETECT | proc=" MB_ProcName " SLOW-TICK->QUANTIZED ms=" Round(_scrollMs) "`n", %DebugLogPath%
       }
 
       MB_ScrollTicks++
-      If (MB_Debug)
-        ToolTip, % "LVM: dY=" (AbsDistY >= 8 ? scrollPixelsY : 0) "px dX=" (AbsDistX >= 8 ? scrollPixelsX : 0) "px dist=" AbsDistY " curve=" Round(curveValueY, 1)
-      ; Log every 5 ticks for debugging
+      If (MB_Debug) {
+        ; Mode format: Q:h (quantized high-conf), P:l (pixel low-conf), ? (not yet detected)
+        ; High confidence: virtual flag or delta-ratio match. Low: boundary guess or slow-tick upgrade
+        If (!MB_LVM_Detected)
+          _mode := "?"
+        Else
+          _mode := (MB_LVM_RowQuantized ? "Q" : "P") . ":" . (MB_LVM_DetectConfident ? "h" : "l")
+        _pxYSent := (scrollAxisY and AbsDistY >= 8 and !_atBoundaryY) ? scrollPixelsY : 0
+        _pxXSent := (scrollAxisX and AbsDistX >= 8) ? scrollPixelsX : 0
+        _boundY := (MB_LVM_BoundaryY = -1) ? " MIN" : (MB_LVM_BoundaryY = 1) ? " MAX" : ""
+        ToolTip, % "LVM[" _mode "] dY=" _pxYSent " dX=" _pxXSent " pos=" _posAfterY "/" _scrollMaxY _boundY
+      }
+      ; Log every 5 ticks
       If (DebugLogEvents && Mod(MB_ScrollTicks, 5) = 0) {
-        FileAppend, % A_Now " | MBScroll | LVM | proc=" MB_ProcName " tick=" MB_ScrollTicks " distY=" AbsDistY " curveY=" Round(curveValueY, 1) " pxY=" scrollPixelsY " distX=" AbsDistX " curveX=" Round(curveValueX, 1) " pxX=" scrollPixelsX "`n", %DebugLogPath%
+        _pxYLog := (scrollAxisY and AbsDistY >= 8 and !_atBoundaryY) ? scrollPixelsY : 0
+        _pxXLog := (scrollAxisX and AbsDistX >= 8) ? scrollPixelsX : 0
+        If (!MB_LVM_Detected)
+          _modeLog := "?"
+        Else
+          _modeLog := (MB_LVM_RowQuantized ? "Q" : "P") . ":" . (MB_LVM_DetectConfident ? "h" : "l")
+        FileAppend, % A_Now " | MBDrag | LVM[" _modeLog "] | proc=" MB_ProcName " tick=" MB_ScrollTicks " dY=" _pxYLog " dX=" _pxXLog " pos=" _posAfterY "/" _scrollMaxY " ms=" Round(_scrollMs) "`n", %DebugLogPath%
       }
 
     } Else If (MB_Method = "WHEEL_CTRL") {
@@ -448,14 +617,14 @@ MBScrollTimer:
           ; If jumped >40 units (typically >1 line), switch to VSCROLL
           If (scrolledUnits > 40) {
             MB_Method := "VSCROLL"
-            SetTimer, MBScrollTimer, 150
+            SetTimer, MBDragTimer, 150
             ; Revert the jump by scrolling opposite direction
             revertDir := (posAfter > posBefore) ? 0 : 1  ; 0=up, 1=down
             PostMessage, 0x115, %revertDir%, 0,, ahk_id %target%  ; WM_VSCROLL
             If (MB_Debug)
               ToolTip, % "WHEEL_CTRL→VSCROLL (jumped " scrolledUnits " units)"
             If (DebugLogEvents)
-              FileAppend, % A_Now " | MBScroll | FALLBACK | proc=" MB_ProcName " WHEEL_CTRL->VSCROLL (jumped " scrolledUnits " units)`n", %DebugLogPath%
+              FileAppend, % A_Now " | MBDrag | FALLBACK | proc=" MB_ProcName " WHEEL_CTRL->VSCROLL (jumped " scrolledUnits " units)`n", %DebugLogPath%
           }
           MB_FallbackChecked := 1
         }
@@ -483,7 +652,7 @@ MBScrollTimer:
       maxDist := (AbsDistY > AbsDistX) ? AbsDistY : AbsDistX
       timerMs := 300 - Floor((Min(maxDist, 300) - 8) * (100 / 192))
       timerMs := Max(20, Min(300, timerMs / 2))
-      SetTimer, MBScrollTimer, %timerMs%
+      SetTimer, MBDragTimer, %timerMs%
 
       ; Vertical: WM_VSCROLL (0x115)
       If (AbsDistY >= 8) {
@@ -531,7 +700,7 @@ MBScrollTimer:
             If (MB_Debug)
               ToolTip, % "WHEEL->WHEEL_CTRL (no movement)"
             If (DebugLogEvents)
-              FileAppend, % A_Now " | MBScroll | FALLBACK | proc=" MB_ProcName " WHEEL->WHEEL_CTRL (no movement)`n", %DebugLogPath%
+              FileAppend, % A_Now " | MBDrag | FALLBACK | proc=" MB_ProcName " WHEEL->WHEEL_CTRL (no movement)`n", %DebugLogPath%
           } Else {
             MB_FallbackChecked := 1
           }
@@ -560,11 +729,11 @@ Return
   Critical ; Prevent timer from firing during cleanup (race condition safety)
   global MB_Disabled, MB_DeferredDown, MB_Triggered, MB_Win, MB_ScrollPattern, MB_Element
   global MB_ProcName, MB_Method, MB_ScrollTicks, MB_SessionStart, DebugLogEvents, DebugLogPath
-  SetTimer, MBScrollTimer, Off
+  SetTimer, MBDragTimer, Off
   ; Log session summary
   If (DebugLogEvents && MB_Triggered) {
     _duration := A_TickCount - MB_SessionStart
-    FileAppend, % A_Now " | MBScroll | END | proc=" MB_ProcName " method=" MB_Method " ticks=" MB_ScrollTicks " duration=" _duration "ms`n", %DebugLogPath%
+    FileAppend, % A_Now " | MBDrag | END | proc=" MB_ProcName " method=" MB_Method " ticks=" MB_ScrollTicks " duration=" _duration "ms`n", %DebugLogPath%
   }
   If (MB_Debug)
     ToolTip
@@ -593,7 +762,7 @@ Return
 
 MB_Cleanup() {
   global MB_ScrollPattern, MB_Element
-  SetTimer, MBScrollTimer, Off
+  SetTimer, MBDragTimer, Off
   If (MB_ScrollPattern) {
     ObjRelease(MB_ScrollPattern)
     MB_ScrollPattern := 0
