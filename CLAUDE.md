@@ -4,6 +4,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Keep under 30k chars; 40k char max (`wc -c CLAUDE.md`). Compress or remove content when adding.
 
+## Workflow
+
+**Debug logs**: Set `DebugLogEvents := 1` in AutoHotkey.ahk. **When viewing, grep AHK_Debug.log for event type and tail 100—never raw tail.**
+
+| Prefix        | Coverage                                                              |
+| ------------- | --------------------------------------------------------------------- |
+| `MBDrag`      | Session start/end, method detection, fallbacks, LVM mode, boundaries |
+| `ScrollAccel` | Velocity calc, direction changes, filtered events                    |
+| `WS`          | Shell hooks, intent detection, opacity hide/reveal, move events      |
+
+**Adding logging**: Most features lack it. When debugging, add proactively. Format: `timestamp | PREFIX | EVENT | key=value pairs`.
+
+**Testing**: Enable logging, ask user to "try now", grep results—don't ask "how is it now?"
+
+**Refactoring**: Source of truth is the actual code. Copy verbatim when moving/extracting. Mention improvements separately.
+
 ## AHK v1.1 Language Gotchas (CRITICAL)
 
 **AutoHotkey v1.1.14+** — This codebase uses AHK v1.1 syntax exclusively. Do NOT use v2.0 syntax.
@@ -159,14 +175,6 @@ Try {
 2. Explicit release in the Up hotkey and fallback paths
 3. `OnExit` handler (`MB_Cleanup`) as safety net
 
-### Preserve Working Code (CRITICAL)
-
-When asked to **move**, **extract**, or **refactor** code:
-
-- **Source of truth is the actual code in the file**, not plans, design docs, or memory notes
-- Copy the existing implementation verbatim — do not rewrite the approach
-- If you see an improvement opportunity, mention it separately and ask first
-
 ## Constants and Magic Values
 
 ### UIA Vtable Offsets (Used in Code)
@@ -238,8 +246,10 @@ The MButton scroll system intercepts middle-click-drag and converts it to smooth
 | **LVM**        | `LVM_SCROLL` (0x1014) pixel-level SendMessage    | Pixel        | SysListView32 controls         |
 | **UIA**        | `SetScrollPercent` via IUIAutomationScrollPattern| Fractional % | Explorer file lists, mmc.exe   |
 | **WHEEL**      | `WM_MOUSEWHEEL` sub-120 delta to window          | Sub-notch    | Electron apps (VS Code)        |
-| **WHEEL_CTRL** | `WM_MOUSEWHEEL` to control (with fallback)       | ~1 line      | SystemInformer                 |
+| **WHEEL_CTRL** | `WM_MOUSEWHEEL` delta ~40 to control             | ~1 line      | SystemInformer                 |
 | **VSCROLL**    | `WM_VSCROLL` line-by-line, dynamic timer         | 1 line       | Tree views, universal fallback |
+
+**Wheel delta**: 120 = 3 lines (system default). WHEEL_CTRL uses ~40 (120/3) for 1-line scrolling.
 
 ### Automatic Fallback Chain
 
@@ -344,29 +354,4 @@ At `EVENT_OBJECT_CREATE`, hide windows using `WS_EX_LAYERED` + alpha 0. After mo
 - **32-bit masking**: `idObject & 0xFFFFFFFF` — WinEventProc params are 32-bit but AHK reads 64-bit on x64
 - **Numeric coercion**: `hwnd + 0` — ensures consistent object key type
 
----
-
-## Debug Logging
-
-**Enable**: Set `DebugLogEvents := 1` in AutoHotkey.ahk (line ~23). Log file: `%TEMP%\AHK_Debug.log` (cleared on reload).
-
-**Workflow**: When testing changes, enable logging and ask user to "try now" — then grep the log for events rather than asking "how is it now?". This applies to all manual testing.
-
-**Log prefixes** (grep for these):
-| Feature        | Prefix        | Coverage                                    |
-| -------------- | ------------- | ------------------------------------------- |
-| MButton drag   | `MBDrag`      | Session start/end, method detection, fallbacks, LVM mode, boundaries |
-| Scroll accel   | `ScrollAccel` | Velocity calc, direction changes, filtered events |
-| Window spawn   | `WS`          | Shell hooks, intent detection, opacity hide/reveal, move events |
-
-**Adding logging**: If a feature lacks logging (e.g., terminal-anywhere), add it when testing that functionality. Format: `timestamp | PREFIX | EVENT | key=value pairs`.
-
-## Testing
-
-Manual verification with logging enabled:
-
-1. **MButton drag**: Test in Explorer, VS Code, SysListView32 apps — grep `MBDrag` for method detection, fallbacks, axis values
-2. **Scroll accel**: Test rapid scrolling — grep `ScrollAccel` for velocity calc, direction changes
-3. **Window spawning**: Open new windows — grep `WS` for intent detection, move events
-4. **Terminal hotkeys**: Test `F10` variants — add logging if debugging issues
 

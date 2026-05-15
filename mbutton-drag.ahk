@@ -8,391 +8,6 @@
 ; Author: @rodboev
 ; Version: 3.0
 
-; MB_Debug: MButton scroll debug tooltips (0=off, 1=on) — set in *MButton::
-; OnExit("MB_Cleanup") — registered in AutoHotkey.ahk auto-execute section
-
-; Get scroll position for a control (cross-process safe)
-; bar: 1 = vertical (default), 0 = horizontal
-GetScrollPos(hwnd, bar := 1) {
-  Return DllCall("GetScrollPos", "Ptr", hwnd, "Int", bar, "Int")
-}
-
-; Check if a control has a visible Win32 scrollbar (window style check)
-; axis: "V" for vertical (default), "H" for horizontal, "any" for either
-HasWin32Scrollbar(hwnd, axis := "V") {
-  WinGet, _style, Style, ahk_id %hwnd%
-  If (axis = "H")
-    Return (_style & 0x00100000)  ; WS_HSCROLL
-  If (axis = "any")
-    Return (_style & 0x00300000)  ; WS_VSCROLL or WS_HSCROLL
-  Return (_style & 0x00200000)  ; WS_VSCROLL (default)
-}
-
-; Check if a control has scrollable content via GetScrollInfo
-; Returns true if scroll range exists (nMax - nMin > nPage)
-; axis: "V" for vertical (default), "H" for horizontal, "any" for either
-HasScrollRange(hwnd, axis := "V") {
-  global DebugLogEvents, DebugLogPath
-  ; SCROLLINFO struct: cbSize, fMask, nMin, nMax, nPage, nPos, nTrackPos
-  VarSetCapacity(_si, 28, 0)
-  NumPut(28, _si, 0, "UInt")  ; cbSize
-  NumPut(0x7, _si, 4, "UInt")  ; fMask = SIF_RANGE | SIF_PAGE (0x1 | 0x2 | 0x4)
-
-  _checkV := (axis = "V" or axis = "any")
-  _checkH := (axis = "H" or axis = "any")
-
-  If (_checkV) {
-    _ret := DllCall("GetScrollInfo", "Ptr", hwnd, "Int", 1, "Ptr", &_si, "Int")  ; SB_VERT=1
-    _min := NumGet(_si, 8, "Int"), _max := NumGet(_si, 12, "Int"), _page := NumGet(_si, 16, "UInt")
-    If (DebugLogEvents)
-      FileAppend, % A_Now " | MBDrag | SCROLL_INFO_V | hwnd=" hwnd " ret=" _ret " min=" _min " max=" _max " page=" _page "`n", %DebugLogPath%
-    If (_ret and _max - _min > _page)
-      Return true
-  }
-  If (_checkH) {
-    _ret := DllCall("GetScrollInfo", "Ptr", hwnd, "Int", 0, "Ptr", &_si, "Int")  ; SB_HORZ=0
-    _min := NumGet(_si, 8, "Int"), _max := NumGet(_si, 12, "Int"), _page := NumGet(_si, 16, "UInt")
-    If (DebugLogEvents)
-      FileAppend, % A_Now " | MBDrag | SCROLL_INFO_H | hwnd=" hwnd " ret=" _ret " min=" _min " max=" _max " page=" _page "`n", %DebugLogPath%
-    If (_ret and _max - _min > _page)
-      Return true
-  }
-  Return false
-}
-
-; Find a visible ScrollBar control with actual scroll range (recursive)
-; This detects true scrollability for apps like Explorer where DirectUIHWND
-; doesn't respond to GetScrollInfo, but has separate ScrollBar controls
-FindVisibleScrollBar(parentHwnd) {
-  global DebugLogEvents, DebugLogPath
-  _child := DllCall("GetWindow", "Ptr", parentHwnd, "UInt", 5, "Ptr")  ; GW_CHILD
-  While (_child) {
-    If (DllCall("IsWindowVisible", "Ptr", _child, "Int")) {
-      VarSetCapacity(_className, 256)
-      DllCall("GetClassName", "Ptr", _child, "Str", _className, "Int", 255)
-      If (InStr(_className, "ScrollBar")) {
-        ; Found a visible ScrollBar - check if it has a scroll range
-        VarSetCapacity(_si, 28, 0)
-        NumPut(28, _si, 0, "UInt")
-        NumPut(0x3, _si, 4, "UInt")  ; SIF_RANGE | SIF_PAGE
-        ; For standalone ScrollBar controls, use SB_CTL (2)
-        _ret := DllCall("GetScrollInfo", "Ptr", _child, "Int", 2, "Ptr", &_si, "Int")
-        _min := NumGet(_si, 8, "Int"), _max := NumGet(_si, 12, "Int"), _page := NumGet(_si, 16, "UInt")
-        If (DebugLogEvents)
-          FileAppend, % A_Now " | MBDrag | SCROLLBAR_FOUND | hwnd=" _child " ret=" _ret " min=" _min " max=" _max " page=" _page "`n", %DebugLogPath%
-        If (_ret and _max - _min > _page)
-          Return _child
-      }
-      ; Recursively check descendants
-      _found := FindVisibleScrollBar(_child)
-      If (_found)
-        Return _found
-    }
-    _child := DllCall("GetWindow", "Ptr", _child, "UInt", 2, "Ptr")  ; GW_HWNDNEXT
-  }
-  Return 0
-}
-
-; Power curve for scroll acceleration
-; steep=false (UIA): sub-linear throughout, gentle
-; steep=true (non-UIA): gentle start, steep end (slow near center, fast when dragged far)
-ScrollCurve(dist, steep := false) {
-  If (!steep)
-    Return dist ** 0.8  ; UIA: gentle throughout
-  ; Non-UIA: exponent increases with distance (0.7 at 0px → 1.4 at 200px)
-  ; This gives gentle start but aggressive acceleration when dragged far
-  exp := 0.7 + (dist / 300)
-  Return dist ** exp
-}
-
-; Find a scrollable child window at the given point (mimics Windhawk smooth-scroll FindChild)
-; Recursively enumerates all descendant windows and returns the first visible one that:
-; 1. Contains the point
-; 2. Has UIA ScrollPattern with ViewSize < 100 (actually scrollable)
-; This fixes tabbed Explorer where MouseGetPos picks the wrong DirectUIHWND.
-FindScrollableChild(parentHwnd, ptX, ptY) {
-  global G_UIA
-  If (!G_UIA)
-    Return 0
-  ; GW_CHILD=5, GW_HWNDNEXT=2
-  _child := DllCall("GetWindow", "Ptr", parentHwnd, "UInt", 5, "Ptr")
-  While (_child) {
-    ; Check if visible
-    If (DllCall("IsWindowVisible", "Ptr", _child, "Int")) {
-      ; Check if point is inside window rect
-      VarSetCapacity(_rect, 16, 0)
-      DllCall("GetWindowRect", "Ptr", _child, "Ptr", &_rect)
-      _left := NumGet(_rect, 0, "Int"), _top := NumGet(_rect, 4, "Int")
-      _right := NumGet(_rect, 8, "Int"), _bottom := NumGet(_rect, 12, "Int")
-      If (ptX >= _left && ptX < _right && ptY >= _top && ptY < _bottom) {
-        ; Point is inside - check if this child has UIA ScrollPattern
-        _el := 0, _pat := 0
-        DllCall(NumGet(NumGet(G_UIA+0)+6*A_PtrSize), "Ptr", G_UIA, "Ptr", _child, "Ptr*", _el)
-        If (_el) {
-          DllCall(NumGet(NumGet(_el+0)+16*A_PtrSize), "Ptr", _el, "Int", 10004, "Ptr*", _pat)
-          If (_pat) {
-            ; Check ViewSize - must be < 100 on either axis to be scrollable
-            DllCall(NumGet(NumGet(_pat+0)+8*A_PtrSize), "Ptr", _pat, "Double*", _viewSizeV)
-            DllCall(NumGet(NumGet(_pat+0)+7*A_PtrSize), "Ptr", _pat, "Double*", _viewSizeH)
-            ObjRelease(_pat)
-            ObjRelease(_el)
-            If (_viewSizeV < 99.9 || _viewSizeH < 99.9)
-              Return _child  ; Found scrollable child
-          } Else {
-            ObjRelease(_el)
-          }
-        }
-        ; Not scrollable - recursively check this child's descendants
-        _found := FindScrollableChild(_child, ptX, ptY)
-        If (_found)
-          Return _found
-      }
-    }
-    _child := DllCall("GetWindow", "Ptr", _child, "UInt", 2, "Ptr")
-  }
-  Return 0
-}
-
-; Find UIA ScrollPattern by walking up ancestors from a point
-; Used for UWP/XAML apps (like Windows Terminal) where Win32 scrollbars don't exist
-; and ElementFromHandle on the window doesn't find the ScrollViewer
-; Returns: {pattern: ptr, element: ptr} if found, 0 otherwise
-; Helper: Get ClassName property from UIA element (returns empty string on failure)
-GetUIAClass(element) {
-  VarSetCapacity(_var, 24, 0)
-  DllCall("OleAut32\VariantInit", "Ptr", &_var)
-  DllCall(NumGet(NumGet(element+0)+10*A_PtrSize), "Ptr", element, "Int", 30012, "Ptr", &_var)
-  _class := ""
-  If (NumGet(_var, 0, "UShort") = 8) {
-    _bstr := NumGet(_var, 8, "Ptr")
-    If (_bstr)
-      _class := StrGet(_bstr, "UTF-16")
-  }
-  DllCall("OleAut32\VariantClear", "Ptr", &_var)
-  Return _class
-}
-
-; Search UIA tree for scrollable elements (ScrollPattern or XAML ScrollBar)
-; Used for UWP/XAML apps where Win32 scrollbar detection fails
-FindUIAScrollAncestor(ptX, ptY) {
-  global G_UIA, DebugLogEvents, DebugLogPath
-  If (!G_UIA)
-    Return 0
-
-  ; Get element at point: IUIAutomation::ElementFromPoint (vtable offset 7)
-  VarSetCapacity(_pt, 8, 0)
-  NumPut(ptX, _pt, 0, "Int"), NumPut(ptY, _pt, 4, "Int")
-  _startEl := 0
-  DllCall(NumGet(NumGet(G_UIA+0)+7*A_PtrSize), "Ptr", G_UIA, "Int64", NumGet(_pt, 0, "Int64"), "Ptr*", _startEl)
-  If (!_startEl)
-    Return 0
-
-  _startClass := GetUIAClass(_startEl)
-  _ancestorPath := _startClass  ; Build arrow-separated path for logging
-
-  ; Get TreeWalker: IUIAutomation::get_RawViewWalker (vtable offset 14)
-  _walker := 0
-  DllCall(NumGet(NumGet(G_UIA+0)+14*A_PtrSize), "Ptr", G_UIA, "Ptr*", _walker)
-  If (!_walker) {
-    ObjRelease(_startEl)
-    Return 0
-  }
-
-  ; Walk up ancestors checking for ScrollPattern (also check siblings at each level)
-  _current := _startEl
-  _depth := 0
-  Loop {
-    If (_depth >= 20)
-      Break
-
-    ; Check current element for ScrollPattern (10004)
-    _pattern := 0
-    DllCall(NumGet(NumGet(_current+0)+16*A_PtrSize), "Ptr", _current, "Int", 10004, "Ptr*", _pattern)
-    If (_pattern) {
-      DllCall(NumGet(NumGet(_pattern+0)+8*A_PtrSize), "Ptr", _pattern, "Double*", _viewSizeV)
-      DllCall(NumGet(NumGet(_pattern+0)+7*A_PtrSize), "Ptr", _pattern, "Double*", _viewSizeH)
-      If (_viewSizeV < 99.9 or _viewSizeH < 99.9) {
-        ObjRelease(_walker)
-        If (_current != _startEl)
-          ObjRelease(_startEl)
-        If (DebugLogEvents)
-          FileAppend, % A_Now " | MBDrag | UIA_TREE | FOUND ScrollPattern | " _ancestorPath "`n", %DebugLogPath%
-        Return {pattern: _pattern, element: _current, viewV: _viewSizeV, viewH: _viewSizeH}
-      }
-      ObjRelease(_pattern)
-    }
-
-    ; Check siblings for ScrollPattern (some XAML layouts have ScrollViewer as sibling)
-    _sibling := 0
-    DllCall(NumGet(NumGet(_walker+0)+6*A_PtrSize), "Ptr", _walker, "Ptr", _current, "Ptr*", _sibling)
-    _sibCount := 0
-    While (_sibling and _sibCount < 10) {
-      _sibCount++
-      _pattern := 0
-      DllCall(NumGet(NumGet(_sibling+0)+16*A_PtrSize), "Ptr", _sibling, "Int", 10004, "Ptr*", _pattern)
-      If (_pattern) {
-        DllCall(NumGet(NumGet(_pattern+0)+8*A_PtrSize), "Ptr", _pattern, "Double*", _viewSizeV)
-        DllCall(NumGet(NumGet(_pattern+0)+7*A_PtrSize), "Ptr", _pattern, "Double*", _viewSizeH)
-        If (_viewSizeV < 99.9 or _viewSizeH < 99.9) {
-          ObjRelease(_walker)
-          If (_current != _startEl)
-            ObjRelease(_current)
-          ObjRelease(_startEl)
-          If (DebugLogEvents)
-            FileAppend, % A_Now " | MBDrag | UIA_TREE | FOUND sibling ScrollPattern | " _ancestorPath "`n", %DebugLogPath%
-          Return {pattern: _pattern, element: _sibling, viewV: _viewSizeV, viewH: _viewSizeH}
-        }
-        ObjRelease(_pattern)
-      }
-      _nextSib := 0
-      DllCall(NumGet(NumGet(_walker+0)+6*A_PtrSize), "Ptr", _walker, "Ptr", _sibling, "Ptr*", _nextSib)
-      ObjRelease(_sibling)
-      _sibling := _nextSib
-    }
-    If (_sibling)
-      ObjRelease(_sibling)
-
-    ; Get parent: IUIAutomationTreeWalker::GetParentElement (vtable offset 3)
-    _parent := 0
-    DllCall(NumGet(NumGet(_walker+0)+3*A_PtrSize), "Ptr", _walker, "Ptr", _current, "Ptr*", _parent)
-
-    If (_current != _startEl) {
-      ObjRelease(_current)
-      _current := 0
-    }
-
-    If (!_parent)
-      Break
-
-    _parentClass := GetUIAClass(_parent)
-    _ancestorPath .= " <- " . _parentClass
-    _current := _parent
-    _depth++
-  }
-
-  ; Parent walk failed - search children for XAML ScrollBar (UWP apps like Windows Terminal)
-  _result := FindScrollInChildren(_walker, _startEl, 0, _startClass)
-  If (IsObject(_result)) {
-    ObjRelease(_walker)
-    ObjRelease(_startEl)
-    If (_current and _current != _startEl)
-      ObjRelease(_current)
-    Return _result
-  }
-
-  ; Not found - cleanup and log
-  ObjRelease(_walker)
-  ObjRelease(_startEl)
-  If (_current and _current != _startEl)
-    ObjRelease(_current)
-  If (DebugLogEvents)
-    FileAppend, % A_Now " | MBDrag | UIA_TREE | not found | " _ancestorPath "`n", %DebugLogPath%
-  Return 0
-}
-
-; Helper: recursively search children for XAML ScrollBar with Maximum > 0
-; For UWP apps like Windows Terminal, the ScrollBar is a child of the content control
-; and its Maximum property indicates scrollability (0 = not scrollable, >0 = scrollable)
-; path: arrow-separated class path for logging (built recursively)
-FindScrollInChildren(walker, element, depth, path) {
-  global DebugLogEvents, DebugLogPath
-  If (depth > 20)
-    Return 0
-
-  _class := GetUIAClass(element)
-  _curPath := path ? (path " -> " _class) : _class
-
-  ; Check if it's a ScrollBar with Maximum > 0
-  If (InStr(_class, "ScrollBar")) {
-    ; Get RangeValue Maximum property (30050)
-    VarSetCapacity(_var, 24, 0)
-    DllCall("OleAut32\VariantInit", "Ptr", &_var)
-    DllCall(NumGet(NumGet(element+0)+10*A_PtrSize), "Ptr", element, "Int", 30050, "Ptr", &_var)
-    _vt := NumGet(_var, 0, "UShort")
-    _maximum := 0
-    If (_vt = 5)  ; VT_R8 (Double)
-      _maximum := NumGet(_var, 8, "Double")
-    Else If (_vt = 3)  ; VT_I4
-      _maximum := NumGet(_var, 8, "Int")
-    DllCall("OleAut32\VariantClear", "Ptr", &_var)
-
-    If (_maximum > 0) {
-      If (DebugLogEvents)
-        FileAppend, % A_Now " | MBDrag | UIA_CHILD | FOUND ScrollBar(max=" _maximum ") | " _curPath "`n", %DebugLogPath%
-      DllCall(NumGet(NumGet(element+0)+1*A_PtrSize), "Ptr", element)  ; AddRef
-      Return {scrollbar: element, maximum: _maximum, scrollable: 1}
-    }
-    If (DebugLogEvents)
-      FileAppend, % A_Now " | MBDrag | UIA_CHILD | ScrollBar max=0 (not scrollable) | " _curPath "`n", %DebugLogPath%
-    Return 0  ; Found ScrollBar but not scrollable - no need to search deeper
-  }
-
-  ; Get first child: IUIAutomationTreeWalker::GetFirstChildElement (vtable offset 4)
-  _child := 0
-  DllCall(NumGet(NumGet(walker+0)+4*A_PtrSize), "Ptr", walker, "Ptr", element, "Ptr*", _child)
-  While (_child) {
-    _result := FindScrollInChildren(walker, _child, depth + 1, _curPath)
-    If (IsObject(_result)) {
-      ObjRelease(_child)
-      Return _result
-    }
-    ; Get next sibling
-    _nextSib := 0
-    DllCall(NumGet(NumGet(walker+0)+6*A_PtrSize), "Ptr", walker, "Ptr", _child, "Ptr*", _nextSib)
-    ObjRelease(_child)
-    _child := _nextSib
-  }
-  Return 0
-}
-
-; Find any ScrollBar control in the window hierarchy (recursive)
-; Used to detect apps with custom scrollbar controls (like SystemInformer)
-FindScrollBarChild(parentHwnd) {
-  _child := DllCall("GetWindow", "Ptr", parentHwnd, "UInt", 5, "Ptr")  ; GW_CHILD
-  While (_child) {
-    VarSetCapacity(_className, 256)
-    DllCall("GetClassName", "Ptr", _child, "Str", _className, "Int", 255)
-    If (InStr(_className, "ScrollBar"))
-      Return _child
-    ; Recursively check descendants
-    _found := FindScrollBarChild(_child)
-    If (_found)
-      Return _found
-    _child := DllCall("GetWindow", "Ptr", _child, "UInt", 2, "Ptr")  ; GW_HWNDNEXT
-  }
-  Return 0
-}
-
-; Log window control tree with visibility and scroll info (for debugging)
-LogControlTree(parentHwnd, indent := 0) {
-  global DebugLogPath
-  _child := DllCall("GetWindow", "Ptr", parentHwnd, "UInt", 5, "Ptr")  ; GW_CHILD
-  While (_child) {
-    VarSetCapacity(_className, 256)
-    DllCall("GetClassName", "Ptr", _child, "Str", _className, "Int", 255)
-    _visible := DllCall("IsWindowVisible", "Ptr", _child, "Int")
-    _pad := ""
-    Loop, %indent%
-      _pad .= "  "
-    _info := _pad . _className . " [" . (_visible ? "V" : "H") . "]"
-    ; For ScrollBar controls, show scroll info
-    If (InStr(_className, "ScrollBar")) {
-      VarSetCapacity(_si, 28, 0)
-      NumPut(28, _si, 0, "UInt")
-      NumPut(0x17, _si, 4, "UInt")  ; SIF_ALL
-      DllCall("GetScrollInfo", "Ptr", _child, "Int", 2, "Ptr", &_si, "Int")  ; SB_CTL
-      _min := NumGet(_si, 8, "Int"), _max := NumGet(_si, 12, "Int")
-      _page := NumGet(_si, 16, "UInt"), _pos := NumGet(_si, 20, "Int")
-      _info .= " min=" . _min . " max=" . _max . " page=" . _page . " pos=" . _pos
-    }
-    FileAppend, %_info%`n, %DebugLogPath%
-    ; Recurse (limit depth to 5 for more detail)
-    If (indent < 5)
-      LogControlTree(_child, indent + 1)
-    _child := DllCall("GetWindow", "Ptr", _child, "UInt", 2, "Ptr")  ; GW_HWNDNEXT
-  }
-}
-
 ; -> [ MButton + drag ] -> Invoke smooth scrolling on any app; release to stop.
 *MButton::
   ; Session state object — single global, properties need no separate declarations
@@ -1468,6 +1083,388 @@ Return
     SendInput, {Blind}{MButton Up}
   }
 Return
+
+; Get scroll position for a control (cross-process safe)
+; bar: 1 = vertical (default), 0 = horizontal
+GetScrollPos(hwnd, bar := 1) {
+  Return DllCall("GetScrollPos", "Ptr", hwnd, "Int", bar, "Int")
+}
+
+; Check if a control has a visible Win32 scrollbar (window style check)
+; axis: "V" for vertical (default), "H" for horizontal, "any" for either
+HasWin32Scrollbar(hwnd, axis := "V") {
+  WinGet, _style, Style, ahk_id %hwnd%
+  If (axis = "H")
+    Return (_style & 0x00100000)  ; WS_HSCROLL
+  If (axis = "any")
+    Return (_style & 0x00300000)  ; WS_VSCROLL or WS_HSCROLL
+  Return (_style & 0x00200000)  ; WS_VSCROLL (default)
+}
+
+; Check if a control has scrollable content via GetScrollInfo
+; Returns true if scroll range exists (nMax - nMin > nPage)
+; axis: "V" for vertical (default), "H" for horizontal, "any" for either
+HasScrollRange(hwnd, axis := "V") {
+  global DebugLogEvents, DebugLogPath
+  ; SCROLLINFO struct: cbSize, fMask, nMin, nMax, nPage, nPos, nTrackPos
+  VarSetCapacity(_si, 28, 0)
+  NumPut(28, _si, 0, "UInt")  ; cbSize
+  NumPut(0x7, _si, 4, "UInt")  ; fMask = SIF_RANGE | SIF_PAGE (0x1 | 0x2 | 0x4)
+
+  _checkV := (axis = "V" or axis = "any")
+  _checkH := (axis = "H" or axis = "any")
+
+  If (_checkV) {
+    _ret := DllCall("GetScrollInfo", "Ptr", hwnd, "Int", 1, "Ptr", &_si, "Int")  ; SB_VERT=1
+    _min := NumGet(_si, 8, "Int"), _max := NumGet(_si, 12, "Int"), _page := NumGet(_si, 16, "UInt")
+    If (DebugLogEvents)
+      FileAppend, % A_Now " | MBDrag | SCROLL_INFO_V | hwnd=" hwnd " ret=" _ret " min=" _min " max=" _max " page=" _page "`n", %DebugLogPath%
+    If (_ret and _max - _min > _page)
+      Return true
+  }
+  If (_checkH) {
+    _ret := DllCall("GetScrollInfo", "Ptr", hwnd, "Int", 0, "Ptr", &_si, "Int")  ; SB_HORZ=0
+    _min := NumGet(_si, 8, "Int"), _max := NumGet(_si, 12, "Int"), _page := NumGet(_si, 16, "UInt")
+    If (DebugLogEvents)
+      FileAppend, % A_Now " | MBDrag | SCROLL_INFO_H | hwnd=" hwnd " ret=" _ret " min=" _min " max=" _max " page=" _page "`n", %DebugLogPath%
+    If (_ret and _max - _min > _page)
+      Return true
+  }
+  Return false
+}
+
+; Find a visible ScrollBar control with actual scroll range (recursive)
+; This detects true scrollability for apps like Explorer where DirectUIHWND
+; doesn't respond to GetScrollInfo, but has separate ScrollBar controls
+FindVisibleScrollBar(parentHwnd) {
+  global DebugLogEvents, DebugLogPath
+  _child := DllCall("GetWindow", "Ptr", parentHwnd, "UInt", 5, "Ptr")  ; GW_CHILD
+  While (_child) {
+    If (DllCall("IsWindowVisible", "Ptr", _child, "Int")) {
+      VarSetCapacity(_className, 256)
+      DllCall("GetClassName", "Ptr", _child, "Str", _className, "Int", 255)
+      If (InStr(_className, "ScrollBar")) {
+        ; Found a visible ScrollBar - check if it has a scroll range
+        VarSetCapacity(_si, 28, 0)
+        NumPut(28, _si, 0, "UInt")
+        NumPut(0x3, _si, 4, "UInt")  ; SIF_RANGE | SIF_PAGE
+        ; For standalone ScrollBar controls, use SB_CTL (2)
+        _ret := DllCall("GetScrollInfo", "Ptr", _child, "Int", 2, "Ptr", &_si, "Int")
+        _min := NumGet(_si, 8, "Int"), _max := NumGet(_si, 12, "Int"), _page := NumGet(_si, 16, "UInt")
+        If (DebugLogEvents)
+          FileAppend, % A_Now " | MBDrag | SCROLLBAR_FOUND | hwnd=" _child " ret=" _ret " min=" _min " max=" _max " page=" _page "`n", %DebugLogPath%
+        If (_ret and _max - _min > _page)
+          Return _child
+      }
+      ; Recursively check descendants
+      _found := FindVisibleScrollBar(_child)
+      If (_found)
+        Return _found
+    }
+    _child := DllCall("GetWindow", "Ptr", _child, "UInt", 2, "Ptr")  ; GW_HWNDNEXT
+  }
+  Return 0
+}
+
+; Power curve for scroll acceleration
+; steep=false (UIA): sub-linear throughout, gentle
+; steep=true (non-UIA): gentle start, steep end (slow near center, fast when dragged far)
+ScrollCurve(dist, steep := false) {
+  If (!steep)
+    Return dist ** 0.8  ; UIA: gentle throughout
+  ; Non-UIA: exponent increases with distance (0.7 at 0px → 1.4 at 200px)
+  ; This gives gentle start but aggressive acceleration when dragged far
+  exp := 0.7 + (dist / 300)
+  Return dist ** exp
+}
+
+; Find a scrollable child window at the given point (mimics Windhawk smooth-scroll FindChild)
+; Recursively enumerates all descendant windows and returns the first visible one that:
+; 1. Contains the point
+; 2. Has UIA ScrollPattern with ViewSize < 100 (actually scrollable)
+; This fixes tabbed Explorer where MouseGetPos picks the wrong DirectUIHWND.
+FindScrollableChild(parentHwnd, ptX, ptY) {
+  global G_UIA
+  If (!G_UIA)
+    Return 0
+  ; GW_CHILD=5, GW_HWNDNEXT=2
+  _child := DllCall("GetWindow", "Ptr", parentHwnd, "UInt", 5, "Ptr")
+  While (_child) {
+    ; Check if visible
+    If (DllCall("IsWindowVisible", "Ptr", _child, "Int")) {
+      ; Check if point is inside window rect
+      VarSetCapacity(_rect, 16, 0)
+      DllCall("GetWindowRect", "Ptr", _child, "Ptr", &_rect)
+      _left := NumGet(_rect, 0, "Int"), _top := NumGet(_rect, 4, "Int")
+      _right := NumGet(_rect, 8, "Int"), _bottom := NumGet(_rect, 12, "Int")
+      If (ptX >= _left && ptX < _right && ptY >= _top && ptY < _bottom) {
+        ; Point is inside - check if this child has UIA ScrollPattern
+        _el := 0, _pat := 0
+        DllCall(NumGet(NumGet(G_UIA+0)+6*A_PtrSize), "Ptr", G_UIA, "Ptr", _child, "Ptr*", _el)
+        If (_el) {
+          DllCall(NumGet(NumGet(_el+0)+16*A_PtrSize), "Ptr", _el, "Int", 10004, "Ptr*", _pat)
+          If (_pat) {
+            ; Check ViewSize - must be < 100 on either axis to be scrollable
+            DllCall(NumGet(NumGet(_pat+0)+8*A_PtrSize), "Ptr", _pat, "Double*", _viewSizeV)
+            DllCall(NumGet(NumGet(_pat+0)+7*A_PtrSize), "Ptr", _pat, "Double*", _viewSizeH)
+            ObjRelease(_pat)
+            ObjRelease(_el)
+            If (_viewSizeV < 99.9 || _viewSizeH < 99.9)
+              Return _child  ; Found scrollable child
+          } Else {
+            ObjRelease(_el)
+          }
+        }
+        ; Not scrollable - recursively check this child's descendants
+        _found := FindScrollableChild(_child, ptX, ptY)
+        If (_found)
+          Return _found
+      }
+    }
+    _child := DllCall("GetWindow", "Ptr", _child, "UInt", 2, "Ptr")
+  }
+  Return 0
+}
+
+; Find UIA ScrollPattern by walking up ancestors from a point
+; Used for UWP/XAML apps (like Windows Terminal) where Win32 scrollbars don't exist
+; and ElementFromHandle on the window doesn't find the ScrollViewer
+; Returns: {pattern: ptr, element: ptr} if found, 0 otherwise
+; Helper: Get ClassName property from UIA element (returns empty string on failure)
+GetUIAClass(element) {
+  VarSetCapacity(_var, 24, 0)
+  DllCall("OleAut32\VariantInit", "Ptr", &_var)
+  DllCall(NumGet(NumGet(element+0)+10*A_PtrSize), "Ptr", element, "Int", 30012, "Ptr", &_var)
+  _class := ""
+  If (NumGet(_var, 0, "UShort") = 8) {
+    _bstr := NumGet(_var, 8, "Ptr")
+    If (_bstr)
+      _class := StrGet(_bstr, "UTF-16")
+  }
+  DllCall("OleAut32\VariantClear", "Ptr", &_var)
+  Return _class
+}
+
+; Search UIA tree for scrollable elements (ScrollPattern or XAML ScrollBar)
+; Used for UWP/XAML apps where Win32 scrollbar detection fails
+FindUIAScrollAncestor(ptX, ptY) {
+  global G_UIA, DebugLogEvents, DebugLogPath
+  If (!G_UIA)
+    Return 0
+
+  ; Get element at point: IUIAutomation::ElementFromPoint (vtable offset 7)
+  VarSetCapacity(_pt, 8, 0)
+  NumPut(ptX, _pt, 0, "Int"), NumPut(ptY, _pt, 4, "Int")
+  _startEl := 0
+  DllCall(NumGet(NumGet(G_UIA+0)+7*A_PtrSize), "Ptr", G_UIA, "Int64", NumGet(_pt, 0, "Int64"), "Ptr*", _startEl)
+  If (!_startEl)
+    Return 0
+
+  _startClass := GetUIAClass(_startEl)
+  _ancestorPath := _startClass  ; Build arrow-separated path for logging
+
+  ; Get TreeWalker: IUIAutomation::get_RawViewWalker (vtable offset 14)
+  _walker := 0
+  DllCall(NumGet(NumGet(G_UIA+0)+14*A_PtrSize), "Ptr", G_UIA, "Ptr*", _walker)
+  If (!_walker) {
+    ObjRelease(_startEl)
+    Return 0
+  }
+
+  ; Walk up ancestors checking for ScrollPattern (also check siblings at each level)
+  _current := _startEl
+  _depth := 0
+  Loop {
+    If (_depth >= 20)
+      Break
+
+    ; Check current element for ScrollPattern (10004)
+    _pattern := 0
+    DllCall(NumGet(NumGet(_current+0)+16*A_PtrSize), "Ptr", _current, "Int", 10004, "Ptr*", _pattern)
+    If (_pattern) {
+      DllCall(NumGet(NumGet(_pattern+0)+8*A_PtrSize), "Ptr", _pattern, "Double*", _viewSizeV)
+      DllCall(NumGet(NumGet(_pattern+0)+7*A_PtrSize), "Ptr", _pattern, "Double*", _viewSizeH)
+      If (_viewSizeV < 99.9 or _viewSizeH < 99.9) {
+        ObjRelease(_walker)
+        If (_current != _startEl)
+          ObjRelease(_startEl)
+        If (DebugLogEvents)
+          FileAppend, % A_Now " | MBDrag | UIA_TREE | FOUND ScrollPattern | " _ancestorPath "`n", %DebugLogPath%
+        Return {pattern: _pattern, element: _current, viewV: _viewSizeV, viewH: _viewSizeH}
+      }
+      ObjRelease(_pattern)
+    }
+
+    ; Check siblings for ScrollPattern (some XAML layouts have ScrollViewer as sibling)
+    _sibling := 0
+    DllCall(NumGet(NumGet(_walker+0)+6*A_PtrSize), "Ptr", _walker, "Ptr", _current, "Ptr*", _sibling)
+    _sibCount := 0
+    While (_sibling and _sibCount < 10) {
+      _sibCount++
+      _pattern := 0
+      DllCall(NumGet(NumGet(_sibling+0)+16*A_PtrSize), "Ptr", _sibling, "Int", 10004, "Ptr*", _pattern)
+      If (_pattern) {
+        DllCall(NumGet(NumGet(_pattern+0)+8*A_PtrSize), "Ptr", _pattern, "Double*", _viewSizeV)
+        DllCall(NumGet(NumGet(_pattern+0)+7*A_PtrSize), "Ptr", _pattern, "Double*", _viewSizeH)
+        If (_viewSizeV < 99.9 or _viewSizeH < 99.9) {
+          ObjRelease(_walker)
+          If (_current != _startEl)
+            ObjRelease(_current)
+          ObjRelease(_startEl)
+          If (DebugLogEvents)
+            FileAppend, % A_Now " | MBDrag | UIA_TREE | FOUND sibling ScrollPattern | " _ancestorPath "`n", %DebugLogPath%
+          Return {pattern: _pattern, element: _sibling, viewV: _viewSizeV, viewH: _viewSizeH}
+        }
+        ObjRelease(_pattern)
+      }
+      _nextSib := 0
+      DllCall(NumGet(NumGet(_walker+0)+6*A_PtrSize), "Ptr", _walker, "Ptr", _sibling, "Ptr*", _nextSib)
+      ObjRelease(_sibling)
+      _sibling := _nextSib
+    }
+    If (_sibling)
+      ObjRelease(_sibling)
+
+    ; Get parent: IUIAutomationTreeWalker::GetParentElement (vtable offset 3)
+    _parent := 0
+    DllCall(NumGet(NumGet(_walker+0)+3*A_PtrSize), "Ptr", _walker, "Ptr", _current, "Ptr*", _parent)
+
+    If (_current != _startEl) {
+      ObjRelease(_current)
+      _current := 0
+    }
+
+    If (!_parent)
+      Break
+
+    _parentClass := GetUIAClass(_parent)
+    _ancestorPath .= " <- " . _parentClass
+    _current := _parent
+    _depth++
+  }
+
+  ; Parent walk failed - search children for XAML ScrollBar (UWP apps like Windows Terminal)
+  _result := FindScrollInChildren(_walker, _startEl, 0, _startClass)
+  If (IsObject(_result)) {
+    ObjRelease(_walker)
+    ObjRelease(_startEl)
+    If (_current and _current != _startEl)
+      ObjRelease(_current)
+    Return _result
+  }
+
+  ; Not found - cleanup and log
+  ObjRelease(_walker)
+  ObjRelease(_startEl)
+  If (_current and _current != _startEl)
+    ObjRelease(_current)
+  If (DebugLogEvents)
+    FileAppend, % A_Now " | MBDrag | UIA_TREE | not found | " _ancestorPath "`n", %DebugLogPath%
+  Return 0
+}
+
+; Helper: recursively search children for XAML ScrollBar with Maximum > 0
+; For UWP apps like Windows Terminal, the ScrollBar is a child of the content control
+; and its Maximum property indicates scrollability (0 = not scrollable, >0 = scrollable)
+; path: arrow-separated class path for logging (built recursively)
+FindScrollInChildren(walker, element, depth, path) {
+  global DebugLogEvents, DebugLogPath
+  If (depth > 20)
+    Return 0
+
+  _class := GetUIAClass(element)
+  _curPath := path ? (path " -> " _class) : _class
+
+  ; Check if it's a ScrollBar with Maximum > 0
+  If (InStr(_class, "ScrollBar")) {
+    ; Get RangeValue Maximum property (30050)
+    VarSetCapacity(_var, 24, 0)
+    DllCall("OleAut32\VariantInit", "Ptr", &_var)
+    DllCall(NumGet(NumGet(element+0)+10*A_PtrSize), "Ptr", element, "Int", 30050, "Ptr", &_var)
+    _vt := NumGet(_var, 0, "UShort")
+    _maximum := 0
+    If (_vt = 5)  ; VT_R8 (Double)
+      _maximum := NumGet(_var, 8, "Double")
+    Else If (_vt = 3)  ; VT_I4
+      _maximum := NumGet(_var, 8, "Int")
+    DllCall("OleAut32\VariantClear", "Ptr", &_var)
+
+    If (_maximum > 0) {
+      If (DebugLogEvents)
+        FileAppend, % A_Now " | MBDrag | UIA_CHILD | FOUND ScrollBar(max=" _maximum ") | " _curPath "`n", %DebugLogPath%
+      DllCall(NumGet(NumGet(element+0)+1*A_PtrSize), "Ptr", element)  ; AddRef
+      Return {scrollbar: element, maximum: _maximum, scrollable: 1}
+    }
+    If (DebugLogEvents)
+      FileAppend, % A_Now " | MBDrag | UIA_CHILD | ScrollBar max=0 (not scrollable) | " _curPath "`n", %DebugLogPath%
+    Return 0  ; Found ScrollBar but not scrollable - no need to search deeper
+  }
+
+  ; Get first child: IUIAutomationTreeWalker::GetFirstChildElement (vtable offset 4)
+  _child := 0
+  DllCall(NumGet(NumGet(walker+0)+4*A_PtrSize), "Ptr", walker, "Ptr", element, "Ptr*", _child)
+  While (_child) {
+    _result := FindScrollInChildren(walker, _child, depth + 1, _curPath)
+    If (IsObject(_result)) {
+      ObjRelease(_child)
+      Return _result
+    }
+    ; Get next sibling
+    _nextSib := 0
+    DllCall(NumGet(NumGet(walker+0)+6*A_PtrSize), "Ptr", walker, "Ptr", _child, "Ptr*", _nextSib)
+    ObjRelease(_child)
+    _child := _nextSib
+  }
+  Return 0
+}
+
+; Find any ScrollBar control in the window hierarchy (recursive)
+; Used to detect apps with custom scrollbar controls (like SystemInformer)
+FindScrollBarChild(parentHwnd) {
+  _child := DllCall("GetWindow", "Ptr", parentHwnd, "UInt", 5, "Ptr")  ; GW_CHILD
+  While (_child) {
+    VarSetCapacity(_className, 256)
+    DllCall("GetClassName", "Ptr", _child, "Str", _className, "Int", 255)
+    If (InStr(_className, "ScrollBar"))
+      Return _child
+    ; Recursively check descendants
+    _found := FindScrollBarChild(_child)
+    If (_found)
+      Return _found
+    _child := DllCall("GetWindow", "Ptr", _child, "UInt", 2, "Ptr")  ; GW_HWNDNEXT
+  }
+  Return 0
+}
+
+; Log window control tree with visibility and scroll info (for debugging)
+LogControlTree(parentHwnd, indent := 0) {
+  global DebugLogPath
+  _child := DllCall("GetWindow", "Ptr", parentHwnd, "UInt", 5, "Ptr")  ; GW_CHILD
+  While (_child) {
+    VarSetCapacity(_className, 256)
+    DllCall("GetClassName", "Ptr", _child, "Str", _className, "Int", 255)
+    _visible := DllCall("IsWindowVisible", "Ptr", _child, "Int")
+    _pad := ""
+    Loop, %indent%
+      _pad .= "  "
+    _info := _pad . _className . " [" . (_visible ? "V" : "H") . "]"
+    ; For ScrollBar controls, show scroll info
+    If (InStr(_className, "ScrollBar")) {
+      VarSetCapacity(_si, 28, 0)
+      NumPut(28, _si, 0, "UInt")
+      NumPut(0x17, _si, 4, "UInt")  ; SIF_ALL
+      DllCall("GetScrollInfo", "Ptr", _child, "Int", 2, "Ptr", &_si, "Int")  ; SB_CTL
+      _min := NumGet(_si, 8, "Int"), _max := NumGet(_si, 12, "Int")
+      _page := NumGet(_si, 16, "UInt"), _pos := NumGet(_si, 20, "Int")
+      _info .= " min=" . _min . " max=" . _max . " page=" . _page . " pos=" . _pos
+    }
+    FileAppend, %_info%`n, %DebugLogPath%
+    ; Recurse (limit depth to 5 for more detail)
+    If (indent < 5)
+      LogControlTree(_child, indent + 1)
+    _child := DllCall("GetWindow", "Ptr", _child, "UInt", 2, "Ptr")  ; GW_HWNDNEXT
+  }
+}
 
 MB_Cleanup() {
   global MB

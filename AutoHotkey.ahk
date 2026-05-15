@@ -20,10 +20,11 @@ SetTitleMatchMode, 2
 
 ; Debug flags
 DebugTooltips := 0
-DebugLogEvents := 0
+DebugLogEvents := 1
+; NOTE: When viewing the log, grep for the type of event
+; (e.g. ScrollAccel, MBDrag, etc.) and tail 100
 DebugLogPath := A_Temp "\AHK_Debug.log"
-If (DebugLogEvents)
-    FileDelete, %DebugLogPath%  ; Clear log on reload
+FileDelete, %DebugLogPath%  ; Clear log on load
 
 ; Disable hotkeys inside remote sessions (RDP, Hyper-V, VMWare)
 #If IsRemoteSession()
