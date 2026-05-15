@@ -1,17 +1,17 @@
 ; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ; ┃ === MIDDLE-BUTTON SMOOTH-SCROLL === ┃
 ; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-; Description: Smooth, fractional scrolling in Explorer (and other capable apps system-wide)
+; Description: Smooth, fractional scrolling in Explorer (and all other apps system-wide)
 ; on middle mouse button drag, mimicking Chrome's behavior as closely as possible.
 ; Permalink (latest): https://github.com/rodboev/AHK/
 ; Forum thread: https://autohotkey.com/boards/viewtopic.php?t=43715
 ; Author: @rodboev
-; Version: 3.0
+; Version: 4.0
 
 ; -> [ MButton + drag ] -> Invoke smooth scrolling on any app; release to stop.
 *MButton::
-  ; Session state object — single global, properties need no separate declarations
-  global MB := {Debug: 1, Threshold: 8}  ; Debug tooltips, activation distance (px)
+  global MB
+  MB := {Tooltips: 0, Threshold: 2}
 
   ; Core session state
   MB.X1 := 0, MB.Y1 := 0, MB.Win := 0, MB.Ctrl := 0
@@ -139,7 +139,7 @@
     } Else {
       MB.Cursor.Pending := 1
     }
-    If (MB.Debug)
+    If (MB.Tooltips)
       ToolTip, % "SysListView32 -> LVM_SCROLL (pixel-level)"
     If (DebugLogEvents) {
       _ts := A_Now
@@ -152,8 +152,6 @@
 
   ; SET UP UIA (for both native scroll detection and potential custom scroll)
   ; Use FindScrollableChild to enumerate child windows and find one with ScrollPattern.
-  ; This mimics Windhawk's smooth-scroll approach: MouseGetPos can pick the wrong DirectUIHWND
-  ; in tabbed Explorer, so we enumerate all children and find the one that's actually scrollable.
 
   ; Dump control tree for debugging (Explorer, Windows Terminal)
   If (DebugLogEvents and (MB.WinClass = "CabinetWClass" or MB.WinClass = "CASCADIA_HOSTING_WINDOW_CLASS")) {
@@ -307,7 +305,7 @@ MBDragTimer:
       MB.Cursor.Active := 0
     }
     MB.Cursor.Pending := 0
-    If (MB.Debug)
+    If (MB.Tooltips)
       ToolTip
     Return
   }
@@ -315,7 +313,7 @@ MBDragTimer:
   ; ===== NATIVE SCROLL PROBE PHASE =====
   ; Detect if the app handles MButton drag-scroll natively.
   ; Three signals: cursor change, Win32 scroll pos, UIA scroll percent.
-  ; Movement-gated: cursor checked every tick; scroll pos checked after 3px; concludes at 8px.
+  ; Movement-gated: cursor checked every tick; concludes at threshold (1px).
   If (MB.Probe.Active > 0) {
     nativeDetected := false
 
@@ -351,7 +349,7 @@ MBDragTimer:
         }
       }
 
-      ; Keep probing until 8px movement gate (matches custom scroll threshold)
+      ; Keep probing until movement threshold reached
       If (!nativeDetected and probeDrag < MB.Threshold)
         Return
     }
@@ -373,7 +371,7 @@ MBDragTimer:
         MB.UIA.Element := 0
       }
       SetTimer, MBDragTimer, Off
-      If (MB.Debug) {
+      If (MB.Tooltips) {
         VarSetCapacity(ci2, 16 + A_PtrSize, 0)
         NumPut(16 + A_PtrSize, ci2, 0, "UInt")
         DllCall("GetCursorInfo", "Ptr", &ci2)
@@ -396,7 +394,7 @@ MBDragTimer:
       }
       MB.Method := "WHEEL"
     }
-    If (MB.Debug)
+    If (MB.Tooltips)
       ToolTip, % "No native scroll — using " MB.Method
     ; Log session start
     If (DebugLogEvents) {
@@ -474,7 +472,7 @@ MBDragTimer:
       ; Read actual current scroll position for tooltip
       DllCall(NumGet(NumGet(_pattern+0)+6*A_PtrSize), "Ptr", _pattern, "Double*", _curPctV)
       DllCall(NumGet(NumGet(_pattern+0)+5*A_PtrSize), "Ptr", _pattern, "Double*", _curPctH)
-      If (MB.Debug)
+      If (MB.Tooltips)
         ToolTip, % "UIA: pos=" Round(_curPctV, 1) "%% view=" Round(MB.UIA.ViewSize, 1) "%% (H:" Round(_curPctH, 1) "%%)"
       ; SetScrollPercent(hPct, vPct) - vtable offset 4 (with timing)
       _accumH := MB.UIA.AccumPctH, _accumV := MB.UIA.AccumPct
@@ -520,19 +518,23 @@ MBDragTimer:
           DllCall(NumGet(NumGet(_pattern+0)+5*A_PtrSize), "Ptr", _pattern, "Double*", verifyPctH)
           _noScrollH := (verifyPctH < -0.5)
         }
-        ; Fall back only if ALL intended axes report NoScroll
-        _vertIntended := (AbsDistY >= MB.Threshold)
-        _horizIntended := (AbsDistX >= MB.Threshold)
-        _allNoScroll := (_vertIntended and _noScrollV or !_vertIntended) and (_horizIntended and _noScrollH or !_horizIntended)
-        If (_vertIntended and _noScrollV and _horizIntended and _noScrollH) or (_vertIntended and _noScrollV and !_horizIntended) or (!_vertIntended and _horizIntended and _noScrollH) {
-          ; Intended axis(es) report NoScroll — fall back to WHEEL
+        ; If horizontal NoScroll but vertical available, just disable horizontal and continue UIA
+        ; Don't fall back completely - user may switch to vertical movement
+        If (_noScrollH and !_noScrollV and MB.UIA.ViewSize < 99.9) {
+          MB.UIA.AccumPctH := -1  ; Mark horizontal as disabled
+          MB.FallbackChecked := 1
+          If (DebugLogEvents)
+            FileAppend, % A_Now " | MBDrag | UIA_HORIZ_DISABLED | proc=" MB.ProcName " (vertical still available)`n", %DebugLogPath%
+        ; Fall back only if vertical is NoScroll (horizontal-only NoScroll doesn't warrant full fallback)
+        } Else If (_noScrollV) {
+          ; Vertical is NoScroll — fall back to WHEEL
           ObjRelease(_pattern)
           MB.UIA.Pattern := 0
           _element := MB.UIA.Element
           ObjRelease(_element)
           MB.UIA.Element := 0
           MB.Method := "WHEEL"
-          If (MB.Debug)
+          If (MB.Tooltips)
             ToolTip, % "UIA->WHEEL (NoScroll sentinel)"
           If (DebugLogEvents)
             FileAppend, % A_Now " | MBDrag | FALLBACK | proc=" MB.ProcName " UIA->WHEEL (NoScroll V=" _noScrollV " H=" _noScrollH ")`n", %DebugLogPath%
@@ -570,26 +572,22 @@ MBDragTimer:
       If (AbsDistY >= MB.Threshold) {
         scrollPixelsY := Max(1, Floor(curveValueY * pixelMultiplier))
         ; Row-quantized views need rowHeight+1 pixels to guarantee crossing row boundary
-        ; Cap at 3x rowHeight to prevent jumping too many rows at once
-        If (MB.LVM.RowQuantized) {
+        If (MB.LVM.RowQuantized)
           scrollPixelsY := Max(MB.LVM.RowHeight + 1, scrollPixelsY)
-          scrollPixelsY := Min(MB.LVM.RowHeight * 3, scrollPixelsY)
-        }
         If (SignedDistY < 0)
           scrollPixelsY := -scrollPixelsY
       }
       If (AbsDistX >= MB.Threshold) {
-        horizMultiplier := MB.LVM.RowQuantized ? 3.0 : 1.0
-        scrollPixelsX := Max(1, Floor(curveValueX * pixelMultiplier * horizMultiplier))
+        scrollPixelsX := Max(1, Floor(curveValueX * pixelMultiplier))
         If (SignedDistX < 0)
           scrollPixelsX := -scrollPixelsX
       }
 
       ; --- Row-quantization detection on first vertical scroll ---
       If (!MB.LVM.Detected and AbsDistY >= MB.Threshold) {
-        ; Cap detection scroll to 50px max — we don't know row height yet, and
-        ; uncapped values (thousands of pixels) cause massive jumps before cap kicks in
-        detectScrollY := (scrollPixelsY > 0) ? Min(50, scrollPixelsY) : Max(-50, scrollPixelsY)
+        ; Use 50px for detection probe — enough to cross a typical row boundary (20-25px)
+        ; This prevents false "pixel-level at boundary" when sent pixels are too small
+        detectScrollY := (SignedDistY > 0) ? 50 : -50
         posBefore := GetScrollPos(target)
         SendMessage, 0x1014, 0, %detectScrollY%,, ahk_id %target%
         posAfter := GetScrollPos(target)
@@ -602,42 +600,41 @@ MBDragTimer:
         _isOwnerDraw := (_lvStyle & 0x0400) ? 1 : 0   ; LVS_OWNERDRAWFIXED
 
         ; Detection logic:
-        ; - delta ≈ sentPixels (within 0.3x-1.5x): pixel-level scrolling (HIGH CONFIDENCE)
-        ; - delta=0 with virtual=1: below row threshold -> row-quantized (HIGH CONFIDENCE)
-        ; - delta=0 with virtual=0: might be at boundary, assume pixel-level (LOW CONFIDENCE)
-        ; - delta way off from sent: row-quantized
+        ; - delta ≈ sentPixels (0.85-1.15 ratio): pixel-level scrolling (HIGH CONFIDENCE)
+        ; - delta=0: at boundary or no scrollbar, assume pixel-level (LOW CONFIDENCE)
+        ; - delta > 0 but < 0.85*sent: row-quantized (rounded to row boundaries)
+        ; Row-quantized is the default for most ListViews; pixel-level is rare (TortoiseGit)
         deltaRatio := (sentPixels > 0) ? (scrollDelta / sentPixels) : 0
-        If (deltaRatio >= 0.3 and deltaRatio <= 1.5) {
+        If (deltaRatio >= 0.85 and deltaRatio <= 1.15) {
           ; Pixel-level: delta ≈ sentPixels (high confidence - prevents SLOW-TICK override)
           MB.LVM.RowQuantized := 0
           MB.LVM.DetectConfident := 1
           If (DebugLogEvents)
             FileAppend, % A_Now " | MBDrag | DETECT | proc=" MB.ProcName " PIXEL-LEVEL delta=" scrollDelta " sent=" sentPixels " ratio=" Round(deltaRatio, 2) " virtual=" _isVirtual "`n", %DebugLogPath%
-        } Else If (scrollDelta = 0 and !_isVirtual) {
-          ; delta=0 on non-virtual ListView: likely at boundary, assume pixel-level (low confidence)
+        } Else If (scrollDelta = 0) {
+          ; delta=0: at boundary or no scrollbar, assume pixel-level (low confidence)
           MB.LVM.RowQuantized := 0
           MB.LVM.DetectConfident := 0  ; Allow SLOW-TICK to upgrade if truly slow
           If (DebugLogEvents)
             FileAppend, % A_Now " | MBDrag | DETECT | proc=" MB.ProcName " PIXEL-LEVEL (boundary) delta=0 sent=" sentPixels " virtual=" _isVirtual "`n", %DebugLogPath%
-        } Else If (_isVirtual) {
-          ; Virtual ListView with delta off -> row-quantized (high confidence)
+        } Else {
+          ; delta > 0 but ratio outside 0.85-1.15: row-quantized
+          ; GetScrollPos returns ROWS not pixels for row-quantized ListViews
+          ; So delta=1 means 1 row scrolled, delta=2 means 2 rows, etc.
           MB.LVM.RowQuantized := 1
           MB.LVM.DetectConfident := 1
-          ; Set row height from detection or use conservative default
-          ; (LVM_GETITEMRECT requires cross-process memory allocation, too complex)
-          If (scrollDelta > 0 and scrollDelta > sentPixels) {
-            MB.LVM.RowHeight := scrollDelta
+          ; Estimate row height: sentPixels / scrollDelta = pixels per row
+          ; scrollDelta is in rows, sentPixels is in pixels
+          If (scrollDelta > 0 and scrollDelta <= 5) {
+            ; Small delta = few rows scrolled, estimate row height
+            MB.LVM.RowHeight := Floor(sentPixels / scrollDelta)
+            ; Sanity check: row heights are typically 16-40px
+            MB.LVM.RowHeight := Max(16, Min(40, MB.LVM.RowHeight))
           } Else {
-            MB.LVM.RowHeight := 25  ; Conservative default when we can't measure
+            MB.LVM.RowHeight := 25  ; Conservative default
           }
           If (DebugLogEvents)
             FileAppend, % A_Now " | MBDrag | DETECT | proc=" MB.ProcName " ROW-QUANTIZED rowH=" MB.LVM.RowHeight " delta=" scrollDelta " sent=" sentPixels " ratio=" Round(deltaRatio, 2) " virtual=" _isVirtual "`n", %DebugLogPath%
-        } Else {
-          ; Non-virtual with weird ratio: uncertain, stay pixel-level but allow upgrade
-          MB.LVM.RowQuantized := 0
-          MB.LVM.DetectConfident := 0
-          If (DebugLogEvents)
-            FileAppend, % A_Now " | MBDrag | DETECT | proc=" MB.ProcName " PIXEL-LEVEL (uncertain) delta=" scrollDelta " sent=" sentPixels " ratio=" Round(deltaRatio, 2) " virtual=" _isVirtual "`n", %DebugLogPath%
         }
         MB.LVM.Detected := 1
         ; If row-quantized detected and our sent pixels were below threshold, send another scroll
@@ -650,7 +647,7 @@ MBDragTimer:
           posAfter := GetScrollPos(target)
         }
         ; Show detection result in tooltip
-        If (MB.Debug) {
+        If (MB.Tooltips) {
           _mode := MB.LVM.RowQuantized ? "Q" : "P"
           ToolTip, % "LVM[" _mode "] detected (delta=" scrollDelta " virt=" _isVirtual " rowH=" MB.LVM.RowHeight ")"
         }
@@ -749,10 +746,9 @@ MBDragTimer:
       }
 
       LVM_PostVertical:
-      ; Recalculate horizontal with correct multiplier (2x for row-quantized views)
+      ; Recalculate horizontal if detection changed multiplier
       If (AbsDistX >= MB.Threshold) {
-        horizMultiplier := MB.LVM.RowQuantized ? 3.0 : 1.0
-        scrollPixelsX := Max(1, Floor(curveValueX * pixelMultiplier * horizMultiplier))
+        scrollPixelsX := Max(1, Floor(curveValueX * pixelMultiplier))
         If (SignedDistX < 0)
           scrollPixelsX := -scrollPixelsX
       }
@@ -791,7 +787,7 @@ MBDragTimer:
       }
 
       MB.ScrollTicks++
-      If (MB.Debug) {
+      If (MB.Tooltips) {
         ; Mode format: Q:h (quantized high-conf), P:l (pixel low-conf), ? (not yet detected)
         ; High confidence: virtual flag or delta-ratio match. Low: boundary guess or slow-tick upgrade
         If (!MB.LVM.Detected)
@@ -847,7 +843,7 @@ MBDragTimer:
             ; Revert the jump by scrolling opposite direction
             revertDir := (posAfter > posBefore) ? 0 : 1  ; 0=up, 1=down
             PostMessage, 0x115, %revertDir%, 0,, ahk_id %target%  ; WM_VSCROLL
-            If (MB.Debug)
+            If (MB.Tooltips)
               ToolTip, % "WHEEL_CTRL->VSCROLL (jumped " scrolledUnits " units)"
             If (DebugLogEvents)
               FileAppend, % A_Now " | MBDrag | FALLBACK | proc=" MB.ProcName " WHEEL_CTRL->VSCROLL (jumped " scrolledUnits " units)`n", %DebugLogPath%
@@ -871,7 +867,7 @@ MBDragTimer:
       }
 
       ; Fallback for custom scrollbars (like SystemInformer's PhTreeNew)
-      ; Check after 8px movement threshold, only once per session
+      ; Check after movement threshold, only once per session
       ; Only activate if the TARGET CONTROL has VISIBLE ScrollBar children with actual scroll range
       ; Explorer has hidden scrollbars always present - must check visibility
       If (MB.Cursor.Pending and !MB.ScrollBarChecked and (AbsDistY >= MB.Threshold or AbsDistX >= MB.Threshold)) {
@@ -908,16 +904,24 @@ MBDragTimer:
 
       MB.ScrollTicks++
 
-      ; Horizontal: WM_MOUSEHWHEEL (0x20E) — 2x multiplier for perceptual parity with vertical
+      ; Horizontal: WM_MOUSEHWHEEL (0x20E) — 1.5x boost for perceptual parity
       If (AbsDistX >= MB.Threshold) {
-        magnitudeX := Max(1, Min(119, Floor(curveValueX)))  ; 2x: removed /2
+        magnitudeX := Max(1, Floor(curveValueX * 1.5))
         DeltaX := (SignedDistX > 0) ? magnitudeX : -magnitudeX
         wParamX := DeltaX << 16
         PostMessage, 0x20E, %wParamX%, %lParam%,, ahk_id %target%
       }
 
-      If (MB.Debug && MB.Method = "WHEEL_CTRL")
+      If (MB.Tooltips && MB.Method = "WHEEL_CTRL")
         ToolTip, % "WHEEL_CTRL: dY=" (AbsDistY >= MB.Threshold ? DeltaY : 0) " dX=" (AbsDistX >= MB.Threshold ? DeltaX : 0)
+
+      ; Log every 5 ticks for comparison with LVM
+      If (DebugLogEvents && Mod(MB.ScrollTicks, 5) = 0) {
+        _dYLog := (AbsDistY >= MB.Threshold) ? DeltaY : 0
+        _dXLog := (AbsDistX >= MB.Threshold) ? DeltaX : 0
+        _curveXLog := (AbsDistX >= MB.Threshold) ? Round(curveValueX, 1) : 0
+        FileAppend, % A_Now " | MBDrag | WHEEL_CTRL | proc=" MB.ProcName " tick=" MB.ScrollTicks " dY=" _dYLog " dX=" _dXLog " curveX=" _curveXLog "`n", %DebugLogPath%
+      }
 
     } Else If (MB.Method = "VSCROLL") {
       ; ===========================================
@@ -961,7 +965,7 @@ MBDragTimer:
         PostMessage, 0x20E, %wParamX%, %lParamV%,, ahk_id %target%
       }
 
-      If (MB.Debug)
+      If (MB.Tooltips)
         ToolTip, % "VSCROLL: dirY=" (AbsDistY >= MB.Threshold ? scrollDirY : "-") " dX=" (AbsDistX >= MB.Threshold ? DeltaX : "-") " timer=" timerMs "ms"
 
     } Else {
@@ -993,7 +997,7 @@ MBDragTimer:
             ; No movement detected — try sending to control directly
             MB.Method := "WHEEL_CTRL"
             MB.FallbackChecked := 0
-            If (MB.Debug)
+            If (MB.Tooltips)
               ToolTip, % "WHEEL->WHEEL_CTRL (no movement)"
             If (DebugLogEvents)
               FileAppend, % A_Now " | MBDrag | FALLBACK | proc=" MB.ProcName " WHEEL->WHEEL_CTRL (no movement)`n", %DebugLogPath%
@@ -1013,7 +1017,7 @@ MBDragTimer:
             ; (sends to control) is more likely to work than WHEEL (sends to window)
             MB.Method := "WHEEL_CTRL"
             MB.FallbackChecked := 0
-            If (MB.Debug)
+            If (MB.Tooltips)
               ToolTip, % "WHEEL->WHEEL_CTRL (no scrollbar, has control)"
             If (DebugLogEvents)
               FileAppend, % A_Now " | MBDrag | FALLBACK | proc=" MB.ProcName " WHEEL->WHEEL_CTRL (no scrollbar, control=" MB.ClassName ")`n", %DebugLogPath%
@@ -1038,7 +1042,7 @@ MBDragTimer:
         PostMessage, 0x20E, %wParamX%, %lParam%,, ahk_id %hTarget%
       }
 
-      If (MB.Debug && MB.Method = "WHEEL")
+      If (MB.Tooltips && MB.Method = "WHEEL")
         ToolTip, % "WHEEL: dY=" (AbsDistY >= MB.Threshold ? DeltaY : "-") " dX=" (AbsDistX >= MB.Threshold ? DeltaX : "-") " hTgt=" (MB.FallbackChecked ? "win" : "ctrl")
     }
   }
@@ -1059,7 +1063,7 @@ Return
     _duration := A_TickCount - MB.SessionStart
     FileAppend, % A_Now " | MBDrag | END | proc=" MB.ProcName " method=" MB.Method " ticks=" MB.ScrollTicks " duration=" _duration "ms`n", %DebugLogPath%
   }
-  If (MB.Debug)
+  If (MB.Tooltips)
     ToolTip
 
   ; Release UIA objects
@@ -1170,15 +1174,20 @@ FindVisibleScrollBar(parentHwnd) {
 ; steep=false (UIA): sub-linear throughout, gentle
 ; steep=true (non-UIA): gentle start, steep end (slow near center, fast when dragged far)
 ScrollCurve(dist, steep := false) {
-  If (!steep)
-    Return dist ** 0.8  ; UIA: gentle throughout
-  ; Non-UIA: exponent increases with distance (0.7 at 0px → 1.4 at 200px)
-  ; This gives gentle start but aggressive acceleration when dragged far
-  exp := 0.7 + (dist / 300)
-  Return dist ** exp
+  If (!steep) {
+    ; UIA: gentle throughout, with damping at small distances to compensate for low threshold
+    ; Damping factor: dist/(dist+12) approaches 1 as distance grows
+    ; At 2px: 0.25, at 8px: 2.11, at 50px: 19.1, at 100px: 35.5
+    Return dist ** 0.8 * (dist / (dist + 12))
+  }
+  ; Non-UIA: self-limiting curve using harmonic dampening
+  ; Naturally approaches ceiling without needing caps, works across resolutions
+  base := dist ** 0.9 * 2
+  ceiling := 400
+  Return base * ceiling / (base + ceiling)
 }
 
-; Find a scrollable child window at the given point (mimics Windhawk smooth-scroll FindChild)
+; Find a scrollable child window at the given point
 ; Recursively enumerates all descendant windows and returns the first visible one that:
 ; 1. Contains the point
 ; 2. Has UIA ScrollPattern with ViewSize < 100 (actually scrollable)
@@ -1466,6 +1475,7 @@ LogControlTree(parentHwnd, indent := 0) {
   }
 }
 
+; Registered via OnExit("MB_Cleanup") in AutoHotkey.ahk
 MB_Cleanup() {
   global MB
   If (!IsObject(MB))
