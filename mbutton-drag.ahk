@@ -80,7 +80,7 @@ FindVisibleScrollBar(parentHwnd) {
         _min := NumGet(_si, 8, "Int"), _max := NumGet(_si, 12, "Int"), _page := NumGet(_si, 16, "UInt")
         If (DebugLogEvents)
           FileAppend, % A_Now " | MBDrag | SCROLLBAR_FOUND | hwnd=" _child " ret=" _ret " min=" _min " max=" _max " page=" _page "`n", %DebugLogPath%
-        If (_ret and _max > _min)
+        If (_ret and _max - _min > _page)
           Return _child
       }
       ; Recursively check descendants
@@ -149,6 +149,198 @@ FindScrollableChild(parentHwnd, ptX, ptY) {
       }
     }
     _child := DllCall("GetWindow", "Ptr", _child, "UInt", 2, "Ptr")
+  }
+  Return 0
+}
+
+; Find UIA ScrollPattern by walking up ancestors from a point
+; Used for UWP/XAML apps (like Windows Terminal) where Win32 scrollbars don't exist
+; and ElementFromHandle on the window doesn't find the ScrollViewer
+; Returns: {pattern: ptr, element: ptr} if found, 0 otherwise
+; Helper: Get ClassName property from UIA element (returns empty string on failure)
+GetUIAClass(element) {
+  VarSetCapacity(_var, 24, 0)
+  DllCall("OleAut32\VariantInit", "Ptr", &_var)
+  DllCall(NumGet(NumGet(element+0)+10*A_PtrSize), "Ptr", element, "Int", 30012, "Ptr", &_var)
+  _class := ""
+  If (NumGet(_var, 0, "UShort") = 8) {
+    _bstr := NumGet(_var, 8, "Ptr")
+    If (_bstr)
+      _class := StrGet(_bstr, "UTF-16")
+  }
+  DllCall("OleAut32\VariantClear", "Ptr", &_var)
+  Return _class
+}
+
+; Search UIA tree for scrollable elements (ScrollPattern or XAML ScrollBar)
+; Used for UWP/XAML apps where Win32 scrollbar detection fails
+FindUIAScrollAncestor(ptX, ptY) {
+  global G_UIA, DebugLogEvents, DebugLogPath
+  If (!G_UIA)
+    Return 0
+
+  ; Get element at point: IUIAutomation::ElementFromPoint (vtable offset 7)
+  VarSetCapacity(_pt, 8, 0)
+  NumPut(ptX, _pt, 0, "Int"), NumPut(ptY, _pt, 4, "Int")
+  _startEl := 0
+  DllCall(NumGet(NumGet(G_UIA+0)+7*A_PtrSize), "Ptr", G_UIA, "Int64", NumGet(_pt, 0, "Int64"), "Ptr*", _startEl)
+  If (!_startEl)
+    Return 0
+
+  _startClass := GetUIAClass(_startEl)
+  _ancestorPath := _startClass  ; Build arrow-separated path for logging
+
+  ; Get TreeWalker: IUIAutomation::get_RawViewWalker (vtable offset 14)
+  _walker := 0
+  DllCall(NumGet(NumGet(G_UIA+0)+14*A_PtrSize), "Ptr", G_UIA, "Ptr*", _walker)
+  If (!_walker) {
+    ObjRelease(_startEl)
+    Return 0
+  }
+
+  ; Walk up ancestors checking for ScrollPattern (also check siblings at each level)
+  _current := _startEl
+  _depth := 0
+  Loop {
+    If (_depth >= 20)
+      Break
+
+    ; Check current element for ScrollPattern (10004)
+    _pattern := 0
+    DllCall(NumGet(NumGet(_current+0)+16*A_PtrSize), "Ptr", _current, "Int", 10004, "Ptr*", _pattern)
+    If (_pattern) {
+      DllCall(NumGet(NumGet(_pattern+0)+8*A_PtrSize), "Ptr", _pattern, "Double*", _viewSizeV)
+      DllCall(NumGet(NumGet(_pattern+0)+7*A_PtrSize), "Ptr", _pattern, "Double*", _viewSizeH)
+      If (_viewSizeV < 99.9 or _viewSizeH < 99.9) {
+        ObjRelease(_walker)
+        If (_current != _startEl)
+          ObjRelease(_startEl)
+        If (DebugLogEvents)
+          FileAppend, % A_Now " | MBDrag | UIA_TREE | FOUND ScrollPattern | " _ancestorPath "`n", %DebugLogPath%
+        Return {pattern: _pattern, element: _current, viewV: _viewSizeV, viewH: _viewSizeH}
+      }
+      ObjRelease(_pattern)
+    }
+
+    ; Check siblings for ScrollPattern (some XAML layouts have ScrollViewer as sibling)
+    _sibling := 0
+    DllCall(NumGet(NumGet(_walker+0)+6*A_PtrSize), "Ptr", _walker, "Ptr", _current, "Ptr*", _sibling)
+    _sibCount := 0
+    While (_sibling and _sibCount < 10) {
+      _sibCount++
+      _pattern := 0
+      DllCall(NumGet(NumGet(_sibling+0)+16*A_PtrSize), "Ptr", _sibling, "Int", 10004, "Ptr*", _pattern)
+      If (_pattern) {
+        DllCall(NumGet(NumGet(_pattern+0)+8*A_PtrSize), "Ptr", _pattern, "Double*", _viewSizeV)
+        DllCall(NumGet(NumGet(_pattern+0)+7*A_PtrSize), "Ptr", _pattern, "Double*", _viewSizeH)
+        If (_viewSizeV < 99.9 or _viewSizeH < 99.9) {
+          ObjRelease(_walker)
+          If (_current != _startEl)
+            ObjRelease(_current)
+          ObjRelease(_startEl)
+          If (DebugLogEvents)
+            FileAppend, % A_Now " | MBDrag | UIA_TREE | FOUND sibling ScrollPattern | " _ancestorPath "`n", %DebugLogPath%
+          Return {pattern: _pattern, element: _sibling, viewV: _viewSizeV, viewH: _viewSizeH}
+        }
+        ObjRelease(_pattern)
+      }
+      _nextSib := 0
+      DllCall(NumGet(NumGet(_walker+0)+6*A_PtrSize), "Ptr", _walker, "Ptr", _sibling, "Ptr*", _nextSib)
+      ObjRelease(_sibling)
+      _sibling := _nextSib
+    }
+    If (_sibling)
+      ObjRelease(_sibling)
+
+    ; Get parent: IUIAutomationTreeWalker::GetParentElement (vtable offset 3)
+    _parent := 0
+    DllCall(NumGet(NumGet(_walker+0)+3*A_PtrSize), "Ptr", _walker, "Ptr", _current, "Ptr*", _parent)
+
+    If (_current != _startEl) {
+      ObjRelease(_current)
+      _current := 0
+    }
+
+    If (!_parent)
+      Break
+
+    _parentClass := GetUIAClass(_parent)
+    _ancestorPath .= " <- " . _parentClass
+    _current := _parent
+    _depth++
+  }
+
+  ; Parent walk failed - search children for XAML ScrollBar (UWP apps like Windows Terminal)
+  _result := FindScrollInChildren(_walker, _startEl, 0, _startClass)
+  If (IsObject(_result)) {
+    ObjRelease(_walker)
+    ObjRelease(_startEl)
+    If (_current and _current != _startEl)
+      ObjRelease(_current)
+    Return _result
+  }
+
+  ; Not found - cleanup and log
+  ObjRelease(_walker)
+  ObjRelease(_startEl)
+  If (_current and _current != _startEl)
+    ObjRelease(_current)
+  If (DebugLogEvents)
+    FileAppend, % A_Now " | MBDrag | UIA_TREE | not found | " _ancestorPath "`n", %DebugLogPath%
+  Return 0
+}
+
+; Helper: recursively search children for XAML ScrollBar with Maximum > 0
+; For UWP apps like Windows Terminal, the ScrollBar is a child of the content control
+; and its Maximum property indicates scrollability (0 = not scrollable, >0 = scrollable)
+; path: arrow-separated class path for logging (built recursively)
+FindScrollInChildren(walker, element, depth, path) {
+  global DebugLogEvents, DebugLogPath
+  If (depth > 20)
+    Return 0
+
+  _class := GetUIAClass(element)
+  _curPath := path ? (path " -> " _class) : _class
+
+  ; Check if it's a ScrollBar with Maximum > 0
+  If (InStr(_class, "ScrollBar")) {
+    ; Get RangeValue Maximum property (30050)
+    VarSetCapacity(_var, 24, 0)
+    DllCall("OleAut32\VariantInit", "Ptr", &_var)
+    DllCall(NumGet(NumGet(element+0)+10*A_PtrSize), "Ptr", element, "Int", 30050, "Ptr", &_var)
+    _vt := NumGet(_var, 0, "UShort")
+    _maximum := 0
+    If (_vt = 5)  ; VT_R8 (Double)
+      _maximum := NumGet(_var, 8, "Double")
+    Else If (_vt = 3)  ; VT_I4
+      _maximum := NumGet(_var, 8, "Int")
+    DllCall("OleAut32\VariantClear", "Ptr", &_var)
+
+    If (_maximum > 0) {
+      If (DebugLogEvents)
+        FileAppend, % A_Now " | MBDrag | UIA_CHILD | FOUND ScrollBar(max=" _maximum ") | " _curPath "`n", %DebugLogPath%
+      DllCall(NumGet(NumGet(element+0)+1*A_PtrSize), "Ptr", element)  ; AddRef
+      Return {scrollbar: element, maximum: _maximum, scrollable: 1}
+    }
+    If (DebugLogEvents)
+      FileAppend, % A_Now " | MBDrag | UIA_CHILD | ScrollBar max=0 (not scrollable) | " _curPath "`n", %DebugLogPath%
+    Return 0  ; Found ScrollBar but not scrollable - no need to search deeper
+  }
+
+  ; Get first child: IUIAutomationTreeWalker::GetFirstChildElement (vtable offset 4)
+  _child := 0
+  DllCall(NumGet(NumGet(walker+0)+4*A_PtrSize), "Ptr", walker, "Ptr", element, "Ptr*", _child)
+  While (_child) {
+    _result := FindScrollInChildren(walker, _child, depth + 1, _curPath)
+    If (IsObject(_result)) {
+      ObjRelease(_child)
+      Return _result
+    }
+    ; Get next sibling
+    _nextSib := 0
+    DllCall(NumGet(NumGet(walker+0)+6*A_PtrSize), "Ptr", walker, "Ptr", _child, "Ptr*", _nextSib)
+    ObjRelease(_child)
+    _child := _nextSib
   }
   Return 0
 }
@@ -348,9 +540,9 @@ LogControlTree(parentHwnd, indent := 0) {
   ; This mimics Windhawk's smooth-scroll approach: MouseGetPos can pick the wrong DirectUIHWND
   ; in tabbed Explorer, so we enumerate all children and find the one that's actually scrollable.
 
-  ; Dump control tree for Explorer windows (debug)
-  If (DebugLogEvents and MB.WinClass = "CabinetWClass") {
-    FileAppend, % A_Now " | MBDrag | CONTROL_TREE | win=" MB.Win "`n", %DebugLogPath%
+  ; Dump control tree for debugging (Explorer, Windows Terminal)
+  If (DebugLogEvents and (MB.WinClass = "CabinetWClass" or MB.WinClass = "CASCADIA_HOSTING_WINDOW_CLASS")) {
+    FileAppend, % A_Now " | MBDrag | CONTROL_TREE | win=" MB.Win " class=" MB.WinClass "`n", %DebugLogPath%
     LogControlTree(MB.Win)
     FileAppend, % "--- END TREE ---`n", %DebugLogPath%
   }
@@ -426,6 +618,32 @@ LogControlTree(parentHwnd, indent := 0) {
       _hasScrollRange := 1
       If (DebugLogEvents)
         FileAppend, % A_Now " | MBDrag | SCROLLBAR_VISIBLE | hwnd=" _visibleScrollBar "`n", %DebugLogPath%
+    }
+  }
+
+  ; For UWP/XAML apps (Windows Terminal, etc.): walk UIA tree from cursor position
+  ; ElementFromHandle on the window doesn't find XAML ScrollViewers, but ElementFromPoint does
+  ; Search UIA tree for scrollability (works for UWP/XAML apps like Windows Terminal)
+  If (!_hasScrollRange and !MB.UIA.Pattern) {
+    _ancestorResult := FindUIAScrollAncestor(MB.X1, MB.Y1)
+    If (IsObject(_ancestorResult)) {
+      If (_ancestorResult.pattern) {
+        ; Found ScrollPattern via ancestor walk - use it for scrolling
+        MB.UIA.Pattern := _ancestorResult.pattern
+        MB.UIA.Element := _ancestorResult.element
+        MB.UIA.ViewSize := (_ancestorResult.viewV < 1) ? 10.0 : _ancestorResult.viewV
+        MB.UIA.ViewSizeH := (_ancestorResult.viewH < 1) ? 10.0 : _ancestorResult.viewH
+        _hasScrollRange := 1
+        If (DebugLogEvents)
+          FileAppend, % A_Now " | MBDrag | UIA_ANCESTOR_USED | pattern=" MB.UIA.Pattern " viewV=" Round(MB.UIA.ViewSize, 1) "`n", %DebugLogPath%
+      } Else If (_ancestorResult.scrollable) {
+        ; Found XAML ScrollBar with Maximum > 0 - scrollable but no pattern (use WHEEL_CTRL)
+        _hasScrollRange := 1
+        If (_ancestorResult.scrollbar)
+          ObjRelease(_ancestorResult.scrollbar)  ; Don't need to keep reference
+        If (DebugLogEvents)
+          FileAppend, % A_Now " | MBDrag | UIA_SCROLLBAR_FOUND | maximum=" _ancestorResult.maximum "`n", %DebugLogPath%
+      }
     }
   }
 
@@ -1042,7 +1260,6 @@ MBDragTimer:
       ; Only activate if the TARGET CONTROL has VISIBLE ScrollBar children with actual scroll range
       ; Explorer has hidden scrollbars always present - must check visibility
       If (MB.Cursor.Pending and !MB.ScrollBarChecked and (AbsDistY >= MB.Threshold or AbsDistX >= MB.Threshold)) {
-        MB.ScrollBarChecked := 1
         _childScrollbar := MB.Ctrl ? FindScrollBarChild(MB.Ctrl) : 0
         _scrollbarHasRange := 0
         _scrollbarVisible := 0
@@ -1054,12 +1271,16 @@ MBDragTimer:
             NumPut(28, _si, 0, "UInt")
             NumPut(0x3, _si, 4, "UInt")  ; SIF_RANGE | SIF_PAGE
             _ret := DllCall("GetScrollInfo", "Ptr", _childScrollbar, "Int", 2, "Ptr", &_si, "Int")  ; SB_CTL
-            _min := NumGet(_si, 8, "Int"), _max := NumGet(_si, 12, "Int")
-            _scrollbarHasRange := (_ret and _max > _min)
+            _min := NumGet(_si, 8, "Int"), _max := NumGet(_si, 12, "Int"), _page := NumGet(_si, 16, "UInt")
+            _scrollbarHasRange := (_ret and _max - _min > _page)
           }
         }
         If (DebugLogEvents)
           FileAppend, % A_Now " | MBDrag | SCROLLBAR_CHECK | ctrl=" MB.Ctrl " childScrollbar=" _childScrollbar " visible=" _scrollbarVisible " hasRange=" _scrollbarHasRange "`n", %DebugLogPath%
+        ; Only mark as checked if: (1) no scrollbar child exists, or (2) scrollbar is visible and has range
+        ; If scrollbar exists but is temporarily invisible, allow recheck on subsequent ticks
+        If (!_childScrollbar or _scrollbarHasRange)
+          MB.ScrollBarChecked := 1
         If (_scrollbarHasRange) {
           MB.Cursor.Active := 1
           MB.Cursor.Pending := 0
