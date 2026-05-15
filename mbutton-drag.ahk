@@ -32,7 +32,7 @@ ScrollCurve(dist) {
 
 ; -> [ MButton + drag ] -> Invoke smooth scrolling on any app; release to stop.
 *MButton::
-  global MB_Debug := 0  ; Debug tooltips (0=off, 1=on)
+  global MB_Debug := 1  ; Debug tooltips (0=off, 1=on)
   global MB_X1, MB_Y1, MB_Win, MB_ClassName, MB_Triggered, MB_ProcName
   global MB_ScrollPattern := 0, MB_Element := 0, MB_Ctrl
   global MB_Disabled := 0, MB_DeferredDown := 0, MB_ViewSize := 10.0, MB_AccumPct := -1
@@ -51,6 +51,8 @@ ScrollCurve(dist) {
   ; Boundary detection: tracks when vertical scrolling hits min/max and stops sending futile messages
   ; 0=free, -1=stuck at min (can't scroll up), 1=stuck at max (can't scroll down)
   global MB_LVM_BoundaryY := 0
+  ; SizeAll cursor: shown during custom scroll to indicate drag-scroll mode
+  global MB_CursorActive := 0
 
   ; ===========================================
   ; UI Automation (UIA) — Lazy init on first MButton use
@@ -65,6 +67,11 @@ ScrollCurve(dist) {
     G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
     OnExit("G_UIACleanup")  ; Register cleanup (G_UIACleanup defined in AutoHotkey.ahk)
   }
+
+  ; SizeAll cursor: load once, reused across sessions
+  global MB_hSizeAll
+  If (!MB_hSizeAll)
+    MB_hSizeAll := DllCall("LoadCursor", "Ptr", 0, "Ptr", 32646, "Ptr")  ; IDC_SIZEALL
 
   MouseGetPos,,, MB_Win, MB_ClassName
   WinGetClass, ahk_class, ahk_id %MB_Win%
@@ -118,6 +125,10 @@ ScrollCurve(dist) {
   If (InStr(MB_ClassName, "SysTreeView32")) {
     MB_Method := "VSCROLL"
     MB_NativeProbe := 0
+    ; Show cursor immediately (TreeView is always scrollable)
+    MB_CursorActive := 1  ; Set flag first (race safety: cleanup will restore if interrupted)
+    hCopy := DllCall("CopyImage", "Ptr", MB_hSizeAll, "UInt", 2, "Int", 0, "Int", 0, "UInt", 0, "Ptr")
+    DllCall("SetSystemCursor", "Ptr", hCopy, "UInt", 32512)
     SetTimer, MBDragTimer, 150
     Return
   }
@@ -127,6 +138,10 @@ ScrollCurve(dist) {
   If (InStr(MB_ClassName, "SysListView32")) {
     MB_Method := "LVM"
     MB_NativeProbe := 0
+    ; Show cursor immediately (ListView is always scrollable)
+    MB_CursorActive := 1  ; Set flag first (race safety)
+    hCopy := DllCall("CopyImage", "Ptr", MB_hSizeAll, "UInt", 2, "Int", 0, "Int", 0, "UInt", 0, "Ptr")
+    DllCall("SetSystemCursor", "Ptr", hCopy, "UInt", 32512)
     If (MB_Debug)
       ToolTip, % "SysListView32 → LVM_SCROLL (pixel-level)"
     If (DebugLogEvents) {
@@ -160,6 +175,36 @@ ScrollCurve(dist) {
   If (MB_ScrollPattern)
     DllCall(NumGet(NumGet(MB_ScrollPattern+0)+6*A_PtrSize), "Ptr", MB_ScrollPattern, "Double*", MB_InitScrollPct)
 
+  ; Show SizeAll cursor on MButton down IF area appears scrollable
+  ; Scrollable = UIA ScrollPattern exists with ViewSize < 100 (content larger than view)
+  ;            OR has Win32 scrollbar
+  ; Note: When pattern=0, ViewSize defaults to 10.0 which is meaningless — don't use it
+  MB_CursorPending := 0
+  If (MB_ScrollPattern and (MB_ViewSize < 99.9 or MB_ViewSizeH < 99.9)) {
+    ; Known scrollable (UIA confirms content > view)
+    MB_CursorActive := 1  ; Set flag first (race safety)
+    hCopy := DllCall("CopyImage", "Ptr", MB_hSizeAll, "UInt", 2, "Int", 0, "Int", 0, "UInt", 0, "Ptr")
+    DllCall("SetSystemCursor", "Ptr", hCopy, "UInt", 32512)  ; OCR_NORMAL
+    If (DebugLogEvents)
+      FileAppend, % A_Now " | MBDrag | CURSOR_DOWN | pattern=" MB_ScrollPattern " viewV=" Round(MB_ViewSize, 1) " viewH=" Round(MB_ViewSizeH, 1) "`n", %DebugLogPath%
+  } Else If (MB_ScrollPattern and MB_ViewSize >= 99.9 and MB_ViewSizeH >= 99.9) {
+    ; Known non-scrollable (UIA confirms view == content)
+    If (DebugLogEvents)
+      FileAppend, % A_Now " | MBDrag | CURSOR_SKIP | pattern=" MB_ScrollPattern " viewV=" Round(MB_ViewSize, 1) " viewH=" Round(MB_ViewSizeH, 1) " (non-scrollable)`n", %DebugLogPath%
+  } Else If (!MB_ScrollPattern and HasWin32Scrollbar(probeTarget)) {
+    ; Known scrollable (Win32 scrollbar present)
+    MB_CursorActive := 1  ; Set flag first (race safety)
+    hCopy := DllCall("CopyImage", "Ptr", MB_hSizeAll, "UInt", 2, "Int", 0, "Int", 0, "UInt", 0, "Ptr")
+    DllCall("SetSystemCursor", "Ptr", hCopy, "UInt", 32512)
+    If (DebugLogEvents)
+      FileAppend, % A_Now " | MBDrag | CURSOR_DOWN | win32scrollbar=1`n", %DebugLogPath%
+  } Else {
+    ; Unknown scrollability — defer cursor until first successful scroll
+    MB_CursorPending := 1
+    If (DebugLogEvents)
+      FileAppend, % A_Now " | MBDrag | CURSOR_PENDING | pattern=" MB_ScrollPattern " viewV=" Round(MB_ViewSize, 1) " viewH=" Round(MB_ViewSizeH, 1) "`n", %DebugLogPath%
+  }
+
   ; Start timer in native probe mode
   MB_NativeProbe := 1
   SetTimer, MBDragTimer, 10
@@ -172,9 +217,16 @@ MBDragTimer:
   global MB_ProcName, MB_ScrollTicks, DebugLogEvents, DebugLogPath
   global MB_LVM_Detected, MB_LVM_RowQuantized, MB_LVM_RowHeight, MB_LVM_DetectConfident, MB_LVM_BoundaryY
   global MB_EMA_Y, MB_EMA_X, MB_PrevDistY, MB_PrevDistX
+  global MB_CursorActive, MB_CursorPending, MB_hSizeAll
   ; Safety check: if MButton released, stop immediately
   If !GetKeyState("MButton", "P") {
     SetTimer, MBDragTimer, Off
+    ; Restore cursor if we changed it (edge case: MButton Up didn't fire)
+    If (MB_CursorActive) {
+      DllCall("SystemParametersInfo", "UInt", 0x57, "UInt", 0, "Ptr", 0, "UInt", 0)
+      MB_CursorActive := 0
+    }
+    MB_CursorPending := 0
     If (MB_Debug)
       ToolTip
     Return
@@ -226,6 +278,11 @@ MBDragTimer:
     If (nativeDetected) {
       ; App handles MButton scroll natively — stay passive
       MB_Disabled := 1
+      ; Restore cursor if we changed it
+      If (MB_CursorActive) {
+        DllCall("SystemParametersInfo", "UInt", 0x57, "UInt", 0, "Ptr", 0, "UInt", 0)  ; SPI_SETCURSORS
+        MB_CursorActive := 0
+      }
       If (MB_ScrollPattern) {
         ObjRelease(MB_ScrollPattern)
         MB_ScrollPattern := 0
@@ -246,6 +303,15 @@ MBDragTimer:
 
     ; No native scroll — engage custom scroll
     MB_NativeProbe := 0
+    ; Show cursor now if it was pending (unknown scrollability case)
+    If (MB_CursorPending) {
+      MB_CursorActive := 1
+      MB_CursorPending := 0
+      hCopy := DllCall("CopyImage", "Ptr", MB_hSizeAll, "UInt", 2, "Int", 0, "Int", 0, "UInt", 0, "Ptr")
+      DllCall("SetSystemCursor", "Ptr", hCopy, "UInt", 32512)
+      If (DebugLogEvents)
+        FileAppend, % A_Now " | MBDrag | CURSOR_CONFIRMED | native_probe_passed`n", %DebugLogPath%
+    }
     If (MB_ScrollPattern) {
       MB_Method := "UIA"
     } Else {
@@ -273,7 +339,8 @@ MBDragTimer:
   AbsDistX := Abs(SignedDistX)
 
   If (AbsDistY >= 8 or AbsDistX >= 8) {
-    MB_Triggered := 1
+    If (!MB_Triggered)
+      MB_Triggered := 1
     curveValueY := ScrollCurve(AbsDistY)
     curveValueX := ScrollCurve(AbsDistX)
 
@@ -627,6 +694,15 @@ MBDragTimer:
               FileAppend, % A_Now " | MBDrag | FALLBACK | proc=" MB_ProcName " WHEEL_CTRL->VSCROLL (jumped " scrolledUnits " units)`n", %DebugLogPath%
           }
           MB_FallbackChecked := 1
+          ; Scroll succeeded — show cursor if pending
+          If (MB_CursorPending and scrolledUnits > 0) {
+            MB_CursorActive := 1
+            MB_CursorPending := 0
+            hCopy := DllCall("CopyImage", "Ptr", MB_hSizeAll, "UInt", 2, "Int", 0, "Int", 0, "UInt", 0, "Ptr")
+            DllCall("SetSystemCursor", "Ptr", hCopy, "UInt", 32512)
+            If (DebugLogEvents)
+              FileAppend, % A_Now " | MBDrag | CURSOR_CONFIRMED | method=WHEEL_CTRL`n", %DebugLogPath%
+          }
         }
       }
 
@@ -703,6 +779,15 @@ MBDragTimer:
               FileAppend, % A_Now " | MBDrag | FALLBACK | proc=" MB_ProcName " WHEEL->WHEEL_CTRL (no movement)`n", %DebugLogPath%
           } Else {
             MB_FallbackChecked := 1
+            ; Scroll succeeded — show cursor if pending
+            If (MB_CursorPending) {
+              MB_CursorActive := 1
+              MB_CursorPending := 0
+              hCopy := DllCall("CopyImage", "Ptr", MB_hSizeAll, "UInt", 2, "Int", 0, "Int", 0, "UInt", 0, "Ptr")
+              DllCall("SetSystemCursor", "Ptr", hCopy, "UInt", 32512)
+              If (DebugLogEvents)
+                FileAppend, % A_Now " | MBDrag | CURSOR_CONFIRMED | method=WHEEL`n", %DebugLogPath%
+            }
           }
         } Else {
           PostMessage, 0x20A, %wParamY%, %lParam%,, ahk_id %MB_Win%
@@ -729,7 +814,14 @@ Return
   Critical ; Prevent timer from firing during cleanup (race condition safety)
   global MB_Disabled, MB_DeferredDown, MB_Triggered, MB_Win, MB_ScrollPattern, MB_Element
   global MB_ProcName, MB_Method, MB_ScrollTicks, MB_SessionStart, DebugLogEvents, DebugLogPath
+  global MB_CursorActive, MB_CursorPending
   SetTimer, MBDragTimer, Off
+  ; Restore system cursor
+  If (MB_CursorActive) {
+    DllCall("SystemParametersInfo", "UInt", 0x57, "UInt", 0, "Ptr", 0, "UInt", 0)  ; SPI_SETCURSORS
+    MB_CursorActive := 0
+  }
+  MB_CursorPending := 0
   ; Log session summary
   If (DebugLogEvents && MB_Triggered) {
     _duration := A_TickCount - MB_SessionStart
@@ -761,8 +853,12 @@ Return
 Return
 
 MB_Cleanup() {
-  global MB_ScrollPattern, MB_Element
+  global MB_ScrollPattern, MB_Element, MB_CursorActive
   SetTimer, MBDragTimer, Off
+  If (MB_CursorActive) {
+    DllCall("SystemParametersInfo", "UInt", 0x57, "UInt", 0, "Ptr", 0, "UInt", 0)  ; SPI_SETCURSORS
+    MB_CursorActive := 0
+  }
   If (MB_ScrollPattern) {
     ObjRelease(MB_ScrollPattern)
     MB_ScrollPattern := 0
