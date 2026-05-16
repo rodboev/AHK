@@ -15,7 +15,7 @@
     GoSub, ExtendedSpyUpdate
   } Else If (ExtendedSpyState = 1) {
     SetTimer, ExtendedSpyUpdate, Off
-    ToolTip
+    ToolTip,,,, 10
     ExtendedSpyState := 2
     ExtendedSpyShowDialog()
   } Else {
@@ -32,7 +32,7 @@ $Esc::
     Return
   }
   SetTimer, ExtendedSpyUpdate, Off
-  ToolTip
+  ToolTip,,,, 10
   ExtendedSpyState := 0
 Return
 
@@ -42,7 +42,7 @@ Return
     WinGetClass, clickClass, ahk_id %clickWin%
     If (clickClass = "tooltips_class32") {
       SetTimer, ExtendedSpyUpdate, Off
-      ToolTip
+      ToolTip,,,, 10
       ExtendedSpyState := 2
       ExtendedSpyShowDialog()
     }
@@ -54,7 +54,7 @@ ExtendedSpyShowDialog() {
   global ExtendedSpyDisplayInfo, ExtendedSpyEdit
   If (ExtendedSpyDisplayInfo = "")
     Return
-  ToolTip
+  ToolTip,,,, 10
   Gui, ExtendedSpy:Destroy
   _curMon := GetCursorMonitor()
   SysGet, Workspace, MonitorWorkArea, %_curMon%
@@ -433,5 +433,5 @@ ExtendedSpyUpdate:
   _curMon := GetCursorMonitor()
   SysGet, Workspace, MonitorWorkArea, %_curMon%
   tooltipHeader := "Extended Spy (#w to freeze, Esc to close)`n`n"
-  ToolTip, %tooltipHeader%%display%, WorkspaceRight - 550, WorkspaceBottom - 620
+  ToolTip, %tooltipHeader%%display%, WorkspaceRight - 550, WorkspaceBottom - 620, 10
 Return
