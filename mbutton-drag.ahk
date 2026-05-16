@@ -10,21 +10,22 @@
 
 ; -> [ MButton + drag ] -> Invoke smooth scrolling on any app; release to stop.
 *MButton::
-  global MB
-  MB := {Tooltips: 0, Threshold: 2}
+  global MB, Debug
 
   ; Core session state
-  MB.X1 := 0, MB.Y1 := 0, MB.Win := 0, MB.Ctrl := 0
-  MB.ClassName := "", MB.ProcName := ""
-  MB.Triggered := 0, MB.Disabled := 0, MB.DeferredDown := 0
-  MB.Method := "VSCROLL", MB.FallbackChecked := 0, MB.ScrollBarChecked := 0
-  MB.ScrollTicks := 0, MB.SessionStart := 0
+  MB := { Threshold: 2
+    , X1: 0, Y1: 0
+    , Win: 0, Ctrl: 0
+    , ClassName: "", ProcName: ""
+    , Triggered: 0, Disabled: 0, DeferredDown: 0
+    , Method: "VSCROLL", FallbackChecked: 0, ScrollBarChecked: 0
+    , ScrollTicks: 0, SessionStart: 0 }
 
   ; UIA state (COM pointers and scroll accumulators)
   MB.UIA := {Pattern: 0, Element: 0, ViewSize: 10.0, ViewSizeH: 10.0, AccumPct: -1, AccumPctH: -1}
 
   ; Native scroll probe state
-  MB.Probe := {Active: 0, InitScrollPos: 0, InitScrollPct: 0.0, InitHCursor: 0}
+  MB.Probe := {Active: 0, InitScrollPos: 0, InitScrollPct: 0.0, InitScrollPctH: 0.0, InitHCursor: 0}
 
   ; LVM (SysListView32) state
   MB.LVM := {Detected: 0, RowQuantized: 0, RowHeight: 20, DetectConfident: 0, BoundaryY: 0}
@@ -115,8 +116,7 @@
     ; If scrollbar exists, show cursor immediately; otherwise verify on scroll
     If (HasWin32Scrollbar(MB.Ctrl)) {
       MB.Cursor.Active := 1
-      hCopy := DllCall("CopyImage", "Ptr", G_hSizeAll, "UInt", 2, "Int", 0, "Int", 0, "UInt", 0, "Ptr")
-      DllCall("SetSystemCursor", "Ptr", hCopy, "UInt", 32512)
+      SetDragCursor()
     } Else {
       MB.Cursor.Pending := 1
     }
@@ -134,17 +134,14 @@
     ; If any scrollbar exists (vertical OR horizontal), show cursor immediately
     If (HasWin32Scrollbar(_lvmCtrl, "any")) {
       MB.Cursor.Active := 1
-      hCopy := DllCall("CopyImage", "Ptr", G_hSizeAll, "UInt", 2, "Int", 0, "Int", 0, "UInt", 0, "Ptr")
-      DllCall("SetSystemCursor", "Ptr", hCopy, "UInt", 32512)
+      SetDragCursor()
     } Else {
       MB.Cursor.Pending := 1
     }
-    If (MB.Tooltips)
+    If (Debug.Tooltips["mbutton-drag"])
       ToolTip, % "SysListView32 -> LVM_SCROLL (pixel-level)"
-    If (DebugLogEvents) {
-      _ts := A_Now
-      _proc := MB.ProcName, _class := MB.ClassName
-      FileAppend, %_ts% | MBDrag | START | proc=%_proc% method=LVM ctrl=%_class%`n, %DebugLogPath%
+    If (Debug.Log["mbutton-drag"]) {
+      FileAppend, % TS() " | mbutton-drag | START | proc=" MB.ProcName " method=LVM ctrl=" MB.ClassName "`n", % Debug.Log.Path
     }
     SetTimer, MBDragTimer, 10
     Return
@@ -154,10 +151,10 @@
   ; Use FindScrollableChild to enumerate child windows and find one with ScrollPattern.
 
   ; Dump control tree for debugging (Explorer, Windows Terminal)
-  If (DebugLogEvents and (MB.WinClass = "CabinetWClass" or MB.WinClass = "CASCADIA_HOSTING_WINDOW_CLASS")) {
-    FileAppend, % A_Now " | MBDrag | CONTROL_TREE | win=" MB.Win " class=" MB.WinClass "`n", %DebugLogPath%
+  If (Debug.Log["mbutton-drag"] and (MB.WinClass = "CabinetWClass" or MB.WinClass = "CASCADIA_HOSTING_WINDOW_CLASS")) {
+    FileAppend, % TS() " | mbutton-drag | CONTROL_TREE | win=" MB.Win " class=" MB.WinClass "`n", % Debug.Log.Path
     LogControlTree(MB.Win)
-    FileAppend, % "--- END TREE ---`n", %DebugLogPath%
+    FileAppend, % "--- END TREE ---`n", % Debug.Log.Path
   }
 
   _scrollChild := FindScrollableChild(MB.Win, MB.X1, MB.Y1)
@@ -188,8 +185,8 @@
     }
   }
 
-  If (DebugLogEvents)
-    FileAppend, % A_Now " | MBDrag | UIA_SETUP | scrollChild=" _scrollChild " scrollElement=" _scrollElement " pattern=" _pattern " fallback=" _fallback "`n", %DebugLogPath%
+  If (Debug.Log["mbutton-drag"])
+    FileAppend, % TS() " | mbutton-drag | UIA_SETUP | scrollChild=" _scrollChild " scrollElement=" _scrollElement " pattern=" _pattern " fallback=" _fallback "`n", % Debug.Log.Path
 
   MB.UIA.Element := _scrollElement
   MB.UIA.Pattern := _pattern
@@ -205,10 +202,14 @@
   probeTarget := MB.Ctrl ? MB.Ctrl : MB.Win
   MB.Probe.InitScrollPos := GetScrollPos(probeTarget)
   MB.Probe.InitScrollPct := -1.0
+  MB.Probe.InitScrollPctH := -1.0
   _pattern := MB.UIA.Pattern
-  If (_pattern)
+  If (_pattern) {
     DllCall(NumGet(NumGet(_pattern+0)+6*A_PtrSize), "Ptr", _pattern, "Double*", _initPct)
-    , MB.Probe.InitScrollPct := _initPct
+    DllCall(NumGet(NumGet(_pattern+0)+5*A_PtrSize), "Ptr", _pattern, "Double*", _initPctH)
+    MB.Probe.InitScrollPct := _initPct
+    MB.Probe.InitScrollPctH := _initPctH
+  }
 
   ; Show SizeAll cursor on MButton down IF area appears scrollable
   ; Strategy: Check multiple signals for scrollability
@@ -229,8 +230,13 @@
     _visibleScrollBar := FindVisibleScrollBar(MB.Win)
     If (_visibleScrollBar) {
       _hasScrollRange := 1
-      If (DebugLogEvents)
-        FileAppend, % A_Now " | MBDrag | SCROLLBAR_VISIBLE | hwnd=" _visibleScrollBar "`n", %DebugLogPath%
+      If (Debug.Log["mbutton-drag"]) {
+        FileAppend, % TS() " | mbutton-drag | SCROLLBAR_VISIBLE | hwnd=" _visibleScrollBar "`n", % Debug.Log.Path
+        ; Dump full window tree to diagnose false positives (scrollbar not in click area)
+        FileAppend, % TS() " | mbutton-drag | TREE_START | win=" MB.Win " click=" MB.X1 "," MB.Y1 "`n", % Debug.Log.Path
+        DumpWindowTree(MB.Win, 0, MB.X1, MB.Y1)
+        FileAppend, % TS() " | mbutton-drag | TREE_END |`n", % Debug.Log.Path
+      }
     }
   }
 
@@ -247,15 +253,15 @@
         MB.UIA.ViewSize := (_ancestorResult.viewV < 1) ? 10.0 : _ancestorResult.viewV
         MB.UIA.ViewSizeH := (_ancestorResult.viewH < 1) ? 10.0 : _ancestorResult.viewH
         _hasScrollRange := 1
-        If (DebugLogEvents)
-          FileAppend, % A_Now " | MBDrag | UIA_ANCESTOR_USED | pattern=" MB.UIA.Pattern " viewV=" Round(MB.UIA.ViewSize, 1) "`n", %DebugLogPath%
+        If (Debug.Log["mbutton-drag"])
+          FileAppend, % TS() " | mbutton-drag | UIA_ANCESTOR_USED | pattern=" MB.UIA.Pattern " viewV=" Round(MB.UIA.ViewSize, 1) "`n", % Debug.Log.Path
       } Else If (_ancestorResult.scrollable) {
         ; Found XAML ScrollBar with Maximum > 0 - scrollable but no pattern (use WHEEL_CTRL)
         _hasScrollRange := 1
         If (_ancestorResult.scrollbar)
           ObjRelease(_ancestorResult.scrollbar)  ; Don't need to keep reference
-        If (DebugLogEvents)
-          FileAppend, % A_Now " | MBDrag | UIA_SCROLLBAR_FOUND | maximum=" _ancestorResult.maximum "`n", %DebugLogPath%
+        If (Debug.Log["mbutton-drag"])
+          FileAppend, % TS() " | mbutton-drag | UIA_SCROLLBAR_FOUND | maximum=" _ancestorResult.maximum "`n", % Debug.Log.Path
       }
     }
   }
@@ -263,19 +269,18 @@
   If (_hasScrollRange) {
     ; Win32 confirms scroll range exists — show immediately
     MB.Cursor.Active := 1
-    hCopy := DllCall("CopyImage", "Ptr", G_hSizeAll, "UInt", 2, "Int", 0, "Int", 0, "UInt", 0, "Ptr")
-    DllCall("SetSystemCursor", "Ptr", hCopy, "UInt", 32512)
-    If (DebugLogEvents)
-      FileAppend, % A_Now " | MBDrag | CURSOR_DOWN | scrollRange=1`n", %DebugLogPath%
+    SetDragCursor()
+    If (Debug.Log["mbutton-drag"])
+      FileAppend, % TS() " | mbutton-drag | CURSOR_DOWN | scrollRange=1`n", % Debug.Log.Path
   } Else If (MB.UIA.Pattern) {
     ; Has UIA pattern but no Win32 scrollbar detected — defer cursor until scroll verified
     MB.Cursor.Pending := 1
-    If (DebugLogEvents)
-      FileAppend, % A_Now " | MBDrag | CURSOR_PENDING | pattern=" MB.UIA.Pattern " viewV=" Round(MB.UIA.ViewSize, 1) " noScrollBar`n", %DebugLogPath%
+    If (Debug.Log["mbutton-drag"])
+      FileAppend, % TS() " | mbutton-drag | CURSOR_PENDING | pattern=" MB.UIA.Pattern " viewV=" Round(MB.UIA.ViewSize, 1) " noScrollBar`n", % Debug.Log.Path
   } Else {
     ; No UIA pattern and no scrollbar — skip cursor entirely
-    If (DebugLogEvents)
-      FileAppend, % A_Now " | MBDrag | CURSOR_SKIP | noPattern noScrollBar`n", %DebugLogPath%
+    If (Debug.Log["mbutton-drag"])
+      FileAppend, % TS() " | mbutton-drag | CURSOR_SKIP | noPattern noScrollBar`n", % Debug.Log.Path
   }
 
   ; Start timer in native probe mode
@@ -285,7 +290,7 @@ Return
 
 MBDragTimer:
   Critical ; Prevent MButton Up from interrupting mid-DllCall (race condition safety)
-  global MB, G_hSizeAll, DebugLogEvents, DebugLogPath  ; MB object + singletons + external globals
+  global MB, G_hSizeAll, Debug
 
   ; Safety check: if MButton released, stop immediately
   If !GetKeyState("MButton", "P") {
@@ -305,7 +310,7 @@ MBDragTimer:
       MB.Cursor.Active := 0
     }
     MB.Cursor.Pending := 0
-    If (MB.Tooltips)
+    If (Debug.Tooltips["mbutton-drag"])
       ToolTip
     Return
   }
@@ -371,7 +376,7 @@ MBDragTimer:
         MB.UIA.Element := 0
       }
       SetTimer, MBDragTimer, Off
-      If (MB.Tooltips) {
+      If (Debug.Tooltips["mbutton-drag"]) {
         VarSetCapacity(ci2, 16 + A_PtrSize, 0)
         NumPut(16 + A_PtrSize, ci2, 0, "UInt")
         DllCall("GetCursorInfo", "Ptr", &ci2)
@@ -394,15 +399,11 @@ MBDragTimer:
       }
       MB.Method := "WHEEL"
     }
-    If (MB.Tooltips)
+    If (Debug.Tooltips["mbutton-drag"])
       ToolTip, % "No native scroll — using " MB.Method
     ; Log session start
-    If (DebugLogEvents) {
-      _ts := A_Now
-      _proc := MB.ProcName, _method := MB.Method, _class := MB.ClassName
-      _pattern := MB.UIA.Pattern, _viewV := MB.UIA.ViewSize, _viewH := MB.UIA.ViewSizeH
-      FileAppend, %_ts% | MBDrag | START | proc=%_proc% method=%_method% ctrl=%_class% pattern=%_pattern% viewV=%_viewV% viewH=%_viewH%`n, %DebugLogPath%
-    }
+    If (Debug.Log["mbutton-drag"])
+      FileAppend, % TS() " | mbutton-drag | START | proc=" MB.ProcName " method=" MB.Method " ctrl=" MB.ClassName " pattern=" MB.UIA.Pattern " viewV=" MB.UIA.ViewSize " viewH=" MB.UIA.ViewSizeH " click=" MB.X1 "," MB.Y1 "`n", % Debug.Log.Path
     ; Fall through to custom scroll logic below
   }
 
@@ -472,7 +473,7 @@ MBDragTimer:
       ; Read actual current scroll position for tooltip
       DllCall(NumGet(NumGet(_pattern+0)+6*A_PtrSize), "Ptr", _pattern, "Double*", _curPctV)
       DllCall(NumGet(NumGet(_pattern+0)+5*A_PtrSize), "Ptr", _pattern, "Double*", _curPctH)
-      If (MB.Tooltips)
+      If (Debug.Tooltips["mbutton-drag"])
         ToolTip, % "UIA: pos=" Round(_curPctV, 1) "%% view=" Round(MB.UIA.ViewSize, 1) "%% (H:" Round(_curPctH, 1) "%%)"
       ; SetScrollPercent(hPct, vPct) - vtable offset 4 (with timing)
       _accumH := MB.UIA.AccumPctH, _accumV := MB.UIA.AccumPct
@@ -485,23 +486,22 @@ MBDragTimer:
       If (MB.Cursor.Pending) {
         DllCall(NumGet(NumGet(_pattern+0)+6*A_PtrSize), "Ptr", _pattern, "Double*", _newPctV)
         DllCall(NumGet(NumGet(_pattern+0)+5*A_PtrSize), "Ptr", _pattern, "Double*", _newPctH)
-        If (_newPctV != MB.Probe.InitScrollPct or (_newPctH >= 0 and _newPctH != MB.UIA.AccumPctH)) {
+        If (_newPctV != MB.Probe.InitScrollPct or (_newPctH >= 0 and _newPctH != MB.Probe.InitScrollPctH)) {
           MB.Cursor.Active := 1
           MB.Cursor.Pending := 0
-          hCopy := DllCall("CopyImage", "Ptr", G_hSizeAll, "UInt", 2, "Int", 0, "Int", 0, "UInt", 0, "Ptr")
-          DllCall("SetSystemCursor", "Ptr", hCopy, "UInt", 32512)
-          If (DebugLogEvents)
-            FileAppend, % A_Now " | MBDrag | CURSOR_CONFIRMED | method=UIA pctV=" Round(_newPctV, 1) "`n", %DebugLogPath%
+          SetDragCursor()
+          If (Debug.Log["mbutton-drag"])
+            FileAppend, % TS() " | mbutton-drag | CURSOR_CONFIRMED | method=UIA pctV=" Round(_newPctV, 1) "`n", % Debug.Log.Path
         }
       }
 
       ; Log every 5 ticks for jitter debugging
-      If (DebugLogEvents && Mod(MB.ScrollTicks, 5) = 0) {
+      If (Debug.Log["mbutton-drag"] && Mod(MB.ScrollTicks, 5) = 0) {
         DllCall("QueryPerformanceFrequency", "Int64*", _qpcFreq)
         _uiaMs := Round((_qpcAfter - _qpcBefore) * 1000.0 / _qpcFreq, 2)
         _scrollTarget := MB.Ctrl ? MB.Ctrl : MB.Win
         _win32Pos := GetScrollPos(_scrollTarget)
-        FileAppend, % A_Now " | MBDrag | UIA | proc=" MB.ProcName " tick=" MB.ScrollTicks " V=" Round(MB.UIA.AccumPct, 1) " H=" Round(MB.UIA.AccumPctH, 1) " win32=" _win32Pos " callMs=" _uiaMs "`n", %DebugLogPath%
+        FileAppend, % TS() " | mbutton-drag | UIA | proc=" MB.ProcName " tick=" MB.ScrollTicks " V=" Round(MB.UIA.AccumPct, 1) " H=" Round(MB.UIA.AccumPctH, 1) " win32=" _win32Pos " callMs=" _uiaMs "`n", % Debug.Log.Path
       }
 
       ; Verify UIA: only fall back on NoScroll sentinel (-1) for the axis being scrolled
@@ -523,8 +523,8 @@ MBDragTimer:
         If (_noScrollH and !_noScrollV and MB.UIA.ViewSize < 99.9) {
           MB.UIA.AccumPctH := -1  ; Mark horizontal as disabled
           MB.FallbackChecked := 1
-          If (DebugLogEvents)
-            FileAppend, % A_Now " | MBDrag | UIA_HORIZ_DISABLED | proc=" MB.ProcName " (vertical still available)`n", %DebugLogPath%
+          If (Debug.Log["mbutton-drag"])
+            FileAppend, % TS() " | mbutton-drag | UIA_HORIZ_DISABLED | proc=" MB.ProcName " (vertical still available)`n", % Debug.Log.Path
         ; Fall back only if vertical is NoScroll (horizontal-only NoScroll doesn't warrant full fallback)
         } Else If (_noScrollV) {
           ; Vertical is NoScroll — fall back to WHEEL
@@ -534,10 +534,10 @@ MBDragTimer:
           ObjRelease(_element)
           MB.UIA.Element := 0
           MB.Method := "WHEEL"
-          If (MB.Tooltips)
+          If (Debug.Tooltips["mbutton-drag"])
             ToolTip, % "UIA->WHEEL (NoScroll sentinel)"
-          If (DebugLogEvents)
-            FileAppend, % A_Now " | MBDrag | FALLBACK | proc=" MB.ProcName " UIA->WHEEL (NoScroll V=" _noScrollV " H=" _noScrollH ")`n", %DebugLogPath%
+          If (Debug.Log["mbutton-drag"])
+            FileAppend, % TS() " | mbutton-drag | FALLBACK | proc=" MB.ProcName " UIA->WHEEL (NoScroll V=" _noScrollV " H=" _noScrollH ")`n", % Debug.Log.Path
         } Else {
           MB.FallbackChecked := 1  ; UIA is valid, no further verification needed
         }
@@ -609,14 +609,14 @@ MBDragTimer:
           ; Pixel-level: delta ≈ sentPixels (high confidence - prevents SLOW-TICK override)
           MB.LVM.RowQuantized := 0
           MB.LVM.DetectConfident := 1
-          If (DebugLogEvents)
-            FileAppend, % A_Now " | MBDrag | DETECT | proc=" MB.ProcName " PIXEL-LEVEL delta=" scrollDelta " sent=" sentPixels " ratio=" Round(deltaRatio, 2) " virtual=" _isVirtual "`n", %DebugLogPath%
+          If (Debug.Log["mbutton-drag"])
+            FileAppend, % TS() " | mbutton-drag | DETECT | proc=" MB.ProcName " PIXEL-LEVEL delta=" scrollDelta " sent=" sentPixels " ratio=" Round(deltaRatio, 2) " virtual=" _isVirtual "`n", % Debug.Log.Path
         } Else If (scrollDelta = 0) {
           ; delta=0: at boundary or no scrollbar, assume pixel-level (low confidence)
           MB.LVM.RowQuantized := 0
           MB.LVM.DetectConfident := 0  ; Allow SLOW-TICK to upgrade if truly slow
-          If (DebugLogEvents)
-            FileAppend, % A_Now " | MBDrag | DETECT | proc=" MB.ProcName " PIXEL-LEVEL (boundary) delta=0 sent=" sentPixels " virtual=" _isVirtual "`n", %DebugLogPath%
+          If (Debug.Log["mbutton-drag"])
+            FileAppend, % TS() " | mbutton-drag | DETECT | proc=" MB.ProcName " PIXEL-LEVEL (boundary) delta=0 sent=" sentPixels " virtual=" _isVirtual "`n", % Debug.Log.Path
         } Else {
           ; delta > 0 but ratio outside 0.85-1.15: row-quantized
           ; GetScrollPos returns ROWS not pixels for row-quantized ListViews
@@ -633,8 +633,8 @@ MBDragTimer:
           } Else {
             MB.LVM.RowHeight := 25  ; Conservative default
           }
-          If (DebugLogEvents)
-            FileAppend, % A_Now " | MBDrag | DETECT | proc=" MB.ProcName " ROW-QUANTIZED rowH=" MB.LVM.RowHeight " delta=" scrollDelta " sent=" sentPixels " ratio=" Round(deltaRatio, 2) " virtual=" _isVirtual "`n", %DebugLogPath%
+          If (Debug.Log["mbutton-drag"])
+            FileAppend, % TS() " | mbutton-drag | DETECT | proc=" MB.ProcName " ROW-QUANTIZED rowH=" MB.LVM.RowHeight " delta=" scrollDelta " sent=" sentPixels " ratio=" Round(deltaRatio, 2) " virtual=" _isVirtual "`n", % Debug.Log.Path
         }
         MB.LVM.Detected := 1
         ; If row-quantized detected and our sent pixels were below threshold, send another scroll
@@ -647,7 +647,7 @@ MBDragTimer:
           posAfter := GetScrollPos(target)
         }
         ; Show detection result in tooltip
-        If (MB.Tooltips) {
+        If (Debug.Tooltips["mbutton-drag"]) {
           _mode := MB.LVM.RowQuantized ? "Q" : "P"
           ToolTip, % "LVM[" _mode "] detected (delta=" scrollDelta " virt=" _isVirtual " rowH=" MB.LVM.RowHeight ")"
         }
@@ -741,8 +741,8 @@ MBDragTimer:
         ; NOTE: Removed "no change = boundary" heuristic — it caused false positives mid-list
         ; when row-quantized scrolling didn't move at certain pixel amounts
         ; If position didn't change but we're not at a boundary, don't set flag — scroll was just ignored
-        If (MB.LVM.BoundaryY != 0 and DebugLogEvents)
-          FileAppend, % A_Now " | MBDrag | BOUNDARY | Y axis dir=" MB.LVM.BoundaryY " before=" _posBeforeY " after=" _posAfterY " max=" _scrollMaxY "`n", %DebugLogPath%
+        If (MB.LVM.BoundaryY != 0 and Debug.Log["mbutton-drag"])
+          FileAppend, % TS() " | mbutton-drag | BOUNDARY | Y axis dir=" MB.LVM.BoundaryY " before=" _posBeforeY " after=" _posAfterY " max=" _scrollMaxY "`n", % Debug.Log.Path
       }
 
       LVM_PostVertical:
@@ -764,10 +764,9 @@ MBDragTimer:
       If (MB.Cursor.Pending and (_posAfterY != _posBeforeY or _posAfterX != _posBeforeX)) {
         MB.Cursor.Active := 1
         MB.Cursor.Pending := 0
-        hCopy := DllCall("CopyImage", "Ptr", G_hSizeAll, "UInt", 2, "Int", 0, "Int", 0, "UInt", 0, "Ptr")
-        DllCall("SetSystemCursor", "Ptr", hCopy, "UInt", 32512)
-        If (DebugLogEvents)
-          FileAppend, % A_Now " | MBDrag | CURSOR_CONFIRMED | method=LVM`n", %DebugLogPath%
+        SetDragCursor()
+        If (Debug.Log["mbutton-drag"])
+          FileAppend, % TS() " | mbutton-drag | CURSOR_CONFIRMED | method=LVM`n", % Debug.Log.Path
       }
 
       ; --- Timing-based detection: slow tick (>50ms) = virtualized/quantized control ---
@@ -782,12 +781,12 @@ MBDragTimer:
         ; Slow tick = virtualized control, needs axis restriction + horizontal boost
         MB.LVM.Detected := 1
         MB.LVM.RowQuantized := 1
-        If (DebugLogEvents)
-          FileAppend, % A_Now " | MBDrag | DETECT | proc=" MB.ProcName " SLOW-TICK->QUANTIZED ms=" Round(_scrollMs) "`n", %DebugLogPath%
+        If (Debug.Log["mbutton-drag"])
+          FileAppend, % TS() " | mbutton-drag | DETECT | proc=" MB.ProcName " SLOW-TICK->QUANTIZED ms=" Round(_scrollMs) "`n", % Debug.Log.Path
       }
 
       MB.ScrollTicks++
-      If (MB.Tooltips) {
+      If (Debug.Tooltips["mbutton-drag"]) {
         ; Mode format: Q:h (quantized high-conf), P:l (pixel low-conf), ? (not yet detected)
         ; High confidence: virtual flag or delta-ratio match. Low: boundary guess or slow-tick upgrade
         If (!MB.LVM.Detected)
@@ -800,14 +799,14 @@ MBDragTimer:
         ToolTip, % "LVM[" _mode "] dY=" _pxYSent " dX=" _pxXSent " pos=" _posAfterY "/" _scrollMaxY _boundY
       }
       ; Log every 5 ticks
-      If (DebugLogEvents && Mod(MB.ScrollTicks, 5) = 0) {
+      If (Debug.Log["mbutton-drag"] && Mod(MB.ScrollTicks, 5) = 0) {
         _pxYLog := (scrollAxisY and AbsDistY >= MB.Threshold and !_atBoundaryY) ? scrollPixelsY : 0
         _pxXLog := (scrollAxisX and AbsDistX >= MB.Threshold) ? scrollPixelsX : 0
         If (!MB.LVM.Detected)
           _modeLog := "?"
         Else
           _modeLog := (MB.LVM.RowQuantized ? "Q" : "P") . ":" . (MB.LVM.DetectConfident ? "h" : "l")
-        FileAppend, % A_Now " | MBDrag | LVM[" _modeLog "] | proc=" MB.ProcName " tick=" MB.ScrollTicks " dY=" _pxYLog " dX=" _pxXLog " pos=" _posAfterY "/" _scrollMaxY " ms=" Round(_scrollMs) "`n", %DebugLogPath%
+        FileAppend, % TS() " | mbutton-drag | LVM[" _modeLog "] | proc=" MB.ProcName " tick=" MB.ScrollTicks " dY=" _pxYLog " dX=" _pxXLog " pos=" _posAfterY "/" _scrollMaxY " ms=" Round(_scrollMs) "`n", % Debug.Log.Path
       }
 
     } Else If (MB.Method = "WHEEL_CTRL") {
@@ -843,20 +842,19 @@ MBDragTimer:
             ; Revert the jump by scrolling opposite direction
             revertDir := (posAfter > posBefore) ? 0 : 1  ; 0=up, 1=down
             PostMessage, 0x115, %revertDir%, 0,, ahk_id %target%  ; WM_VSCROLL
-            If (MB.Tooltips)
+            If (Debug.Tooltips["mbutton-drag"])
               ToolTip, % "WHEEL_CTRL->VSCROLL (jumped " scrolledUnits " units)"
-            If (DebugLogEvents)
-              FileAppend, % A_Now " | MBDrag | FALLBACK | proc=" MB.ProcName " WHEEL_CTRL->VSCROLL (jumped " scrolledUnits " units)`n", %DebugLogPath%
+            If (Debug.Log["mbutton-drag"])
+              FileAppend, % TS() " | mbutton-drag | FALLBACK | proc=" MB.ProcName " WHEEL_CTRL->VSCROLL (jumped " scrolledUnits " units)`n", % Debug.Log.Path
           }
           ; Scroll succeeded — show cursor if pending (position changed OR was already non-zero)
           If (MB.Cursor.Pending and (scrolledUnits > 0 or posBefore > 0)) {
             If (scrolledUnits > 0) {
               MB.Cursor.Active := 1
               MB.Cursor.Pending := 0
-              hCopy := DllCall("CopyImage", "Ptr", G_hSizeAll, "UInt", 2, "Int", 0, "Int", 0, "UInt", 0, "Ptr")
-              DllCall("SetSystemCursor", "Ptr", hCopy, "UInt", 32512)
-              If (DebugLogEvents)
-                FileAppend, % A_Now " | MBDrag | CURSOR_CONFIRMED | method=WHEEL_CTRL scrolled=%scrolledUnits%`n", %DebugLogPath%
+              SetDragCursor()
+              If (Debug.Log["mbutton-drag"])
+                FileAppend, % TS() " | mbutton-drag | CURSOR_CONFIRMED | method=WHEEL_CTRL scrolled=" scrolledUnits "`n", % Debug.Log.Path
             }
             ; posBefore > 0 but no scroll: scrollbar exists, might be at boundary — keep trying
           }
@@ -886,8 +884,8 @@ MBDragTimer:
             _scrollbarHasRange := (_ret and _max - _min > _page)
           }
         }
-        If (DebugLogEvents)
-          FileAppend, % A_Now " | MBDrag | SCROLLBAR_CHECK | ctrl=" MB.Ctrl " childScrollbar=" _childScrollbar " visible=" _scrollbarVisible " hasRange=" _scrollbarHasRange "`n", %DebugLogPath%
+        If (Debug.Log["mbutton-drag"])
+          FileAppend, % TS() " | mbutton-drag | SCROLLBAR_CHECK | ctrl=" MB.Ctrl " childScrollbar=" _childScrollbar " visible=" _scrollbarVisible " hasRange=" _scrollbarHasRange "`n", % Debug.Log.Path
         ; Only mark as checked if: (1) no scrollbar child exists, or (2) scrollbar is visible and has range
         ; If scrollbar exists but is temporarily invisible, allow recheck on subsequent ticks
         If (!_childScrollbar or _scrollbarHasRange)
@@ -895,10 +893,9 @@ MBDragTimer:
         If (_scrollbarHasRange) {
           MB.Cursor.Active := 1
           MB.Cursor.Pending := 0
-          hCopy := DllCall("CopyImage", "Ptr", G_hSizeAll, "UInt", 2, "Int", 0, "Int", 0, "UInt", 0, "Ptr")
-          DllCall("SetSystemCursor", "Ptr", hCopy, "UInt", 32512)
-          If (DebugLogEvents)
-            FileAppend, % A_Now " | MBDrag | CURSOR_CONFIRMED | method=WHEEL_CTRL (ctrl has scrollbar child)`n", %DebugLogPath%
+          SetDragCursor()
+          If (Debug.Log["mbutton-drag"])
+            FileAppend, % TS() " | mbutton-drag | CURSOR_CONFIRMED | method=WHEEL_CTRL (ctrl has scrollbar child)`n", % Debug.Log.Path
         }
       }
 
@@ -912,15 +909,15 @@ MBDragTimer:
         PostMessage, 0x20E, %wParamX%, %lParam%,, ahk_id %target%
       }
 
-      If (MB.Tooltips && MB.Method = "WHEEL_CTRL")
+      If (Debug.Tooltips["mbutton-drag"] && MB.Method = "WHEEL_CTRL")
         ToolTip, % "WHEEL_CTRL: dY=" (AbsDistY >= MB.Threshold ? DeltaY : 0) " dX=" (AbsDistX >= MB.Threshold ? DeltaX : 0)
 
       ; Log every 5 ticks for comparison with LVM
-      If (DebugLogEvents && Mod(MB.ScrollTicks, 5) = 0) {
+      If (Debug.Log["mbutton-drag"] && Mod(MB.ScrollTicks, 5) = 0) {
         _dYLog := (AbsDistY >= MB.Threshold) ? DeltaY : 0
         _dXLog := (AbsDistX >= MB.Threshold) ? DeltaX : 0
         _curveXLog := (AbsDistX >= MB.Threshold) ? Round(curveValueX, 1) : 0
-        FileAppend, % A_Now " | MBDrag | WHEEL_CTRL | proc=" MB.ProcName " tick=" MB.ScrollTicks " dY=" _dYLog " dX=" _dXLog " curveX=" _curveXLog "`n", %DebugLogPath%
+        FileAppend, % TS() " | mbutton-drag | WHEEL_CTRL | proc=" MB.ProcName " tick=" MB.ScrollTicks " dY=" _dYLog " dX=" _dXLog " curveX=" _curveXLog "`n", % Debug.Log.Path
       }
 
     } Else If (MB.Method = "VSCROLL") {
@@ -948,10 +945,9 @@ MBDragTimer:
           If (_posAfter != _posBefore) {
             MB.Cursor.Active := 1
             MB.Cursor.Pending := 0
-            hCopy := DllCall("CopyImage", "Ptr", G_hSizeAll, "UInt", 2, "Int", 0, "Int", 0, "UInt", 0, "Ptr")
-            DllCall("SetSystemCursor", "Ptr", hCopy, "UInt", 32512)
-            If (DebugLogEvents)
-              FileAppend, % A_Now " | MBDrag | CURSOR_CONFIRMED | method=VSCROLL`n", %DebugLogPath%
+            SetDragCursor()
+            If (Debug.Log["mbutton-drag"])
+              FileAppend, % TS() " | mbutton-drag | CURSOR_CONFIRMED | method=VSCROLL`n", % Debug.Log.Path
           }
         }
       }
@@ -965,7 +961,7 @@ MBDragTimer:
         PostMessage, 0x20E, %wParamX%, %lParamV%,, ahk_id %target%
       }
 
-      If (MB.Tooltips)
+      If (Debug.Tooltips["mbutton-drag"])
         ToolTip, % "VSCROLL: dirY=" (AbsDistY >= MB.Threshold ? scrollDirY : "-") " dX=" (AbsDistX >= MB.Threshold ? DeltaX : "-") " timer=" timerMs "ms"
 
     } Else {
@@ -997,30 +993,29 @@ MBDragTimer:
             ; No movement detected — try sending to control directly
             MB.Method := "WHEEL_CTRL"
             MB.FallbackChecked := 0
-            If (MB.Tooltips)
+            If (Debug.Tooltips["mbutton-drag"])
               ToolTip, % "WHEEL->WHEEL_CTRL (no movement)"
-            If (DebugLogEvents)
-              FileAppend, % A_Now " | MBDrag | FALLBACK | proc=" MB.ProcName " WHEEL->WHEEL_CTRL (no movement)`n", %DebugLogPath%
+            If (Debug.Log["mbutton-drag"])
+              FileAppend, % TS() " | mbutton-drag | FALLBACK | proc=" MB.ProcName " WHEEL->WHEEL_CTRL (no movement)`n", % Debug.Log.Path
           } Else If (_hasScrollbar) {
             MB.FallbackChecked := 1
             ; Scroll succeeded — show cursor if pending
             If (MB.Cursor.Pending) {
               MB.Cursor.Active := 1
               MB.Cursor.Pending := 0
-              hCopy := DllCall("CopyImage", "Ptr", G_hSizeAll, "UInt", 2, "Int", 0, "Int", 0, "UInt", 0, "Ptr")
-              DllCall("SetSystemCursor", "Ptr", hCopy, "UInt", 32512)
-              If (DebugLogEvents)
-                FileAppend, % A_Now " | MBDrag | CURSOR_CONFIRMED | method=WHEEL`n", %DebugLogPath%
+              SetDragCursor()
+              If (Debug.Log["mbutton-drag"])
+                FileAppend, % TS() " | mbutton-drag | CURSOR_CONFIRMED | method=WHEEL`n", % Debug.Log.Path
             }
           } Else If (MB.Ctrl) {
             ; No scrollbar + has control — can't verify via GetScrollPos, but WHEEL_CTRL
             ; (sends to control) is more likely to work than WHEEL (sends to window)
             MB.Method := "WHEEL_CTRL"
             MB.FallbackChecked := 0
-            If (MB.Tooltips)
+            If (Debug.Tooltips["mbutton-drag"])
               ToolTip, % "WHEEL->WHEEL_CTRL (no scrollbar, has control)"
-            If (DebugLogEvents)
-              FileAppend, % A_Now " | MBDrag | FALLBACK | proc=" MB.ProcName " WHEEL->WHEEL_CTRL (no scrollbar, control=" MB.ClassName ")`n", %DebugLogPath%
+            If (Debug.Log["mbutton-drag"])
+              FileAppend, % TS() " | mbutton-drag | FALLBACK | proc=" MB.ProcName " WHEEL->WHEEL_CTRL (no scrollbar, control=" MB.ClassName ")`n", % Debug.Log.Path
           } Else {
             ; No scrollbar, no control — truly can't verify, trust WHEEL
             MB.FallbackChecked := 1
@@ -1042,7 +1037,7 @@ MBDragTimer:
         PostMessage, 0x20E, %wParamX%, %lParam%,, ahk_id %hTarget%
       }
 
-      If (MB.Tooltips && MB.Method = "WHEEL")
+      If (Debug.Tooltips["mbutton-drag"] && MB.Method = "WHEEL")
         ToolTip, % "WHEEL: dY=" (AbsDistY >= MB.Threshold ? DeltaY : "-") " dX=" (AbsDistX >= MB.Threshold ? DeltaX : "-") " hTgt=" (MB.FallbackChecked ? "win" : "ctrl")
     }
   }
@@ -1050,7 +1045,7 @@ Return
 
 *MButton Up::
   Critical ; Prevent timer from firing during cleanup (race condition safety)
-  global MB, DebugLogEvents, DebugLogPath
+  global MB, Debug
   SetTimer, MBDragTimer, Off
   ; Restore system cursor
   If (MB.Cursor.Active) {
@@ -1059,11 +1054,11 @@ Return
   }
   MB.Cursor.Pending := 0
   ; Log session summary
-  If (DebugLogEvents && MB.Triggered) {
+  If (Debug.Log["mbutton-drag"] && MB.Triggered) {
     _duration := A_TickCount - MB.SessionStart
-    FileAppend, % A_Now " | MBDrag | END | proc=" MB.ProcName " method=" MB.Method " ticks=" MB.ScrollTicks " duration=" _duration "ms`n", %DebugLogPath%
+    FileAppend, % TS() " | mbutton-drag | END | proc=" MB.ProcName " method=" MB.Method " ticks=" MB.ScrollTicks " duration=" _duration "ms`n", % Debug.Log.Path
   }
-  If (MB.Tooltips)
+  If (Debug.Tooltips["mbutton-drag"])
     ToolTip
 
   ; Release UIA objects
@@ -1094,6 +1089,22 @@ GetScrollPos(hwnd, bar := 1) {
   Return DllCall("GetScrollPos", "Ptr", hwnd, "Int", bar, "Int")
 }
 
+; Set drag cursor (SizeAll) by replacing both IDC_ARROW and IDC_IBEAM
+; Returns 1 on success. Logs current cursor type for debugging.
+SetDragCursor() {
+  global G_hSizeAll, Debug
+  _cursor := A_Cursor
+  ; Replace IDC_ARROW (32512)
+  hCopy1 := DllCall("CopyImage", "Ptr", G_hSizeAll, "UInt", 2, "Int", 0, "Int", 0, "UInt", 0, "Ptr")
+  DllCall("SetSystemCursor", "Ptr", hCopy1, "UInt", 32512)
+  ; Replace IDC_IBEAM (32513) for text editors
+  hCopy2 := DllCall("CopyImage", "Ptr", G_hSizeAll, "UInt", 2, "Int", 0, "Int", 0, "UInt", 0, "Ptr")
+  DllCall("SetSystemCursor", "Ptr", hCopy2, "UInt", 32513)
+  If (Debug.Log["mbutton-drag"])
+    FileAppend, % TS() " | mbutton-drag | CURSOR_SET | activeCursor=" _cursor "`n", % Debug.Log.Path
+  Return 1
+}
+
 ; Check if a control has a visible Win32 scrollbar (window style check)
 ; axis: "V" for vertical (default), "H" for horizontal, "any" for either
 HasWin32Scrollbar(hwnd, axis := "V") {
@@ -1109,7 +1120,7 @@ HasWin32Scrollbar(hwnd, axis := "V") {
 ; Returns true if scroll range exists (nMax - nMin > nPage)
 ; axis: "V" for vertical (default), "H" for horizontal, "any" for either
 HasScrollRange(hwnd, axis := "V") {
-  global DebugLogEvents, DebugLogPath
+  global Debug
   ; SCROLLINFO struct: cbSize, fMask, nMin, nMax, nPage, nPos, nTrackPos
   VarSetCapacity(_si, 28, 0)
   NumPut(28, _si, 0, "UInt")  ; cbSize
@@ -1121,16 +1132,16 @@ HasScrollRange(hwnd, axis := "V") {
   If (_checkV) {
     _ret := DllCall("GetScrollInfo", "Ptr", hwnd, "Int", 1, "Ptr", &_si, "Int")  ; SB_VERT=1
     _min := NumGet(_si, 8, "Int"), _max := NumGet(_si, 12, "Int"), _page := NumGet(_si, 16, "UInt")
-    If (DebugLogEvents)
-      FileAppend, % A_Now " | MBDrag | SCROLL_INFO_V | hwnd=" hwnd " ret=" _ret " min=" _min " max=" _max " page=" _page "`n", %DebugLogPath%
+    If (Debug.Log["mbutton-drag"])
+      FileAppend, % TS() " | mbutton-drag | SCROLL_INFO_V | hwnd=" hwnd " ret=" _ret " min=" _min " max=" _max " page=" _page "`n", % Debug.Log.Path
     If (_ret and _max - _min > _page)
       Return true
   }
   If (_checkH) {
     _ret := DllCall("GetScrollInfo", "Ptr", hwnd, "Int", 0, "Ptr", &_si, "Int")  ; SB_HORZ=0
     _min := NumGet(_si, 8, "Int"), _max := NumGet(_si, 12, "Int"), _page := NumGet(_si, 16, "UInt")
-    If (DebugLogEvents)
-      FileAppend, % A_Now " | MBDrag | SCROLL_INFO_H | hwnd=" hwnd " ret=" _ret " min=" _min " max=" _max " page=" _page "`n", %DebugLogPath%
+    If (Debug.Log["mbutton-drag"])
+      FileAppend, % TS() " | mbutton-drag | SCROLL_INFO_H | hwnd=" hwnd " ret=" _ret " min=" _min " max=" _max " page=" _page "`n", % Debug.Log.Path
     If (_ret and _max - _min > _page)
       Return true
   }
@@ -1141,7 +1152,7 @@ HasScrollRange(hwnd, axis := "V") {
 ; This detects true scrollability for apps like Explorer where DirectUIHWND
 ; doesn't respond to GetScrollInfo, but has separate ScrollBar controls
 FindVisibleScrollBar(parentHwnd) {
-  global DebugLogEvents, DebugLogPath
+  global Debug
   _child := DllCall("GetWindow", "Ptr", parentHwnd, "UInt", 5, "Ptr")  ; GW_CHILD
   While (_child) {
     If (DllCall("IsWindowVisible", "Ptr", _child, "Int")) {
@@ -1155,8 +1166,17 @@ FindVisibleScrollBar(parentHwnd) {
         ; For standalone ScrollBar controls, use SB_CTL (2)
         _ret := DllCall("GetScrollInfo", "Ptr", _child, "Int", 2, "Ptr", &_si, "Int")
         _min := NumGet(_si, 8, "Int"), _max := NumGet(_si, 12, "Int"), _page := NumGet(_si, 16, "UInt")
-        If (DebugLogEvents)
-          FileAppend, % A_Now " | MBDrag | SCROLLBAR_FOUND | hwnd=" _child " ret=" _ret " min=" _min " max=" _max " page=" _page "`n", %DebugLogPath%
+        If (Debug.Log["mbutton-drag"]) {
+          ; Get scrollbar bounds and parent class for debugging false positives
+          VarSetCapacity(_rect, 16, 0)
+          DllCall("GetWindowRect", "Ptr", _child, "Ptr", &_rect)
+          _sbL := NumGet(_rect, 0, "Int"), _sbT := NumGet(_rect, 4, "Int")
+          _sbR := NumGet(_rect, 8, "Int"), _sbB := NumGet(_rect, 12, "Int")
+          _parent := DllCall("GetParent", "Ptr", _child, "Ptr")
+          VarSetCapacity(_parentClass, 256)
+          DllCall("GetClassName", "Ptr", _parent, "Str", _parentClass, "Int", 255)
+          FileAppend, % TS() " | mbutton-drag | SCROLLBAR_FOUND | hwnd=" _child " parent=" _parentClass " ret=" _ret " min=" _min " max=" _max " page=" _page " rect=" _sbL "," _sbT "," _sbR "," _sbB "`n", % Debug.Log.Path
+        }
         If (_ret and _max - _min > _page)
           Return _child
       }
@@ -1168,6 +1188,55 @@ FindVisibleScrollBar(parentHwnd) {
     _child := DllCall("GetWindow", "Ptr", _child, "UInt", 2, "Ptr")  ; GW_HWNDNEXT
   }
   Return 0
+}
+
+; Dump window tree for debugging hierarchy issues
+; Logs each visible window with: depth, hwnd, class, rect, scrollbar info
+; Controls containing click point are marked with * prefix
+DumpWindowTree(parentHwnd, depth := 0, clickX := 0, clickY := 0) {
+  global Debug
+  If (!Debug.Log["mbutton-drag"])
+    Return
+
+  _child := DllCall("GetWindow", "Ptr", parentHwnd, "UInt", 5, "Ptr")  ; GW_CHILD
+  While (_child) {
+    If (DllCall("IsWindowVisible", "Ptr", _child, "Int")) {
+      VarSetCapacity(_className, 256)
+      DllCall("GetClassName", "Ptr", _child, "Str", _className, "Int", 255)
+
+      ; Get window rect
+      VarSetCapacity(_rect, 16, 0)
+      DllCall("GetWindowRect", "Ptr", _child, "Ptr", &_rect)
+      _l := NumGet(_rect, 0, "Int"), _t := NumGet(_rect, 4, "Int")
+      _r := NumGet(_rect, 8, "Int"), _b := NumGet(_rect, 12, "Int")
+
+      ; Check if click is inside this control
+      _containsClick := (clickX >= _l and clickX <= _r and clickY >= _t and clickY <= _b) ? "*" : ""
+
+      ; Check for scrollbar info if it's a ScrollBar control
+      _scrollInfo := ""
+      If (InStr(_className, "ScrollBar")) {
+        VarSetCapacity(_si, 28, 0)
+        NumPut(28, _si, 0, "UInt")
+        NumPut(0x3, _si, 4, "UInt")
+        _ret := DllCall("GetScrollInfo", "Ptr", _child, "Int", 2, "Ptr", &_si, "Int")
+        _min := NumGet(_si, 8, "Int"), _max := NumGet(_si, 12, "Int"), _page := NumGet(_si, 16, "UInt")
+        _scrollInfo := " scroll=" _min "-" _max "/" _page
+      }
+
+      ; Build indent
+      _indent := ""
+      Loop, %depth%
+        _indent .= "  "
+
+      FileAppend, % TS() " | mbutton-drag | TREE | " _indent _containsClick _className " hwnd=" _child " rect=" _l "," _t "," _r "," _b _scrollInfo "`n", % Debug.Log.Path
+
+      ; Recurse into children (limit depth to avoid infinite loops)
+      If (depth < 6)
+        DumpWindowTree(_child, depth + 1, clickX, clickY)
+    }
+    _child := DllCall("GetWindow", "Ptr", _child, "UInt", 2, "Ptr")  ; GW_HWNDNEXT
+  }
 }
 
 ; Power curve for scroll acceleration
@@ -1257,7 +1326,7 @@ GetUIAClass(element) {
 ; Search UIA tree for scrollable elements (ScrollPattern or XAML ScrollBar)
 ; Used for UWP/XAML apps where Win32 scrollbar detection fails
 FindUIAScrollAncestor(ptX, ptY) {
-  global G_UIA, DebugLogEvents, DebugLogPath
+  global G_UIA, Debug
   If (!G_UIA)
     Return 0
 
@@ -1297,8 +1366,8 @@ FindUIAScrollAncestor(ptX, ptY) {
         ObjRelease(_walker)
         If (_current != _startEl)
           ObjRelease(_startEl)
-        If (DebugLogEvents)
-          FileAppend, % A_Now " | MBDrag | UIA_TREE | FOUND ScrollPattern | " _ancestorPath "`n", %DebugLogPath%
+        If (Debug.Log["mbutton-drag"])
+          FileAppend, % TS() " | mbutton-drag | UIA_TREE | FOUND ScrollPattern | " _ancestorPath "`n", % Debug.Log.Path
         Return {pattern: _pattern, element: _current, viewV: _viewSizeV, viewH: _viewSizeH}
       }
       ObjRelease(_pattern)
@@ -1320,8 +1389,8 @@ FindUIAScrollAncestor(ptX, ptY) {
           If (_current != _startEl)
             ObjRelease(_current)
           ObjRelease(_startEl)
-          If (DebugLogEvents)
-            FileAppend, % A_Now " | MBDrag | UIA_TREE | FOUND sibling ScrollPattern | " _ancestorPath "`n", %DebugLogPath%
+          If (Debug.Log["mbutton-drag"])
+            FileAppend, % TS() " | mbutton-drag | UIA_TREE | FOUND sibling ScrollPattern | " _ancestorPath "`n", % Debug.Log.Path
           Return {pattern: _pattern, element: _sibling, viewV: _viewSizeV, viewH: _viewSizeH}
         }
         ObjRelease(_pattern)
@@ -1367,8 +1436,8 @@ FindUIAScrollAncestor(ptX, ptY) {
   ObjRelease(_startEl)
   If (_current and _current != _startEl)
     ObjRelease(_current)
-  If (DebugLogEvents)
-    FileAppend, % A_Now " | MBDrag | UIA_TREE | not found | " _ancestorPath "`n", %DebugLogPath%
+  If (Debug.Log["mbutton-drag"])
+    FileAppend, % TS() " | mbutton-drag | UIA_TREE | not found | " _ancestorPath "`n", % Debug.Log.Path
   Return 0
 }
 
@@ -1377,7 +1446,7 @@ FindUIAScrollAncestor(ptX, ptY) {
 ; and its Maximum property indicates scrollability (0 = not scrollable, >0 = scrollable)
 ; path: arrow-separated class path for logging (built recursively)
 FindScrollInChildren(walker, element, depth, path) {
-  global DebugLogEvents, DebugLogPath
+  global Debug
   If (depth > 20)
     Return 0
 
@@ -1399,13 +1468,13 @@ FindScrollInChildren(walker, element, depth, path) {
     DllCall("OleAut32\VariantClear", "Ptr", &_var)
 
     If (_maximum > 0) {
-      If (DebugLogEvents)
-        FileAppend, % A_Now " | MBDrag | UIA_CHILD | FOUND ScrollBar(max=" _maximum ") | " _curPath "`n", %DebugLogPath%
+      If (Debug.Log["mbutton-drag"])
+        FileAppend, % TS() " | mbutton-drag | UIA_CHILD | FOUND ScrollBar(max=" _maximum ") | " _curPath "`n", % Debug.Log.Path
       DllCall(NumGet(NumGet(element+0)+1*A_PtrSize), "Ptr", element)  ; AddRef
       Return {scrollbar: element, maximum: _maximum, scrollable: 1}
     }
-    If (DebugLogEvents)
-      FileAppend, % A_Now " | MBDrag | UIA_CHILD | ScrollBar max=0 (not scrollable) | " _curPath "`n", %DebugLogPath%
+    If (Debug.Log["mbutton-drag"])
+      FileAppend, % TS() " | mbutton-drag | UIA_CHILD | ScrollBar max=0 (not scrollable) | " _curPath "`n", % Debug.Log.Path
     Return 0  ; Found ScrollBar but not scrollable - no need to search deeper
   }
 
@@ -1447,7 +1516,7 @@ FindScrollBarChild(parentHwnd) {
 
 ; Log window control tree with visibility and scroll info (for debugging)
 LogControlTree(parentHwnd, indent := 0) {
-  global DebugLogPath
+  global Debug
   _child := DllCall("GetWindow", "Ptr", parentHwnd, "UInt", 5, "Ptr")  ; GW_CHILD
   While (_child) {
     VarSetCapacity(_className, 256)
@@ -1467,7 +1536,7 @@ LogControlTree(parentHwnd, indent := 0) {
       _page := NumGet(_si, 16, "UInt"), _pos := NumGet(_si, 20, "Int")
       _info .= " min=" . _min . " max=" . _max . " page=" . _page . " pos=" . _pos
     }
-    FileAppend, %_info%`n, %DebugLogPath%
+    FileAppend, % _info "`n", % Debug.Log.Path
     ; Recurse (limit depth to 5 for more detail)
     If (indent < 5)
       LogControlTree(_child, indent + 1)

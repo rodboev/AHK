@@ -18,13 +18,21 @@ SendMode, Input
 SetWorkingDir, %A_ScriptDir%
 SetTitleMatchMode, 2
 
-; Debug flags
-DebugTooltips := 0
-DebugLogEvents := 1
-; NOTE: When viewing the log, grep for the type of event
-; (e.g. ScrollAccel, MBDrag, etc.) and tail 100
-DebugLogPath := A_Temp "\AHK_Debug.log"
-FileDelete, %DebugLogPath%  ; Clear log on load
+global Debug
+Debug := { Tooltips: {"scroll-accel": 0
+  , "mbutton-drag": 0 }
+, Log: { Path: A_Temp . "\AHK_Debug.log"
+  , "scroll-accel": 0
+  , "mbutton-drag": 0
+  , "window-spawning": 0
+  , "terminal-anywhere": 0 }}
+
+FileDelete, % Debug.Log.Path
+
+TS() {
+  FormatTime, _t,, HH:mm:ss
+  return _t
+}
 
 ; Disable hotkeys inside remote sessions (RDP, Hyper-V, VMWare)
 #If IsRemoteSession()
@@ -338,7 +346,7 @@ MouseIsOver(winTitle) {
 GetScrollAccel(divisor := 100) {
   If (divisor = 0)
     Return 1
-  global DebugTooltips, DebugLogEvents, DebugLogPath
+  global Debug
   static lastV := 1, lastDirection := "", directionCount := 0
   static lastTickUp := 0, lastTickDn := 0
   timeout := 400
@@ -362,9 +370,8 @@ GetScrollAccel(divisor := 100) {
 
   ; Filter spurious t=0/1ms events (duplicates or event coalescing)
   If (t <= 1) {
-    If (DebugLogEvents) {
-      FormatTime, _ts,, HH:mm:ss
-      FileAppend, %_ts% | ScrollAccel | SKIP t=%t%ms (using lastV=%lastV%)`n, %DebugLogPath%
+    If (Debug.Log["scroll-accel"]) {
+      FileAppend, % TS() " | scroll-accel | SKIP t=" t "ms (using lastV=" lastV ")`n", % Debug.Log.Path
     }
     Return lastV
   }
@@ -391,7 +398,7 @@ GetScrollAccel(divisor := 100) {
   }
   lastV := v
 
-  If (DebugTooltips) {
+  If (Debug.Tooltips["scroll-accel"]) {
     MouseGetPos, _mx, _my, _hwnd
     WinGet, _exe, ProcessName, ahk_id %_hwnd%
     WinGetClass, _class, ahk_id %_hwnd%
@@ -400,10 +407,9 @@ GetScrollAccel(divisor := 100) {
     ToolTip, ScrollAccel: v=%v% t=%t%ms div=%divisor% %reason%`n%_exe% [%_class%], %_tx%, %_ty%
     SetTimer, ScrollAccelTooltipOff, -800
   }
-  If (DebugLogEvents) {
+  If (Debug.Log["scroll-accel"]) {
     dir := isUp ? "UP" : "DN"
-    FormatTime, _ts,, HH:mm:ss
-    FileAppend, %_ts% | ScrollAccel | %dir% | v=%v% t=%t%ms div=%divisor% cnt=%directionCount% %reason%`n, %DebugLogPath%
+    FileAppend, % TS() " | scroll-accel | " dir " | v=" v " t=" t "ms div=" divisor " cnt=" directionCount " " reason "`n", % Debug.Log.Path
   }
   Return v
 
@@ -866,13 +872,14 @@ UserRun(Executable, Args*) {
         psExeQ := """" psPath """"
         psArg := "-NoProfile -Command " Chr(34) psCmd Chr(34)
 
-        ; DEBUG: Log the constructed command
-        _logFile := A_Temp . "\TA_Debug.log"
-        FileAppend, % A_Now . " | UserRun PS path: psCmd=" . psCmd . "`n", %_logFile%
+        if (Debug.Log["terminal-anywhere"]) {
+            FileAppend, % TS() . " | terminal-anywhere | UserRun PS path: psCmd=" . psCmd . "`n", % Debug.Log.Path
+        }
 
         if (rfp != "") {
             full := """" rfp """ explorer.exe conhost.exe --headless cmd.exe /C """ psPrefix psExeQ " " psArg """"
-            FileAppend, % A_Now . " | UserRun full cmd: " . full . "`n", %_logFile%
+            if (Debug.Log["terminal-anywhere"])
+                FileAppend, % TS() . " | terminal-anywhere | UserRun full cmd: " . full . "`n", % Debug.Log.Path
             Run, %full%, , UseErrorLevel Hide
             if (ErrorLevel) {
                 MsgBox, 16, UserRun failed, % "Run failed.`nErrorLevel: " ErrorLevel "`n`nCommand:`n" full

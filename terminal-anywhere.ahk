@@ -34,9 +34,6 @@ Return
 TerminalInit() {
   global TA
   TA := {}
-  ; Clear debug log on init
-  _logFile := A_Temp . "\TA_Debug.log"
-  FileDelete, %_logFile%
   TA.WTProfile := GetWTFirstProfile()
   TA_Log("TerminalInit: WTProfile=" . TA.WTProfile)
 }
@@ -84,10 +81,12 @@ GetTerminalDir() {
   Return _path
 }
 
-; ⇒ Debug logging to temp file
+; ⇒ Debug logging routed through unified Debug object
 TA_Log(msg) {
-  static logFile := A_Temp . "\TA_Debug.log"
-  FileAppend, % A_Now . " | " . msg . "`n", %logFile%
+  global Debug
+  if (!Debug.Log["terminal-anywhere"])
+    return
+  FileAppend, % TS() . " | terminal-anywhere | " . msg . "`n", % Debug.Log.Path
 }
 
 ; ⇒ Read first non-hidden profile name from Windows Terminal settings.json

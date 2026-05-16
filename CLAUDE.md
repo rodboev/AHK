@@ -6,17 +6,13 @@ Keep under 30k chars; 40k char max (`wc -c CLAUDE.md`). Compress or remove conte
 
 ## Workflow
 
-**Debug logs**: Set `DebugLogEvents := 1` in AutoHotkey.ahk. **When viewing, grep AHK_Debug.log for event type and tail 100—never raw tail.**
+**Log file location**: %A_Temp%\AHK_Debug.log
 
-| Prefix        | Coverage                                                              |
-| ------------- | --------------------------------------------------------------------- |
-| `MBDrag`      | Session start/end, method detection, fallbacks, LVM mode, boundaries |
-| `ScrollAccel` | Velocity calc, direction changes, filtered events                    |
-| `WS`          | Shell hooks, intent detection, opacity hide/reveal, move events      |
+**Enable logging**: Set `Debug.Log["name"] := 1` in AutoHotkey.ahk
 
-**Adding logging**: Most features lack it. When debugging, add proactively. Format: `timestamp | PREFIX | EVENT | key=value pairs`.
+**Adding logs**: Most features lack it. When debugging, add proactively. Format: `timestamp | name | event | key=value pairs`.
 
-**Testing**: Enable logging, ask user to "try now", grep results—don't ask "how is it now?"
+**Testing**: Enable logging, ask user to "try now"
 
 **Refactoring**: Source of truth is the actual code. Copy verbatim when moving/extracting. Mention improvements separately.
 
@@ -33,7 +29,7 @@ Keep under 30k chars; 40k char max (`wc -c CLAUDE.md`). Compress or remove conte
 
 ### Global Declarations in Pseudo-Threads
 
-Label subroutines (hotkeys, timers) can *read* globals without declaration, but *assignments* create a local that shadows the global. This causes state to reset mid-session.
+Label subroutines (hotkeys, timers) can _read_ globals without declaration, but _assignments_ create a local that shadows the global. This causes state to reset mid-session.
 
 ```autohotkey
 ; ❌ BROKEN - MB_AccumPct resets to empty on each timer tick
@@ -110,13 +106,13 @@ The tradeoff is maintainability: vtable offsets are magic numbers. Mitigate by d
 
 Different apps expose scrolling differently:
 
-| App Type               | Best Method | Why                                                    |
-| ---------------------- | ----------- | ------------------------------------------------------ |
-| SysListView32          | LVM         | Pixel-level precision, dual-axis, no UIA jitter        |
-| Explorer (DirectUI)    | UIA         | DirectUI layer ignores WM_MOUSEWHEEL                   |
-| Electron apps (VSCode) | WHEEL       | Sub-120 delta for smooth scrolling                     |
-| Classic Win32          | WHEEL_CTRL  | Window-level messages don't reach controls             |
-| Tree views             | VSCROLL     | Line-by-line, most compatible                          |
+| App Type               | Best Method | Why                                             |
+| ---------------------- | ----------- | ----------------------------------------------- |
+| SysListView32          | LVM         | Pixel-level precision, dual-axis, no UIA jitter |
+| Explorer (DirectUI)    | UIA         | DirectUI layer ignores WM_MOUSEWHEEL            |
+| Electron apps (VSCode) | WHEEL       | Sub-120 delta for smooth scrolling              |
+| Classic Win32          | WHEEL_CTRL  | Window-level messages don't reach controls      |
+| Tree views             | VSCROLL     | Line-by-line, most compatible                   |
 
 The fallback chain (LVM → UIA → WHEEL → WHEEL_CTRL → VSCROLL) probes each method and uses the first that works, determined empirically per control at runtime.
 
@@ -133,6 +129,7 @@ Moving ALL activated windows to cursor's monitor would be wrong — activating a
 ### Module Init Contract
 
 The parent auto-execute section is responsible for:
+
 - Calling module init functions (`WS_Init()`, `TerminalInit()`)
 - Registering `OnExit()` handlers (`MB_Cleanup`, `WS_Cleanup`, `G_UIACleanup`)
 
@@ -171,6 +168,7 @@ Try {
 ```
 
 **Session pointers** (persist across timer ticks, like `MB_ScrollPattern`/`MB_Element`): Release explicitly on state transitions (MButton Up, fallback, cleanup). These rely on:
+
 1. `Critical` preventing mid-DllCall interruption
 2. Explicit release in the Up hotkey and fallback paths
 3. `OnExit` handler (`MB_Cleanup`) as safety net
@@ -183,49 +181,49 @@ UI Automation COM interfaces are called via `DllCall` to vtable offsets. Source:
 
 **IUIAutomation** — root object from `ComObjCreate(CLSID, IID)`:
 
-| Offset | Method                     | Used In            |
-| ------ | -------------------------- | ------------------ |
-| 6      | `ElementFromHandle(hwnd)`  | mbutton-drag       |
-| 7      | `ElementFromPoint(x, y)`   | extended-spy       |
+| Offset | Method                    | Used In      |
+| ------ | ------------------------- | ------------ |
+| 6      | `ElementFromHandle(hwnd)` | mbutton-drag |
+| 7      | `ElementFromPoint(x, y)`  | extended-spy |
 
 **IUIAutomationElement**:
 
-| Offset | Method                     | Used In            |
-| ------ | -------------------------- | ------------------ |
-| 10     | `GetCurrentPropertyValue`  | extended-spy       |
-| 16     | `GetCurrentPattern`        | mbutton-drag       |
+| Offset | Method                    | Used In      |
+| ------ | ------------------------- | ------------ |
+| 10     | `GetCurrentPropertyValue` | extended-spy |
+| 16     | `GetCurrentPattern`       | mbutton-drag |
 
 **IScrollPattern** — returned by `GetCurrentPattern(10004)`:
 
-| Offset | Method                              | Used In       |
-| ------ | ----------------------------------- | ------------- |
-| 4      | `SetScrollPercent(hPct, vPct)`      | smooth scroll |
-| 5      | `get_CurrentHorizontalScrollPercent`| dual-axis     |
-| 6      | `get_CurrentVerticalScrollPercent`  | native probe  |
-| 7      | `get_CurrentHorizontalViewSize`     | dual-axis     |
-| 8      | `get_CurrentVerticalViewSize`       | normalization |
+| Offset | Method                               | Used In       |
+| ------ | ------------------------------------ | ------------- |
+| 4      | `SetScrollPercent(hPct, vPct)`       | smooth scroll |
+| 5      | `get_CurrentHorizontalScrollPercent` | dual-axis     |
+| 6      | `get_CurrentVerticalScrollPercent`   | native probe  |
+| 7      | `get_CurrentHorizontalViewSize`      | dual-axis     |
+| 8      | `get_CurrentVerticalViewSize`        | normalization |
 
 **Property IDs** — first arg to GetCurrentPropertyValue:
 
-| ID    | Name                 | Returns          |
-| ----- | -------------------- | ---------------- |
-| 30002 | ProcessId            | VT_I4 (int)      |
-| 30005 | Name                 | VT_BSTR          |
-| 30012 | ClassName            | VT_BSTR          |
+| ID    | Name      | Returns     |
+| ----- | --------- | ----------- |
+| 30002 | ProcessId | VT_I4 (int) |
+| 30005 | Name      | VT_BSTR     |
+| 30012 | ClassName | VT_BSTR     |
 
 ## Key Helper Functions
 
-| Function                  | File                    | Purpose                                              |
-| ------------------------- | ----------------------- | ---------------------------------------------------- |
-| `UserRun(exe, args*)`     | `AutoHotkey.ahk`        | Process execution with elevation and quoting         |
-| `GetExplorerPath()`       | `AutoHotkey.ahk`        | Active Explorer window's filesystem path (tab-aware) |
-| `GetCursorMonitor()`      | `AutoHotkey.ahk`        | Returns 1-based monitor index for cursor             |
-| `IsProcessElevated(pid)`  | `AutoHotkey.ahk`        | Checks admin privileges via token                    |
-| `FindInPath(exe)`         | `AutoHotkey.ahk`        | Resolves exe name to full PATH entry                 |
-| `HasVal(arr, val)`        | `AutoHotkey.ahk`        | Check if array contains value (partial match)        |
-| `GetScrollPos(hwnd)`      | `mbutton-drag.ahk`      | Win32 vertical scroll position                       |
-| `ScrollCurve(dist)`       | `mbutton-drag.ahk`      | Power curve: `dist^0.8` up to 100px, slower beyond   |
-| `OpenTerminal(opts)`      | `terminal-anywhere.ahk` | Open WT with elevation options                       |
+| Function                 | File                    | Purpose                                              |
+| ------------------------ | ----------------------- | ---------------------------------------------------- |
+| `UserRun(exe, args*)`    | `AutoHotkey.ahk`        | Process execution with elevation and quoting         |
+| `GetExplorerPath()`      | `AutoHotkey.ahk`        | Active Explorer window's filesystem path (tab-aware) |
+| `GetCursorMonitor()`     | `AutoHotkey.ahk`        | Returns 1-based monitor index for cursor             |
+| `IsProcessElevated(pid)` | `AutoHotkey.ahk`        | Checks admin privileges via token                    |
+| `FindInPath(exe)`        | `AutoHotkey.ahk`        | Resolves exe name to full PATH entry                 |
+| `HasVal(arr, val)`       | `AutoHotkey.ahk`        | Check if array contains value (partial match)        |
+| `GetScrollPos(hwnd)`     | `mbutton-drag.ahk`      | Win32 vertical scroll position                       |
+| `ScrollCurve(dist)`      | `mbutton-drag.ahk`      | Power curve: `dist^0.8` up to 100px, slower beyond   |
+| `OpenTerminal(opts)`     | `terminal-anywhere.ahk` | Open WT with elevation options                       |
 
 ## Conventions
 
@@ -241,13 +239,13 @@ The MButton scroll system intercepts middle-click-drag and converts it to smooth
 
 ### Scroll Methods
 
-| Method         | Mechanism                                        | Granularity  | Best For                       |
-| -------------- | ------------------------------------------------ | ------------ | ------------------------------ |
-| **LVM**        | `LVM_SCROLL` (0x1014) pixel-level SendMessage    | Pixel        | SysListView32 controls         |
-| **UIA**        | `SetScrollPercent` via IUIAutomationScrollPattern| Fractional % | Explorer file lists, mmc.exe   |
-| **WHEEL**      | `WM_MOUSEWHEEL` sub-120 delta to window          | Sub-notch    | Electron apps (VS Code)        |
-| **WHEEL_CTRL** | `WM_MOUSEWHEEL` delta ~40 to control             | ~1 line      | SystemInformer                 |
-| **VSCROLL**    | `WM_VSCROLL` line-by-line, dynamic timer         | 1 line       | Tree views, universal fallback |
+| Method         | Mechanism                                         | Granularity  | Best For                       |
+| -------------- | ------------------------------------------------- | ------------ | ------------------------------ |
+| **LVM**        | `LVM_SCROLL` (0x1014) pixel-level SendMessage     | Pixel        | SysListView32 controls         |
+| **UIA**        | `SetScrollPercent` via IUIAutomationScrollPattern | Fractional % | Explorer file lists, mmc.exe   |
+| **WHEEL**      | `WM_MOUSEWHEEL` sub-120 delta to window           | Sub-notch    | Electron apps (VS Code)        |
+| **WHEEL_CTRL** | `WM_MOUSEWHEEL` delta ~40 to control              | ~1 line      | SystemInformer                 |
+| **VSCROLL**    | `WM_VSCROLL` line-by-line, dynamic timer          | 1 line       | Tree views, universal fallback |
 
 **Wheel delta**: 120 = 3 lines (system default). WHEEL_CTRL uses ~40 (120/3) for 1-line scrolling.
 
@@ -324,11 +322,11 @@ Moves newly created windows to the cursor's monitor using shell hooks and WinEve
 
 ### Window Creation Paths
 
-| Path                    | Timing             | Mechanism                                             |
-| ----------------------- | ------------------ | ----------------------------------------------------- |
-| Win32 instant           | Shell hook fires   | Window ready → move immediately                       |
-| UWP event-driven        | ~62ms              | Shell hook → pending → SHOW/UNCLOAK → move            |
-| CREATE pre-pipeline     | 55-77ms before     | CREATE → hide (opacity 0) → shell hook → move → reveal|
+| Path                | Timing           | Mechanism                                              |
+| ------------------- | ---------------- | ------------------------------------------------------ |
+| Win32 instant       | Shell hook fires | Window ready → move immediately                        |
+| UWP event-driven    | ~62ms            | Shell hook → pending → SHOW/UNCLOAK → move             |
+| CREATE pre-pipeline | 55-77ms before   | CREATE → hide (opacity 0) → shell hook → move → reveal |
 
 ### Intent Detection
 
@@ -345,6 +343,7 @@ Moves newly created windows to the cursor's monitor using shell hooks and WinEve
 At `EVENT_OBJECT_CREATE`, hide windows using `WS_EX_LAYERED` + alpha 0. After move, restore opacity.
 
 **`WS.Hidden[hwnd]` state machine** (important for understanding the pipeline):
+
 - **Absent**: Window not tracked (normal state)
 - **Boolean** (`true`/`false`): Opacity-hidden; value = `hadLayered` (whether window already had `WS_EX_LAYERED` before we hid it)
 - **`-1` sentinel**: Window processed/moved — prevents duplicate CREATE events from re-hiding
@@ -353,5 +352,3 @@ At `EVENT_OBJECT_CREATE`, hide windows using `WS_EX_LAYERED` + alpha 0. After mo
 
 - **32-bit masking**: `idObject & 0xFFFFFFFF` — WinEventProc params are 32-bit but AHK reads 64-bit on x64
 - **Numeric coercion**: `hwnd + 0` — ensures consistent object key type
-
-
