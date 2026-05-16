@@ -74,6 +74,7 @@
   NumPut(16 + A_PtrSize, ci, 0, "UInt")
   DllCall("GetCursorInfo", "Ptr", &ci)
   MB.Probe.InitHCursor := NumGet(ci, 8, "UPtr")
+  MB.Probe.InitCursorUnknown := (A_Cursor = "Unknown")
 
   ; Defer MButton Down for Explorer and custom-rendered apps (no Win32 controls)
   ; Explorer: prevents click actions during scroll (e.g., navbar opens tab)
@@ -266,12 +267,17 @@
     }
   }
 
-  If (_hasScrollRange) {
+  If (_hasScrollRange and !MB.Probe.InitCursorUnknown) {
     ; Win32 confirms scroll range exists — show immediately
     MB.Cursor.Active := 1
     SetDragCursor()
     If (Debug.Log["mbutton-drag"])
       FileAppend, % TS() " | mbutton-drag | CURSOR_DOWN | scrollRange=1`n", % Debug.Log.Path
+  } Else If (_hasScrollRange and MB.Probe.InitCursorUnknown) {
+    ; App already has a custom cursor (likely native autoscroll from prior click) — defer
+    MB.Cursor.Pending := 1
+    If (Debug.Log["mbutton-drag"])
+      FileAppend, % TS() " | mbutton-drag | CURSOR_DEFERRED | scrollRange=1 initCursorUnknown=1`n", % Debug.Log.Path
   } Else If (MB.UIA.Pattern) {
     ; Has UIA pattern but no Win32 scrollbar detected — defer cursor until scroll verified
     MB.Cursor.Pending := 1
@@ -322,12 +328,15 @@ MBDragTimer:
   If (MB.Probe.Active > 0) {
     nativeDetected := false
 
-    ; Signal 1: Cursor changed to a custom bitmap (e.g., Chrome/Firefox autoscroll icon)
-    ; Requires A_Cursor = "Unknown" to ignore standard cursor changes (Explorer selection, etc.)
+    ; Signal 1: Cursor change indicates native scroll handling
+    ; Case A: App set a custom cursor (e.g., Chrome autoscroll icon) — A_Cursor = "Unknown"
+    ; Case B: App had a custom cursor on MButton Down and dismissed it — cursor reverted to standard
     VarSetCapacity(ci, 16 + A_PtrSize, 0)
     NumPut(16 + A_PtrSize, ci, 0, "UInt")
     DllCall("GetCursorInfo", "Ptr", &ci)
     If (NumGet(ci, 8, "UPtr") != MB.Probe.InitHCursor and A_Cursor = "Unknown")
+      nativeDetected := true
+    If (!nativeDetected and MB.Probe.InitCursorUnknown and A_Cursor != "Unknown")
       nativeDetected := true
 
     If (!nativeDetected) {
