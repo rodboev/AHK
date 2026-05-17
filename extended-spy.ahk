@@ -249,17 +249,14 @@ WrapList(text, delimiter := ",", maxLen := 100, joiner := "", hardMax := 120) {
     item := Trim(A_LoopField)
     If (item = "")
       Continue
-    ; Calculate what this line would look like with the new item
     testLine := currentLine = "" ? item : currentLine . joiner . item
     If (StrLen(testLine) > maxLen && currentLine != "") {
-      ; Line would be too long, start a new line
       result .= (result = "" ? "" : "`n  ") . currentLine
       currentLine := item
     } Else {
       currentLine := testLine
     }
   }
-  ; Add final line
   If (currentLine != "")
     result .= (result = "" ? "" : "`n  ") . currentLine
   ; Hard-wrap: break any lines still exceeding hardMax (try spaces, then force cut)
@@ -291,11 +288,8 @@ WrapList(text, delimiter := ",", maxLen := 100, joiner := "", hardMax := 120) {
   Return result
 }
 
-; Clean window text: remove non-ASCII chars, deduplicate if long
 CleanWindowText(text) {
-  ; Remove non-ASCII characters (keep only printable ASCII 0x20-0x7E)
   cleaned := RegExReplace(text, "[^\x20-\x7E]", "")
-  ; Collapse multiple spaces
   cleaned := RegExReplace(cleaned, "\s+", " ")
   cleaned := Trim(cleaned)
 

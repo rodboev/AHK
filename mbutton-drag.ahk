@@ -96,12 +96,10 @@
     }
   }
 
-  ; Capture initial mouse coords
   CoordMode, Mouse, Screen
   MouseGetPos, _x1, _y1
   MB.X1 := _x1, MB.Y1 := _y1
 
-  ; Get control window handle (hwnd) and process name for logging
   _mbClassName := MB.ClassName
   ControlGet, _ctrl, Hwnd,, %_mbClassName%, ahk_id %_mbWin%
   WinGet, _procName, ProcessName, ahk_id %_mbWin%
@@ -199,7 +197,6 @@
     MB.UIA.ViewSizeH := (_viewSizeH < 1) ? 10.0 : _viewSizeH
   }
 
-  ; Capture initial scroll state for native detection
   probeTarget := MB.Ctrl ? MB.Ctrl : MB.Win
   MB.Probe.InitScrollPos := GetScrollPos(probeTarget)
   MB.Probe.InitScrollPct := -1.0
@@ -212,11 +209,7 @@
     MB.Probe.InitScrollPctH := _initPctH
   }
 
-  ; Show SizeAll cursor on MButton down IF area appears scrollable
-  ; Strategy: Check multiple signals for scrollability
-  ; 1. GetScrollInfo on target controls (works for standard Win32)
-  ; 2. Find visible ScrollBar controls in window tree (works for Explorer DirectUIHWND)
-  ; UIA ViewSize is unreliable - it reports 35-55% even when not scrollable
+  ; Determine scrollability (GetScrollInfo -> visible ScrollBar; UIA ViewSize unreliable)
   MB.Cursor.Pending := 0
   _hasScrollRange := 0
 
@@ -298,7 +291,6 @@ MBDragTimer:
   Critical ; Prevent MButton Up from interrupting mid-DllCall (race condition safety)
   global MB, G_hSizeAll, Debug
 
-  ; Safety check: if MButton released, stop immediately
   If !GetKeyState("MButton", "P") {
     SetTimer, MBDragTimer, Off
     ; Release UIA resources (edge case: MButton Up didn't fire)
@@ -321,16 +313,11 @@ MBDragTimer:
     Return
   }
 
-  ; ===== NATIVE SCROLL PROBE PHASE =====
-  ; Detect if the app handles MButton drag-scroll natively.
-  ; Three signals: cursor change, Win32 scroll pos, UIA scroll percent.
-  ; Movement-gated: cursor checked every tick; concludes at threshold (1px).
+  ; ===== NATIVE SCROLL PROBE =====
   If (MB.Probe.Active > 0) {
     nativeDetected := false
 
-    ; Signal 1: Cursor change indicates native scroll handling
-    ; Case A: App set a custom cursor (e.g., Chrome autoscroll icon) — A_Cursor = "Unknown"
-    ; Case B: App had a custom cursor on MButton Down and dismissed it — cursor reverted to standard
+    ; Cursor change (custom autoscroll icon, or icon dismissed)
     VarSetCapacity(ci, 16 + A_PtrSize, 0)
     NumPut(16 + A_PtrSize, ci, 0, "UInt")
     DllCall("GetCursorInfo", "Ptr", &ci)
@@ -346,15 +333,13 @@ MBDragTimer:
       probeDragX := Abs(probeX - MB.X1)
       probeDrag := (probeDragY > probeDragX) ? probeDragY : probeDragX
 
-      ; Signals 2 & 3: check after 3px (filters cursor jitter)
+      ; Check scroll position/percent after 3px (filters jitter)
       If (probeDrag >= 3) {
-        ; Signal 2: Win32 scroll position changed
         probeTarget := MB.Ctrl ? MB.Ctrl : MB.Win
         currentScrollPos := GetScrollPos(probeTarget)
         If (currentScrollPos != MB.Probe.InitScrollPos)
           nativeDetected := true
 
-        ; Signal 3: UIA scroll percent changed
         _pattern := MB.UIA.Pattern
         If (!nativeDetected and _pattern) {
           DllCall(NumGet(NumGet(_pattern+0)+6*A_PtrSize), "Ptr", _pattern, "Double*", currentPct)
@@ -608,11 +593,7 @@ MBDragTimer:
         _isVirtual := (_lvStyle & 0x1000) ? 1 : 0      ; LVS_OWNERDATA
         _isOwnerDraw := (_lvStyle & 0x0400) ? 1 : 0   ; LVS_OWNERDRAWFIXED
 
-        ; Detection logic:
-        ; - delta ≈ sentPixels (0.85-1.15 ratio): pixel-level scrolling (HIGH CONFIDENCE)
-        ; - delta=0: at boundary or no scrollbar, assume pixel-level (LOW CONFIDENCE)
-        ; - delta > 0 but < 0.85*sent: row-quantized (rounded to row boundaries)
-        ; Row-quantized is the default for most ListViews; pixel-level is rare (TortoiseGit)
+        ; Classify: pixel-level (ratio 0.85-1.15) vs row-quantized
         deltaRatio := (sentPixels > 0) ? (scrollDelta / sentPixels) : 0
         If (deltaRatio >= 0.85 and deltaRatio <= 1.15) {
           ; Pixel-level: delta ≈ sentPixels (high confidence - prevents SLOW-TICK override)
@@ -796,8 +777,7 @@ MBDragTimer:
 
       MB.ScrollTicks++
       If (Debug.Tooltips["mbutton-drag"]) {
-        ; Mode format: Q:h (quantized high-conf), P:l (pixel low-conf), ? (not yet detected)
-        ; High confidence: virtual flag or delta-ratio match. Low: boundary guess or slow-tick upgrade
+        ; Q/P = quantized/pixel, h/l = high/low confidence
         If (!MB.LVM.Detected)
           _mode := "?"
         Else
@@ -1056,13 +1036,11 @@ Return
   Critical ; Prevent timer from firing during cleanup (race condition safety)
   global MB, Debug
   SetTimer, MBDragTimer, Off
-  ; Restore system cursor
   If (MB.Cursor.Active) {
     DllCall("SystemParametersInfo", "UInt", 0x57, "UInt", 0, "Ptr", 0, "UInt", 0)  ; SPI_SETCURSORS
     MB.Cursor.Active := 0
   }
   MB.Cursor.Pending := 0
-  ; Log session summary
   If (Debug.Log["mbutton-drag"] && MB.Triggered) {
     _duration := A_TickCount - MB.SessionStart
     FileAppend, % TS() " | mbutton-drag | END | proc=" MB.ProcName " method=" MB.Method " ticks=" MB.ScrollTicks " duration=" _duration "ms`n", % Debug.Log.Path
@@ -1070,7 +1048,6 @@ Return
   If (Debug.Tooltips["mbutton-drag"])
     ToolTip
 
-  ; Release UIA objects
   If (MB.UIA.Pattern) {
     ObjRelease(MB.UIA.Pattern)
     MB.UIA.Pattern := 0

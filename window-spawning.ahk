@@ -38,7 +38,7 @@ WS_Init() {
   if (_hookOK && _hookMsg > 0)
     OnMessage(_hookMsg, "WS_OnShellHook")
   else
-    WS_Log("ERROR: Shell hook failed — Hook=" . _hookOK . " Msg=" . _hookMsg)
+    FileAppend, % TS() " | window-spawning | " "ERROR: Shell hook failed — Hook=" . _hookOK . " Msg=" . _hookMsg . "`n", % Debug.Log.Path
 
   ; WinEvent hooks for instant visibility/uncloak/create detection
   DllCall("ole32\CoInitialize", "Ptr", 0)
@@ -56,9 +56,9 @@ WS_Init() {
     , "Ptr", 0, "Ptr", WS.WinEventCB
     , "UInt", 0, "UInt", 0, "UInt", 0x0002, "Ptr")  ; WINEVENT_OUTOFCONTEXT
   if (Debug.Log["window-spawning"])
-    WS_Log("INIT: SHOW=" . (WS.EventHookShow ? "OK" : "FAIL")
+    FileAppend, % TS() " | window-spawning | " "INIT: SHOW=" . (WS.EventHookShow ? "OK" : "FAIL")
       . " UNCLOAK=" . (WS.EventHookUncloak ? "OK" : "FAIL")
-      . " CREATE=" . (WS.EventHookCreate ? "OK" : "FAIL"))
+      . " CREATE=" . (WS.EventHookCreate ? "OK" : "FAIL") . "`n", % Debug.Log.Path
   SetTimer, WS_SweepTracking, 1000
   OnExit("WS_Cleanup")
 }
@@ -90,7 +90,7 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
       if (_rcAge < 3000) {
         WS.RecentExes[_rcEntry.exe] := A_TickCount
         if (Debug.Log["window-spawning"])
-          WS_Log("INTENT-SIGNAL: exe=" . _rcEntry.exe . " lived=" . _rcAge . "ms")
+          FileAppend, % TS() " | window-spawning | " "INTENT-SIGNAL: exe=" . _rcEntry.exe . " lived=" . _rcAge . "ms" . "`n", % Debug.Log.Path
       }
     }
     WS.Pending.Delete(lParam + 0)
@@ -109,13 +109,13 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
       if (_nmClass == "") {
         WS.OverlayTick := A_TickCount
         if (Debug.Log["window-spawning"])
-          WS_Log("OVERLAY (infra): hwnd=" . lParam)
+          FileAppend, % TS() " | window-spawning | " "OVERLAY (infra): hwnd=" . lParam . "`n", % Debug.Log.Path
         return
       }
       if (_nmClass == "Shell_TrayWnd" || _nmClass == "Shell_SecondaryTrayWnd") {
         WS.OverlayTick := A_TickCount
         if (Debug.Log["window-spawning"])
-          WS_Log("OVERLAY (taskbar): hwnd=" . lParam)
+          FileAppend, % TS() " | window-spawning | " "OVERLAY (taskbar): hwnd=" . lParam . "`n", % Debug.Log.Path
         return
       }
       if (_nmClass == "Windows.UI.Core.CoreWindow") {
@@ -126,18 +126,17 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
       WS.OverlayTick := A_TickCount
       if (Debug.Log["window-spawning"]) {
         WinGet, _nmExe, ProcessName, ahk_id %lParam%
-        WS_Log("OVERLAY: class=" . _nmClass . " exe=" . _nmExe . " hwnd=" . lParam)
+        FileAppend, % TS() " | window-spawning | " "OVERLAY: class=" . _nmClass . " exe=" . _nmExe . " hwnd=" . lParam . "`n", % Debug.Log.Path
       }
       return
     }
 
-    ; --- Positive intent detection (default: no move) ---
     ; Z-order fallback guard: if foreground was just destroyed, this activation
     ; is Windows selecting the next window in z-order, not user intent.
     if (WS.ZOrderFallbackTick && (A_TickCount - WS.ZOrderFallbackTick) < 200) {
       WS.ZOrderFallbackTick := 0
       if (Debug.Log["window-spawning"])
-        WS_Log("SKIP (z-order-fallback): hwnd=" . lParam)
+        FileAppend, % TS() " | window-spawning | " "SKIP (z-order-fallback): hwnd=" . lParam . "`n", % Debug.Log.Path
       return
     }
     WS.ZOrderFallbackTick := 0
@@ -159,7 +158,7 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
         _hasIntent := true
         WS.RecentExes.Delete(_actExe)
         if (Debug.Log["window-spawning"])
-          WS_Log("INTENT (brief-process): exe=" . _actExe . " age=" . _intentAge . "ms")
+          FileAppend, % TS() " | window-spawning | " "INTENT (brief-process): exe=" . _actExe . " age=" . _intentAge . "ms" . "`n", % Debug.Log.Path
       }
     }
 
@@ -169,7 +168,7 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
       if (_overlayAge < 2000 && lParam != prevHwnd) {
         _hasIntent := true
         if (Debug.Log["window-spawning"])
-          WS_Log("INTENT (overlay-launch): exe=" . _actExe . " overlay=" . _overlayAge . "ms ago")
+          FileAppend, % TS() " | window-spawning | " "INTENT (overlay-launch): exe=" . _actExe . " overlay=" . _overlayAge . "ms ago" . "`n", % Debug.Log.Path
       }
     }
     WS.OverlayTick := 0
@@ -177,7 +176,7 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
     if (!_hasIntent) {
       if (Debug.Log["window-spawning"]) {
         WinGetTitle, _dbgTitle, ahk_id %lParam%
-        WS_Log("SKIP (no-intent): """ . _dbgTitle . """ exe=" . _actExe)
+        FileAppend, % TS() " | window-spawning | " "SKIP (no-intent): """ . _dbgTitle . """ exe=" . _actExe . "`n", % Debug.Log.Path
       }
       return
     }
@@ -188,7 +187,7 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
     if (_mouseClass == "Shell_TrayWnd" || _mouseClass == "Shell_SecondaryTrayWnd") {
       if (Debug.Log["window-spawning"]) {
         WinGetTitle, _dbgTitle, ahk_id %lParam%
-        WS_Log("SKIP (taskbar-click): """ . _dbgTitle . """")
+        FileAppend, % TS() " | window-spawning | " "SKIP (taskbar-click): """ . _dbgTitle . """" . "`n", % Debug.Log.Path
       }
       return
     }
@@ -199,7 +198,7 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
     WS_MoveToMonitor(lParam, windowMon, cursorMon)
     if (Debug.Log["window-spawning"]) {
       WinGetTitle, _dbgTitle, ahk_id %lParam%
-      WS_Log("MOVED (activate): """ . _dbgTitle . """ mon " . windowMon . " -> " . cursorMon)
+      FileAppend, % TS() " | window-spawning | " "MOVED (activate): """ . _dbgTitle . """ mon " . windowMon . " -> " . cursorMon . "`n", % Debug.Log.Path
     }
     return
   }
@@ -216,7 +215,7 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
     ppEntry := WS.PrePending.Delete(lParam + 0)
     if (Debug.Log["window-spawning"]) {
       ctDeltaUs := Round((WS_QPC() - ppEntry.qpc) * 1000000 / WS.QPCFreq)
-      WS_Log("SHELL: hwnd=" . lParam . " create-to-shell=" . ctDeltaUs . "µs")
+      FileAppend, % TS() " | window-spawning | " "SHELL: hwnd=" . lParam . " create-to-shell=" . ctDeltaUs . "µs" . "`n", % Debug.Log.Path
     }
     targetMon := ppEntry.mon
     if (WS_IsReady(lParam)) {
@@ -226,11 +225,11 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
           WS_MoveToMonitor(lParam, windowMon, targetMon)
           if (Debug.Log["window-spawning"]) {
             WinGetTitle, _dbgTitle, ahk_id %lParam%
-            WS_Log("MOVED (create-shell): """ . _dbgTitle . """ mon " . windowMon . " -> " . targetMon . " +" . (A_TickCount - ppEntry.tick) . "ms")
+            FileAppend, % TS() " | window-spawning | " "MOVED (create-shell): """ . _dbgTitle . """ mon " . windowMon . " -> " . targetMon . " +" . (A_TickCount - ppEntry.tick) . "ms" . "`n", % Debug.Log.Path
           }
         } else if (Debug.Log["window-spawning"]) {
           WinGetTitle, _dbgTitle, ahk_id %lParam%
-          WS_Log("OK (create-shell): """ . _dbgTitle . """ already on mon " . windowMon)
+          FileAppend, % TS() " | window-spawning | " "OK (create-shell): """ . _dbgTitle . """ already on mon " . windowMon . "`n", % Debug.Log.Path
         }
         WS_Reveal(lParam)
         return
@@ -250,7 +249,7 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
     if (Debug.Log["window-spawning"]) {
       WinGetTitle, _dbgTitle, ahk_id %lParam%
       WinGetClass, _dbgClass, ahk_id %lParam%
-      WS_Log("DEFERRED (create-path): hwnd=" . lParam . " """ . _dbgTitle . """ class=" . _dbgClass)
+      FileAppend, % TS() " | window-spawning | " "DEFERRED (create-path): hwnd=" . lParam . " """ . _dbgTitle . """ class=" . _dbgClass . "`n", % Debug.Log.Path
     }
     return
   }
@@ -263,11 +262,11 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
         WS_MoveToMonitor(lParam, windowMon, cursorMon)
         if (Debug.Log["window-spawning"]) {
           WinGetTitle, _dbgTitle, ahk_id %lParam%
-          WS_Log("MOVED (instant): """ . _dbgTitle . """ mon " . windowMon . " -> " . cursorMon)
+          FileAppend, % TS() " | window-spawning | " "MOVED (instant): """ . _dbgTitle . """ mon " . windowMon . " -> " . cursorMon . "`n", % Debug.Log.Path
         }
       } else if (Debug.Log["window-spawning"]) {
         WinGetTitle, _dbgTitle, ahk_id %lParam%
-        WS_Log("OK (instant): """ . _dbgTitle . """ already on mon " . windowMon)
+        FileAppend, % TS() " | window-spawning | " "OK (instant): """ . _dbgTitle . """ already on mon " . windowMon . "`n", % Debug.Log.Path
       }
       WS_Reveal(lParam)
       return
@@ -286,7 +285,7 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
   if (Debug.Log["window-spawning"]) {
     WinGetTitle, _dbgTitle, ahk_id %lParam%
     WinGetClass, _dbgClass, ahk_id %lParam%
-    WS_Log("DEFERRED: hwnd=" . lParam . " """ . _dbgTitle . """ class=" . _dbgClass)
+    FileAppend, % TS() " | window-spawning | " "DEFERRED: hwnd=" . lParam . " """ . _dbgTitle . """ class=" . _dbgClass . "`n", % Debug.Log.Path
   }
 }
 
@@ -318,8 +317,8 @@ WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTim
         WS.Hidden[hwnd] := -1
         if (Debug.Log["window-spawning"]) {
           WinGetClass, _dbgClass, ahk_id %hwnd%
-          WS_Log("CREATE-SKIP-OWNER: hwnd=" . hwnd . " class=" . _dbgClass
-            . " owner=" . Format("0x{:08X}", _ppOwner))
+          FileAppend, % TS() " | window-spawning | " "CREATE-SKIP-OWNER: hwnd=" . hwnd . " class=" . _dbgClass
+            . " owner=" . Format("0x{:08X}", _ppOwner) . "`n", % Debug.Log.Path
         }
         return
       }
@@ -345,8 +344,8 @@ WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTim
     WS.PrePending[hwnd] := {mon: cursorMon, tick: A_TickCount, qpc: WS_QPC()}
     if (Debug.Log["window-spawning"]) {
       WinGetClass, _dbgClass, ahk_id %hwnd%
-      WS_Log("CREATE: hwnd=" . hwnd . " class=" . _dbgClass . " hide mon " . cursorMon
-        . (windowMon && windowMon != cursorMon ? " (from " . windowMon . ")" : ""))
+      FileAppend, % TS() " | window-spawning | " "CREATE: hwnd=" . hwnd . " class=" . _dbgClass . " hide mon " . cursorMon
+        . (windowMon && windowMon != cursorMon ? " (from " . windowMon . ")" : "") . "`n", % Debug.Log.Path
     }
     return
   }
@@ -359,8 +358,8 @@ WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTim
       WinGetTitle, _dbgTitle, ahk_id %hwnd%
       WinGetClass, _dbgClass, ahk_id %hwnd%
       _deltaUs := Round((WS_QPC() - ppEntry.qpc) * 1000000 / WS.QPCFreq)
-      WS_Log(_evName . ": hwnd=" . hwnd . " """ . _dbgTitle . """ class=" . _dbgClass
-        . " create-to-" . _evName . "=" . (A_TickCount - ppEntry.tick) . "ms (" . _deltaUs . "µs)")
+      FileAppend, % TS() " | window-spawning | " _evName . ": hwnd=" . hwnd . " """ . _dbgTitle . """ class=" . _dbgClass
+        . " create-to-" . _evName . "=" . (A_TickCount - ppEntry.tick) . "ms (" . _deltaUs . "µs)" . "`n", % Debug.Log.Path
     }
     if (WS_IsReady(hwnd) && WS_IsMovable(hwnd)) {
       windowMon := GetMonitor("ahk_id " . hwnd)
@@ -368,11 +367,11 @@ WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTim
         WS_MoveToMonitor(hwnd, windowMon, ppEntry.mon)
         if (Debug.Log["window-spawning"]) {
           WinGetTitle, _dbgTitle, ahk_id %hwnd%
-          WS_Log("MOVED (create-show): """ . _dbgTitle . """ mon " . windowMon . " -> " . ppEntry.mon . " +" . (A_TickCount - ppEntry.tick) . "ms")
+          FileAppend, % TS() " | window-spawning | " "MOVED (create-show): """ . _dbgTitle . """ mon " . windowMon . " -> " . ppEntry.mon . " +" . (A_TickCount - ppEntry.tick) . "ms" . "`n", % Debug.Log.Path
         }
       } else if (Debug.Log["window-spawning"]) {
         WinGetTitle, _dbgTitle, ahk_id %hwnd%
-        WS_Log("OK (create-show): """ . _dbgTitle . """ already on mon " . windowMon)
+        FileAppend, % TS() " | window-spawning | " "OK (create-show): """ . _dbgTitle . """ already on mon " . windowMon . "`n", % Debug.Log.Path
       }
       WS_Reveal(hwnd)
       WS.Pending.Delete(hwnd)
@@ -422,7 +421,7 @@ WS_ProcessPending(hwnd, targetMon, source:="event", tick:=0) {
     if (Debug.Log["window-spawning"]) {
       _elapsed := tick ? A_TickCount - tick : 0
       WinGetTitle, _dbgTitle, ahk_id %hwnd%
-      WS_Log("MOVED (" . source . "): """ . _dbgTitle . """ mon " . windowMon . " -> " . targetMon . " +" . _elapsed . "ms")
+      FileAppend, % TS() " | window-spawning | " "MOVED (" . source . "): """ . _dbgTitle . """ mon " . windowMon . " -> " . targetMon . " +" . _elapsed . "ms" . "`n", % Debug.Log.Path
     }
   }
   WS_Reveal(hwnd)
@@ -497,7 +496,7 @@ WS_SweepTracking:
     if (!WS.PrePending.HasKey(_h) && !WS.Pending.HasKey(_h)) {
       _staleKeys.Push(_h)
       if (Debug.Log["window-spawning"])
-        WS_Log("ORPHAN-REVEAL: hwnd=" . _h)
+        FileAppend, % TS() " | window-spawning | " "ORPHAN-REVEAL: hwnd=" . _h . "`n", % Debug.Log.Path
       DllCall("SetLayeredWindowAttributes", "Ptr", _h, "UInt", 0, "UChar", 255, "UInt", 0x2)
       if (!_val)
         WinSet, ExStyle, -0x80000, ahk_id %_h%  ; -WS_EX_LAYERED (restore)
@@ -717,7 +716,3 @@ WS_QPC() {
   return _count
 }
 
-WS_Log(msg) {
-  global Debug
-  FileAppend, % TS() " | window-spawning | " msg "`n", % Debug.Log.Path
-}

@@ -420,11 +420,9 @@ GetScrollAccel(divisor := 100) {
 
 ; ⇒ Search for executable in PATH
 FindInPath(exe) {
-  ; Check If it's already a full path that exists
   If FileExist(exe)
     Return exe
 
-  ; Search PATH directories
   EnvGet, pathVar, PATH
   Loop, Parse, pathVar, `;
   {
@@ -568,7 +566,6 @@ GetActiveWindowCommandLine(pid := "") {
     WinGet, pid, PID, A
 
   If (pid) {
-    ; Get command line using WMI
     cmdLine := ""
     For process in ComObjGet("winmgmts:").ExecQuery("Select CommandLine from Win32_Process where ProcessId=" . pid)
       cmdLine := process.CommandLine
@@ -768,13 +765,9 @@ _FixAdvertisedShortcut(lnkPath) {
 ; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ; ┃ === SAFE RUN (as user, admin, SYSTEM) === ┃
 ; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-; ∙ Run executable with argument handling and optional elevation
-; ∙ Build PowerShell argument string in comma-separated array Format
-; ∙ Support elevation via PowerShell's Start-Process -Verb RunAs
-; ∙ Spawn from Explorer For cleaner process trees
-; Examples:
-; ∙ User: UserRun("wt", "-d %UserProfile%\Desktop"), or UserRun("wt", "-d" . A_Desktop)
-; ∙ Admin: UserRun("elevate", exePath, fileArguments)
+; "elevate" sentinel elevates via PS Start-Process -Verb RunAs
+; Spawns from Explorer (via RunFromProcess) for clean process trees
+; UserRun("wt", "-d", A_Desktop) | UserRun("elevate", "wt", "-d", path)
 UserRun(Executable, Args*) {
     global UserRun_LastError
 
@@ -973,7 +966,6 @@ ShellRunUserOrFail(exe, args := "", dir := "", verb := "open", show := 1) {
     return true
 }
 
-; Check if a process is running elevated
 IsProcessElevated(pid) {
   hProcess := DllCall("OpenProcess", "UInt", 0x0400, "Int", false, "UInt", pid, "Ptr")  ; PROCESS_QUERY_INFORMATION
   If (!hProcess)

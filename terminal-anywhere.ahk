@@ -30,20 +30,19 @@ F10::OpenTerminal({elevate: false})
     UserRun("elevate", "ti", _wtPath, "-d " . _dir)
 Return
 
-; ⇒ Initialize terminal-anywhere config (called from auto-execute section)
 TerminalInit() {
-  global TA
+  global TA, Debug
   TA := {}
   TA.WTProfile := GetWTFirstProfile()
-  TA_Log("TerminalInit: WTProfile=" . TA.WTProfile)
+  if (Debug.Log["terminal-anywhere"])
+    FileAppend, % TS() . " | terminal-anywhere | " . "TerminalInit: WTProfile=" . TA.WTProfile . "`n", % Debug.Log.Path
 }
 
-; ⇒ Open Windows Terminal with optional elevation
 OpenTerminal(opts) {
   ; opts := {elevate: bool}
   ;   elevate  true  = run as Administrator (UAC prompt)
 
-  global TA
+  global TA, Debug
   _dir := GetTerminalDir()
   _args := []
   If (opts.elevate)
@@ -56,20 +55,23 @@ OpenTerminal(opts) {
   _args.Push("-d")
   _args.Push(_dir)
 
-  TA_Log("OpenTerminal: elevate=" . (opts.elevate ? "true" : "false") . " dir=" . _dir)
+  if (Debug.Log["terminal-anywhere"])
+    FileAppend, % TS() . " | terminal-anywhere | " . "OpenTerminal: elevate=" . (opts.elevate ? "true" : "false") . " dir=" . _dir . "`n", % Debug.Log.Path
 
   UserRun(_args*)
 }
 
-; ⇒ Resolve working directory from active window context
 GetTerminalDir() {
+  global Debug
   WinGetClass, _class, A
-  TA_Log("GetTerminalDir: class=" . _class)
+  if (Debug.Log["terminal-anywhere"])
+    FileAppend, % TS() . " | terminal-anywhere | " . "GetTerminalDir: class=" . _class . "`n", % Debug.Log.Path
   If (_class = "Progman")
     Return A_Desktop
   If (_class = "CabinetWClass") {
     _path := GetExplorerPath()
-    TA_Log("GetExplorerPath returned: " . _path)
+    if (Debug.Log["terminal-anywhere"])
+      FileAppend, % TS() . " | terminal-anywhere | " . "GetExplorerPath returned: " . _path . "`n", % Debug.Log.Path
     _path := _path ? _path : A_MyDocuments
   } Else {
     _exe := GetExePath()
@@ -79,14 +81,6 @@ GetTerminalDir() {
   If (RegExMatch(_path, "^[A-Za-z]:\\$"))
     _path .= "."
   Return _path
-}
-
-; ⇒ Debug logging routed through unified Debug object
-TA_Log(msg) {
-  global Debug
-  if (!Debug.Log["terminal-anywhere"])
-    return
-  FileAppend, % TS() . " | terminal-anywhere | " . msg . "`n", % Debug.Log.Path
 }
 
 ; ⇒ Read first non-hidden profile name from Windows Terminal settings.json
