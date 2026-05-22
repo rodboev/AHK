@@ -237,7 +237,9 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
   ; --- Creation path: new window ---
 
   ; Skip if already processed (duplicate HSHELL_WINDOWCREATED for same hwnd)
-  if (WS.Hidden.HasKey(lParam + 0) && WS.Hidden[lParam + 0] == -1) {
+  ; Only suppress within 5s — long-lived single-instance apps reuse the same hwnd on re-launch
+  if (WS.Hidden.HasKey(lParam + 0) && WS.Hidden[lParam + 0] == -1
+      && WS.Pending.HasKey(lParam + 0)) {
     if (Debug.Log["window-spawning"]) {
       WinGetTitle, _dbgTitle, ahk_id %lParam%
       FileAppend, % TS() " | window-spawning | " "SKIP (already-handled): """ . _dbgTitle . """ hwnd=" . lParam . "`n", % Debug.Log.Path
@@ -282,8 +284,8 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
     }
     ; Not ready — defer with pre-registered target
     WS.Pending[lParam + 0] := {mon: targetMon, tick: ppEntry.tick}
-    _fn := Func("WS_BackupPoll").Bind(lParam + 0)
-    SetTimer, %_fn%, -200
+    _fn := Func("WS_BackupPoll").Bind(lParam + 0, 1)
+    SetTimer, %_fn%, -100
     _fn2 := Func("WS_TimeoutPending").Bind(lParam + 0)
     SetTimer, %_fn2%, -2000
     if (Debug.Log["window-spawning"]) {
@@ -318,8 +320,8 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
     }
   }
   WS.Pending[lParam + 0] := {mon: cursorMon, tick: A_TickCount}
-  _fn := Func("WS_BackupPoll").Bind(lParam + 0)
-  SetTimer, %_fn%, -200
+  _fn := Func("WS_BackupPoll").Bind(lParam + 0, 1)
+  SetTimer, %_fn%, -100
   _fn2 := Func("WS_TimeoutPending").Bind(lParam + 0)
   SetTimer, %_fn2%, -2000
   if (Debug.Log["window-spawning"]) {
@@ -347,6 +349,7 @@ WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTim
     if (_evClass == "Windows.UI.Core.CoreWindow") {
       WinGet, _evExe, ProcessName, ahk_id %hwnd%
       if (_evExe == "StartMenuExperienceHost.exe" || _evExe == "SearchHost.exe") {
+        WS.OverlayTick := A_TickCount
         cursorMon := GetCursorMonitor()
         windowMon := GetMonitor("ahk_id " . hwnd)
         if (windowMon != cursorMon) {
@@ -485,8 +488,9 @@ WS_ProcessPending(hwnd, targetMon, source:="event", tick:=0) {
   WS_Reveal(hwnd)
 }
 
-; Single backup poll — catches windows where WinEvent arrived but wasn't ready/movable yet
-WS_BackupPoll(hwnd) {
+; Escalating backup poll — catches windows where WinEvent didn't fire (e.g. elevated processes)
+; Polls at ~100, 300, 600, 1000ms cumulative; 2s timeout remains as safety net
+WS_BackupPoll(hwnd, attempt:=1) {
   global WS
   if (!WS.Pending.HasKey(hwnd))
     return
@@ -501,7 +505,13 @@ WS_BackupPoll(hwnd) {
     if (_chkTitle != "") {
       WS.Pending.Delete(hwnd)
       WS_Reveal(hwnd)
+      return
     }
+  }
+  if (attempt < 4) {
+    _delay := attempt == 1 ? 200 : attempt == 2 ? 300 : 400
+    _fn := Func("WS_BackupPoll").Bind(hwnd, attempt + 1)
+    SetTimer, %_fn%, % -_delay
   }
 }
 
@@ -545,8 +555,11 @@ WS_SweepTracking:
   ; Orphan sweep: reveal windows stuck in Hidden that aren't tracked
   _staleKeys := []
   for _h, _val in WS.Hidden {
-    if (_val == -1)
+    if (_val == -1) {
+      if (!WS.PrePending.HasKey(_h) && !WS.Pending.HasKey(_h))
+        _staleKeys.Push(_h)
       continue
+    }
     if (!WinExist("ahk_id " . _h)) {
       _staleKeys.Push(_h)
       continue
