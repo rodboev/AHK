@@ -8,12 +8,15 @@
 ; Activation moves use positive intent detection:
 ;   Tier 1 — Brief-process detection (Win32 single-instance app re-launch)
 ;   Tier 2 — Overlay-launch detection (UWP apps via Start menu / Action Center)
+;   Tier 3 — Alt+Tab detection (ExplorerPatcher MultitaskingViewFrame dismissed)
 
 WS_Init() {
   global WS, Debug
   WS := {}
   WS.LastForegroundHwnd := 0
   WS.OverlayTick := 0              ; A_TickCount when non-movable overlay activated
+  WS.AltTabTick := 0               ; A_TickCount when MultitaskingViewFrame (EP Alt+Tab) dismissed
+  WS.AltTabHwnd := 0               ; hwnd of active MultitaskingViewFrame (EP Alt+Tab switcher)
   WS.ZOrderFallbackTick := 0       ; A_TickCount when foreground destroyed (z-order fallback imminent)
   WS.RecentExes := {}              ; Tier 1: exe name -> A_TickCount (brief process detected)
   WS.RecentCreated := {}           ; Tier 1: hwnd -> {exe, tick} (window lifespan tracking)
@@ -76,6 +79,13 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
 
   ; --- Destruction: clean up tracking, detect brief processes (Tier 1) ---
   if (isDestroyed) {
+    ; Tier 3 — ExplorerPatcher Alt+Tab: MultitaskingViewFrame dismissed → next activation is intentional
+    if (WS.AltTabHwnd && lParam == WS.AltTabHwnd) {
+      WS.AltTabHwnd := 0
+      WS.AltTabTick := A_TickCount
+      if (Debug.Log["window-spawning"])
+        FileAppend, % TS() " | window-spawning | " "ALTTAB-DISMISS: hwnd=" . lParam . "`n", % Debug.Log.Path
+    }
     ; Clear intent signals when foreground window closes — prevents false positives
     ; on the subsequent Z-order fallback activation.
     if (lParam == WS.LastForegroundHwnd) {
@@ -104,18 +114,27 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
   ; --- Activation path: positive intent detection ---
   if (isActivated) {
     if (!WS_IsMovable(lParam)) {
-      ; Non-movable windows: record overlay timestamps for Tier 2 detection
+      ; Non-movable windows: record overlay timestamps for Tier 2/3 detection
       WinGetClass, _nmClass, ahk_id %lParam%
       if (_nmClass == "") {
         WS.OverlayTick := A_TickCount
-        if (Debug.Log["window-spawning"])
-          FileAppend, % TS() " | window-spawning | " "OVERLAY (infra): hwnd=" . lParam . "`n", % Debug.Log.Path
+        if (Debug.Log["window-spawning"]) {
+          WinGet, _nmExe, ProcessName, ahk_id %lParam%
+          FileAppend, % TS() " | window-spawning | " "OVERLAY (infra): hwnd=" . lParam . " exe=" . _nmExe . "`n", % Debug.Log.Path
+        }
         return
       }
       if (_nmClass == "Shell_TrayWnd" || _nmClass == "Shell_SecondaryTrayWnd") {
         WS.OverlayTick := A_TickCount
         if (Debug.Log["window-spawning"])
           FileAppend, % TS() " | window-spawning | " "OVERLAY (taskbar): hwnd=" . lParam . "`n", % Debug.Log.Path
+        return
+      }
+      ; Tier 3 — ExplorerPatcher Alt+Tab: track switcher hwnd for destruction detection
+      if (_nmClass == "MultitaskingViewFrame") {
+        WS.AltTabHwnd := lParam + 0
+        if (Debug.Log["window-spawning"])
+          FileAppend, % TS() " | window-spawning | " "ALTTAB-OPEN: hwnd=" . lParam . "`n", % Debug.Log.Path
         return
       }
       if (_nmClass == "Windows.UI.Core.CoreWindow") {
@@ -172,6 +191,18 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
       }
     }
     WS.OverlayTick := 0
+
+    ; Tier 3: ExplorerPatcher Alt+Tab (MultitaskingViewFrame dismissed → first activation is the chosen window)
+    ; Guard: lParam != prevHwnd ensures Escape (re-activating the same window) doesn't trigger a move.
+    if (!_hasIntent && WS.AltTabTick) {
+      _altTabAge := A_TickCount - WS.AltTabTick
+      WS.AltTabTick := 0
+      if (_altTabAge < 2000 && lParam != prevHwnd) {
+        _hasIntent := true
+        if (Debug.Log["window-spawning"])
+          FileAppend, % TS() " | window-spawning | " "INTENT (alttab-launch): exe=" . _actExe . " alttab=" . _altTabAge . "ms ago" . "`n", % Debug.Log.Path
+      }
+    }
 
     if (!_hasIntent) {
       if (Debug.Log["window-spawning"]) {
@@ -300,6 +331,24 @@ WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTim
   Critical
   SetWinDelay, -1
   hwnd := hwnd + 0  ; Ensure numeric type for consistent object key lookup
+
+  ; --- Start menu: move to cursor monitor on UNCLOAK ---
+  if (event == 0x8018) {
+    WinGetClass, _evClass, ahk_id %hwnd%
+    if (_evClass == "Windows.UI.Core.CoreWindow") {
+      WinGet, _evExe, ProcessName, ahk_id %hwnd%
+      if (_evExe == "StartMenuExperienceHost.exe") {
+        cursorMon := GetCursorMonitor()
+        windowMon := GetMonitor("ahk_id " . hwnd)
+        if (windowMon != cursorMon) {
+          WS_MoveToMonitor(hwnd, windowMon, cursorMon)
+          if (Debug.Log["window-spawning"])
+            FileAppend, % TS() " | window-spawning | " "MOVED (start-menu): mon " . windowMon . " -> " . cursorMon . "`n", % Debug.Log.Path
+        }
+        return
+      }
+    }
+  }
 
   ; --- CREATE: pre-register + hide for zero-flash move ---
   if (event == 0x8000) {
