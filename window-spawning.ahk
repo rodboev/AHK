@@ -25,6 +25,7 @@ WS_Init() {
   WS.Hidden := {}                  ; Opacity-hidden windows: hwnd -> hadLayered (bool/-1 sentinel)
   WS.OwnerSentinel := {}           ; Owner hwnd -> A_TickCount (sibling CREATE suppression)
   WS.LastMoved := {}                ; hwnd -> A_TickCount (WMI-foreground re-move suppression)
+  WS.SubsystemCache := {}           ; exe name -> PE subsystem (2=GUI, 3=CUI, 0=unknown)
   WS.ExcludedClasses := ["tooltips_class32", "NotifyIconOverflowWindow"
     , "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Progman", "WorkerW"
     , "MultitaskingViewFrame", "Windows.UI.Core.CoreWindow", "ForegroundStaging"
@@ -777,7 +778,7 @@ WS_WMIPoll:
     _procName := _evt.ProcessName
     _parentPid := _evt.ParentProcessID
     if (_procName != "") {
-      if (RegExMatch(_procName, "i)^(bash|sh|conhost|pwsh|powershell|cmd|git|node|npm|env|uname|hostname|which|locale|cat|grep|sed|awk|find|wc|sort|tr|head|tail|tee|xargs)\.exe$"))
+      if (WS_GetSubsystem(_evt.ProcessID, _procName) = 3 || _procName = "conhost.exe")
         continue
       WS.RecentExes[_procName] := A_TickCount
       if (Debug.Log["window-spawning"])
@@ -842,5 +843,43 @@ WS_Cleanup() {
 WS_QPC() {
   DllCall("QueryPerformanceCounter", "Int64*", _count)
   return _count
+}
+
+WS_GetSubsystem(pid, procName) {
+  global WS
+  if (WS.SubsystemCache.HasKey(procName))
+    return WS.SubsystemCache[procName]
+  _exePath := ""
+  _hProc := DllCall("OpenProcess", "UInt", 0x1000, "Int", 0, "UInt", pid, "Ptr")
+  if (_hProc) {
+    VarSetCapacity(_pathBuf, 520, 0)
+    _pathLen := 260
+    _ok := DllCall("QueryFullProcessImageNameW", "Ptr", _hProc, "UInt", 0, "Ptr", &_pathBuf, "UInt*", _pathLen)
+    DllCall("CloseHandle", "Ptr", _hProc)
+    if (_ok && _pathLen > 0)
+      _exePath := StrGet(&_pathBuf, _pathLen, "UTF-16")
+  }
+  if (_exePath = "") {
+    VarSetCapacity(_pathBuf, 520, 0)
+    _found := DllCall("SearchPathW", "Ptr", 0, "Str", procName, "Ptr", 0, "UInt", 260, "Ptr", &_pathBuf, "Ptr", 0, "UInt")
+    if (_found > 0)
+      _exePath := StrGet(&_pathBuf, _found, "UTF-16")
+  }
+  if (_exePath = "")
+    return 0
+  _subsys := 0
+  Try {
+    _f := FileOpen(_exePath, "r")
+    if (IsObject(_f)) {
+      _f.Seek(0x3C, 0)
+      _peOffset := _f.ReadUInt()
+      _f.Seek(_peOffset + 92, 0)
+      _subsys := _f.ReadUShort()
+      _f.Close()
+    }
+  }
+  if (_subsys)
+    WS.SubsystemCache[procName] := _subsys
+  return _subsys
 }
 
