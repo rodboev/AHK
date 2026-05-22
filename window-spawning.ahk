@@ -25,6 +25,7 @@ WS_Init() {
   WS.PrePending := {}              ; CREATE pre-registration: hwnd -> {mon, tick, qpc}
   WS.Hidden := {}                  ; Opacity-hidden windows: hwnd -> hadLayered (bool/-1 sentinel)
   WS.OwnerSentinel := {}           ; Owner hwnd -> A_TickCount (sibling CREATE suppression)
+  WS.WMIMoved := {}                ; WMI foreground move cooldown: exe -> A_TickCount
   WS.ExcludedClasses := ["tooltips_class32", "NotifyIconOverflowWindow"
     , "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Progman", "WorkerW"
     , "MultitaskingViewFrame", "Windows.UI.Core.CoreWindow", "ForegroundStaging"
@@ -62,6 +63,21 @@ WS_Init() {
     FileAppend, % TS() " | window-spawning | " "INIT: SHOW=" . (WS.EventHookShow ? "OK" : "FAIL")
       . " UNCLOAK=" . (WS.EventHookUncloak ? "OK" : "FAIL")
       . " CREATE=" . (WS.EventHookCreate ? "OK" : "FAIL") . "`n", % Debug.Log.Path
+  ; WMI process start monitoring — detects launches from any source (Run dialog, shortcuts, etc.)
+  ; Uses semi-sync ExecNotificationQuery + timer poll (async SWbemSink unreliable in AHK STA)
+  Try {
+    _locator := ComObjCreate("WbemScripting.SWbemLocator")
+    WS.WMIService := _locator.ConnectServer(".", "root\cimv2")
+    WS.WMIService.Security_.ImpersonationLevel := 3  ; wbemImpersonationLevelImpersonate
+    WS.WMIEvents := WS.WMIService.ExecNotificationQuery("SELECT * FROM Win32_ProcessStartTrace")
+    SetTimer, WS_WMIPoll, 50
+    if (Debug.Log["window-spawning"])
+      FileAppend, % TS() " | window-spawning | INIT: WMI=OK (polling)`n", % Debug.Log.Path
+  } catch _e {
+    if (Debug.Log["window-spawning"])
+      FileAppend, % TS() " | window-spawning | INIT: WMI=FAIL err=" . _e.Message . "`n", % Debug.Log.Path
+  }
+
   SetTimer, WS_SweepTracking, 1000
   OnExit("WS_Cleanup")
 }
@@ -760,8 +776,53 @@ WS_TimeoutAltTab:
 Return
 
 
+WS_WMIPoll:
+  Critical
+  if (!IsObject(WS) || !IsObject(WS.WMIEvents))
+    return
+  Loop {
+    Try {
+      _evt := WS.WMIEvents.NextEvent(0)
+    } catch {
+      break
+    }
+    if (!IsObject(_evt))
+      break
+    _procName := _evt.ProcessName
+    if (_procName != "") {
+      WS.RecentExes[_procName] := A_TickCount
+      if (Debug.Log["window-spawning"])
+        FileAppend, % TS() " | window-spawning | WMI-PROC: " . _procName . "`n", % Debug.Log.Path
+      ; If foreground window is this exe and on a different monitor, move it now
+      ; (no activation event fires when the window is already foreground)
+      ; Cooldown: skip if we moved this exe via WMI within last 3s (IFEO chains spawn multiple processes)
+      _fgHwnd := WinExist("A")
+      WinGet, _fgExe, ProcessName, ahk_id %_fgHwnd%
+      if (_fgExe = _procName) {
+        _lastWmiMove := WS.WMIMoved.HasKey(_procName) ? WS.WMIMoved[_procName] : 0
+        if ((A_TickCount - _lastWmiMove) > 3000) {
+          SetWinDelay, -1
+          _curMon := GetCursorMonitor()
+          _winMon := GetMonitor("ahk_id " . _fgHwnd)
+          if (_curMon != _winMon && WS_IsMovable(_fgHwnd)) {
+            WS_MoveToMonitor(_fgHwnd, _winMon, _curMon)
+            WS.WMIMoved[_procName] := A_TickCount
+            if (Debug.Log["window-spawning"])
+              FileAppend, % TS() " | window-spawning | MOVED (wmi-foreground): exe=" . _procName . " mon " . _winMon . " -> " . _curMon . "`n", % Debug.Log.Path
+          }
+        }
+      }
+    }
+    _evt := ""
+  }
+Return
+
 WS_Cleanup() {
   global WS
+  ; Stop WMI process monitoring
+  SetTimer, WS_WMIPoll, Off
+  WS.WMIEvents := ""
+  WS.WMIService := ""
   for _h, _hadLayered in WS.Hidden {
     if (_hadLayered == -1)
       continue
