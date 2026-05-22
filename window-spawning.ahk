@@ -236,6 +236,15 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
 
   ; --- Creation path: new window ---
 
+  ; Skip if already processed (duplicate HSHELL_WINDOWCREATED for same hwnd)
+  if (WS.Hidden.HasKey(lParam + 0) && WS.Hidden[lParam + 0] == -1) {
+    if (Debug.Log["window-spawning"]) {
+      WinGetTitle, _dbgTitle, ahk_id %lParam%
+      FileAppend, % TS() " | window-spawning | " "SKIP (already-handled): """ . _dbgTitle . """ hwnd=" . lParam . "`n", % Debug.Log.Path
+    }
+    return
+  }
+
   ; Record exe for brief-process tracking (Tier 1: single-instance detection)
   WinGet, _createExe, ProcessName, ahk_id %lParam%
   if (_createExe != "" && _createExe != "Explorer.EXE")
