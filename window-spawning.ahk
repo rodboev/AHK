@@ -238,7 +238,7 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
 
   ; Record exe for brief-process tracking (Tier 1: single-instance detection)
   WinGet, _createExe, ProcessName, ahk_id %lParam%
-  if (_createExe != "")
+  if (_createExe != "" && _createExe != "Explorer.EXE")
     WS.RecentCreated[lParam + 0] := {exe: _createExe, tick: A_TickCount}
 
   ; Use pre-registered target from CREATE event if available
