@@ -201,7 +201,7 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
     if (!_hasIntent && WS.AltTabTick) {
       _altTabAge := A_TickCount - WS.AltTabTick
       WS.AltTabTick := 0
-      if (_altTabAge < 2000 && lParam != prevHwnd) {
+      if (_altTabAge < 10000 && lParam != prevHwnd) {
         _hasIntent := true
         if (Debug.Log["window-spawning"])
           FileAppend, % TS() " | window-spawning | " "INTENT (alttab-launch): exe=" . _actExe . " alttab=" . _altTabAge . "ms ago" . "`n", % Debug.Log.Path
