@@ -775,6 +775,7 @@ WS_WMIPoll:
     if (!IsObject(_evt))
       break
     _procName := _evt.ProcessName
+    _parentPid := _evt.ParentProcessID
     if (_procName != "") {
       if (RegExMatch(_procName, "i)^(bash|sh|conhost|pwsh|powershell|cmd|git|node|npm|env|uname|hostname|which|locale|cat|grep|sed|awk|find|wc|sort|tr|head|tail|tee|xargs)\.exe$"))
         continue
@@ -792,6 +793,12 @@ WS_WMIPoll:
         continue
       WinGet, _fgExe, ProcessName, ahk_id %_fgHwnd%
       if (_fgExe = _procName) {
+        WinGet, _fgPid, PID, ahk_id %_fgHwnd%
+        if (_parentPid = _fgPid) {
+          if (Debug.Log["window-spawning"])
+            FileAppend, % TS() " | window-spawning | SKIP (child-process): exe=" . _procName . " parentPid=" . _parentPid . "`n", % Debug.Log.Path
+          continue
+        }
         SetWinDelay, -1
         _curMon := GetCursorMonitor()
         _winMon := GetMonitor("ahk_id " . _fgHwnd)
