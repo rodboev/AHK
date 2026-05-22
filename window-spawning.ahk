@@ -346,13 +346,13 @@ WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTim
     WinGetClass, _evClass, ahk_id %hwnd%
     if (_evClass == "Windows.UI.Core.CoreWindow") {
       WinGet, _evExe, ProcessName, ahk_id %hwnd%
-      if (_evExe == "StartMenuExperienceHost.exe") {
+      if (_evExe == "StartMenuExperienceHost.exe" || _evExe == "SearchHost.exe") {
         cursorMon := GetCursorMonitor()
         windowMon := GetMonitor("ahk_id " . hwnd)
         if (windowMon != cursorMon) {
           WS_MoveToMonitor(hwnd, windowMon, cursorMon)
           if (Debug.Log["window-spawning"])
-            FileAppend, % TS() " | window-spawning | " "MOVED (start-menu): mon " . windowMon . " -> " . cursorMon . "`n", % Debug.Log.Path
+            FileAppend, % TS() " | window-spawning | " "MOVED (start-menu): mon " . windowMon . " -> " . cursorMon . " exe=" . _evExe . "`n", % Debug.Log.Path
         }
         return
       }
