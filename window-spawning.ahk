@@ -744,6 +744,7 @@ WS_Reveal(hwnd) {
 
 ; Alt+Tab switcher (DWM overlay — doesn't trigger shell hooks)
 ~!Tab::
+  WS.AltTabTick := A_TickCount
   _targetMon := GetCursorMonitor()
   _hwnd := WinExist("Task Switching ahk_class XamlExplorerHostIslandWindow")
   if (_hwnd) {
@@ -775,12 +776,15 @@ WS_WMIPoll:
       break
     _procName := _evt.ProcessName
     if (_procName != "") {
+      if (RegExMatch(_procName, "i)^(bash|sh|conhost|pwsh|powershell|cmd|git|node|npm|env|uname|hostname|which|locale|cat|grep|sed|awk|find|wc|sort|tr|head|tail|tee|xargs)\.exe$"))
+        continue
       WS.RecentExes[_procName] := A_TickCount
       if (Debug.Log["window-spawning"])
         FileAppend, % TS() " | window-spawning | WMI-PROC: " . _procName . "`n", % Debug.Log.Path
       ; If foreground window is this exe and on a different monitor, move it now
       ; (no activation event fires when the window is already foreground)
-      ; Skip if this window was moved recently (prevents child-process re-moves)
+      if (WS.ZOrderFallbackTick && (A_TickCount - WS.ZOrderFallbackTick) < 1000)
+        continue
       _fgHwnd := WinExist("A")
       _fgKey := _fgHwnd + 0
       _lastMove := WS.LastMoved.HasKey(_fgKey) ? WS.LastMoved[_fgKey] : 0
