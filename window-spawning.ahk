@@ -19,13 +19,12 @@ WS_Init() {
   WS.AltTabHwnd := 0               ; hwnd of active MultitaskingViewFrame (EP Alt+Tab switcher)
   WS.ZOrderFallbackTick := 0       ; A_TickCount when foreground destroyed (z-order fallback imminent)
   WS.RecentExes := {}              ; Tier 1: exe name -> A_TickCount (brief process detected)
-  WS.RecentCreated := {}           ; Tier 1: hwnd -> {exe, tick} (window lifespan tracking)
   WS.Pending := {}                 ; Deferred windows: hwnd -> {mon, tick}
   WS.PendingAltTab := ""           ; Alt+Tab: {mon, tick} or ""
   WS.PrePending := {}              ; CREATE pre-registration: hwnd -> {mon, tick, qpc}
   WS.Hidden := {}                  ; Opacity-hidden windows: hwnd -> hadLayered (bool/-1 sentinel)
   WS.OwnerSentinel := {}           ; Owner hwnd -> A_TickCount (sibling CREATE suppression)
-  WS.WMIMoved := {}                ; WMI foreground move cooldown: exe -> A_TickCount
+  WS.LastMoved := {}                ; hwnd -> A_TickCount (WMI-foreground re-move suppression)
   WS.ExcludedClasses := ["tooltips_class32", "NotifyIconOverflowWindow"
     , "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Progman", "WorkerW"
     , "MultitaskingViewFrame", "Windows.UI.Core.CoreWindow", "ForegroundStaging"
@@ -107,17 +106,6 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
     if (lParam == WS.LastForegroundHwnd) {
       WS.OverlayTick := 0
       WS.ZOrderFallbackTick := A_TickCount
-    }
-    ; Brief-process detection: if a recently-created window dies quickly,
-    ; its exe is a single-instance app that just bounced a re-launch.
-    if (WS.RecentCreated.HasKey(lParam + 0)) {
-      _rcEntry := WS.RecentCreated.Delete(lParam + 0)
-      _rcAge := A_TickCount - _rcEntry.tick
-      if (_rcAge < 3000) {
-        WS.RecentExes[_rcEntry.exe] := A_TickCount
-        if (Debug.Log["window-spawning"])
-          FileAppend, % TS() " | window-spawning | " "INTENT-SIGNAL: exe=" . _rcEntry.exe . " lived=" . _rcAge . "ms" . "`n", % Debug.Log.Path
-      }
     }
     WS.Pending.Delete(lParam + 0)
     WS.PrePending.Delete(lParam + 0)
@@ -262,11 +250,6 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
     }
     return
   }
-
-  ; Record exe for brief-process tracking (Tier 1: single-instance detection)
-  WinGet, _createExe, ProcessName, ahk_id %lParam%
-  if (_createExe != "" && _createExe != "Explorer.EXE")
-    WS.RecentCreated[lParam + 0] := {exe: _createExe, tick: A_TickCount}
 
   ; Use pre-registered target from CREATE event if available
   if (WS.PrePending.HasKey(lParam + 0)) {
@@ -601,14 +584,15 @@ WS_SweepTracking:
   for _i, _k in _staleKeys
     WS.RecentExes.Delete(_k)
 
-  ; Stale created-window tracking (>10s — not brief, not relevant)
+  ; Stale move-cooldown entries (>5s)
   _staleKeys := []
-  for _h, _entry in WS.RecentCreated {
-    if (_now - _entry.tick > 10000)
+  for _h, _tick in WS.LastMoved {
+    if (_now - _tick > 5000)
       _staleKeys.Push(_h)
   }
   for _i, _k in _staleKeys
-    WS.RecentCreated.Delete(_k)
+    WS.LastMoved.Delete(_k)
+
 return
 
 WS_IsReady(hwnd) {
@@ -650,6 +634,7 @@ WS_IsMovable(hwnd) {
 WS_MoveToMonitor(hwnd, srcMon, tgtMon) {
   global WS
   hwnd := hwnd + 0
+  WS.LastMoved[hwnd] := A_TickCount
   if !WinExist("ahk_id " . hwnd) {
     WS.Hidden.Delete(hwnd)
     return
@@ -795,21 +780,21 @@ WS_WMIPoll:
         FileAppend, % TS() " | window-spawning | WMI-PROC: " . _procName . "`n", % Debug.Log.Path
       ; If foreground window is this exe and on a different monitor, move it now
       ; (no activation event fires when the window is already foreground)
-      ; Cooldown: skip if we moved this exe via WMI within last 3s (IFEO chains spawn multiple processes)
+      ; Skip if this window was moved recently (prevents child-process re-moves)
       _fgHwnd := WinExist("A")
+      _fgKey := _fgHwnd + 0
+      _lastMove := WS.LastMoved.HasKey(_fgKey) ? WS.LastMoved[_fgKey] : 0
+      if (_lastMove && (A_TickCount - _lastMove) < 3000)
+        continue
       WinGet, _fgExe, ProcessName, ahk_id %_fgHwnd%
       if (_fgExe = _procName) {
-        _lastWmiMove := WS.WMIMoved.HasKey(_procName) ? WS.WMIMoved[_procName] : 0
-        if ((A_TickCount - _lastWmiMove) > 3000) {
-          SetWinDelay, -1
-          _curMon := GetCursorMonitor()
-          _winMon := GetMonitor("ahk_id " . _fgHwnd)
-          if (_curMon != _winMon && WS_IsMovable(_fgHwnd)) {
-            WS_MoveToMonitor(_fgHwnd, _winMon, _curMon)
-            WS.WMIMoved[_procName] := A_TickCount
-            if (Debug.Log["window-spawning"])
-              FileAppend, % TS() " | window-spawning | MOVED (wmi-foreground): exe=" . _procName . " mon " . _winMon . " -> " . _curMon . "`n", % Debug.Log.Path
-          }
+        SetWinDelay, -1
+        _curMon := GetCursorMonitor()
+        _winMon := GetMonitor("ahk_id " . _fgHwnd)
+        if (_curMon != _winMon && WS_IsMovable(_fgHwnd)) {
+          WS_MoveToMonitor(_fgHwnd, _winMon, _curMon)
+          if (Debug.Log["window-spawning"])
+            FileAppend, % TS() " | window-spawning | MOVED (wmi-foreground): exe=" . _procName . " mon " . _winMon . " -> " . _curMon . "`n", % Debug.Log.Path
         }
       }
     }

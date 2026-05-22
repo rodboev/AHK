@@ -68,7 +68,11 @@ Return
 #IfWinActive ahk_exe sublime_text.exe
   ^Tab::Send {Ctrl Down}{PgDn}{Ctrl Up} ; [ Ctrl+Tab ] -> Next tab
   +^Tab::Send {Ctrl Down}{PgUp}{Ctrl Up} ; [ ShIft+Ctrl+Tab ] -> Previous tab
-  ^w::Send {Alt Down}f{AltUp}{Left}{Alt Down}v{AltUp}w ; [ Ctrl+W ] -> Toggle word wrap
+  ^w:: ; [ Ctrl+W ] -> Toggle word wrap
+    SendEvent !v
+    Sleep 10
+    SendEvent w
+  Return
   ^;::
   #;::
   !;::
@@ -79,7 +83,7 @@ Return
 
 ; ⇒ VSCode + forks
 #If (WinActive("ahk_exe code.exe") OR WinActive("ahk_exe vscodium.exe") OR WinActive("ahk_exe cursor.exe"))
-  ^w::Send {Alt Down}z{AltUp} ; [ Ctrl+W ] -> Toggle word wrap
+  +^w::Send {Alt Down}z{AltUp} ; [ Shift+Ctrl+W ] -> Toggle word wrap
   ^Tab::Send {Ctrl Down}{PgDn}{Ctrl Up} ; [ Ctrl+Tab ] -> Next tab
   +^Tab::Send {Ctrl Down}{PgUp}{Ctrl Up} ; [ ShIft+Ctrl+Tab ] -> Previous tab
 #If
@@ -769,9 +773,18 @@ _FixAdvertisedShortcut(lnkPath) {
 ; Spawns from Explorer (via RunFromProcess) for clean process trees
 ; UserRun("wt", "-d", A_Desktop) | UserRun("elevate", "wt", "-d", path)
 UserRun(Executable, Args*) {
-    global UserRun_LastError
+    global UserRun_LastError, WS
 
     UserRun_LastError := ""
+
+    if (IsObject(WS)) {
+        if (RegExMatch(Executable, "i)([^\\\/]+\.exe)\s*$", _m))
+            WS.RecentExes[_m1] := A_TickCount
+        for _i, _a in Args {
+            if (RegExMatch(_a, "i)([^\\\/]+\.exe)\s*$", _m))
+                WS.RecentExes[_m1] := A_TickCount
+        }
+    }
 
     ; "elevate" is a sentinel: elevate the real target in Args[1]
     elevate := (Executable = "elevate")
