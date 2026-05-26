@@ -4,25 +4,16 @@
 ; Intercepts new window creation and moves windows to the cursor's monitor.
 ; Uses shell hooks (creation/activation) and WinEvent hooks (SHOW/UNCLOAK/CREATE)
 ; for instant, event-driven detection.
-;
-; Activation moves use positive intent detection:
-;   Tier 1 — Brief-process detection (Win32 single-instance app re-launch)
-;   Tier 2 — Overlay-launch detection (UWP apps via Start menu / Action Center)
-;   Tier 3 — Alt+Tab detection (ExplorerPatcher MultitaskingViewFrame dismissed)
 
 WS_Init() {
   global WS, Debug
   WS := {}
-  WS.LastForegroundHwnd := 0
-  WS.OverlayTick := 0              ; A_TickCount when non-movable overlay activated
-  WS.AltTabTick := 0               ; A_TickCount when MultitaskingViewFrame (EP Alt+Tab) dismissed
-  WS.AltTabHwnd := 0               ; hwnd of active MultitaskingViewFrame (EP Alt+Tab switcher)
-  WS.ZOrderFallbackTick := 0       ; A_TickCount when foreground destroyed (z-order fallback imminent)
-  WS.RecentExes := {}              ; Tier 1: exe name -> A_TickCount (brief process detected)
+  WS.RecentExes := {}              ; WMI: exe name -> A_TickCount (process started)
   WS.Pending := {}                 ; Deferred windows: hwnd -> {mon, tick}
   WS.PendingAltTab := ""           ; Alt+Tab: {mon, tick} or ""
   WS.PrePending := {}              ; CREATE pre-registration: hwnd -> {mon, tick, qpc}
-  WS.Hidden := {}                  ; Opacity-hidden windows: hwnd -> hadLayered (bool/-1 sentinel)
+  WS.Hidden := {}                  ; Opacity-hidden windows: hwnd -> hadLayered (bool)
+  WS.Processed := {}               ; Moved/revealed/skipped windows: hwnd -> A_TickCount
   WS.OwnerSentinel := {}           ; Owner hwnd -> A_TickCount (sibling CREATE suppression)
   WS.LastMoved := {}                ; hwnd -> A_TickCount (WMI-foreground re-move suppression)
   WS.SubsystemCache := {}           ; exe name -> PE subsystem (2=GUI, 3=CUI, 0=unknown)
@@ -59,10 +50,9 @@ WS_Init() {
     , "UInt", 0x8000, "UInt", 0x8000   ; EVENT_OBJECT_CREATE
     , "Ptr", 0, "Ptr", WS.WinEventCB
     , "UInt", 0, "UInt", 0, "UInt", 0x0002, "Ptr")  ; WINEVENT_OUTOFCONTEXT
-  if (Debug.Log["window-spawning"])
-    FileAppend, % TS() " | window-spawning | " "INIT: SHOW=" . (WS.EventHookShow ? "OK" : "FAIL")
-      . " UNCLOAK=" . (WS.EventHookUncloak ? "OK" : "FAIL")
-      . " CREATE=" . (WS.EventHookCreate ? "OK" : "FAIL") . "`n", % Debug.Log.Path
+  WS_Log("INIT: SHOW=" . (WS.EventHookShow ? "OK" : "FAIL")
+    . " UNCLOAK=" . (WS.EventHookUncloak ? "OK" : "FAIL")
+    . " CREATE=" . (WS.EventHookCreate ? "OK" : "FAIL"))
   ; WMI process start monitoring — detects launches from any source (Run dialog, shortcuts, etc.)
   ; Uses semi-sync ExecNotificationQuery + timer poll (async SWbemSink unreliable in AHK STA)
   Try {
@@ -71,15 +61,23 @@ WS_Init() {
     WS.WMIService.Security_.ImpersonationLevel := 3  ; wbemImpersonationLevelImpersonate
     WS.WMIEvents := WS.WMIService.ExecNotificationQuery("SELECT * FROM Win32_ProcessStartTrace")
     SetTimer, WS_WMIPoll, 50
-    if (Debug.Log["window-spawning"])
-      FileAppend, % TS() " | window-spawning | INIT: WMI=OK (polling)`n", % Debug.Log.Path
+    WS_Log("INIT: WMI=OK (polling)")
   } catch _e {
-    if (Debug.Log["window-spawning"])
-      FileAppend, % TS() " | window-spawning | INIT: WMI=FAIL err=" . _e.Message . "`n", % Debug.Log.Path
+    WS_Log("INIT: WMI=FAIL err=" . _e.Message)
+    ToolTip, WMI unavailable — single-instance re-launch moves disabled
+    SetTimer, WS_ClearInitTip, -3000
   }
 
   SetTimer, WS_SweepTracking, 1000
   OnExit("WS_Cleanup")
+}
+
+WS_Log(msg) {
+  global Debug
+  if (!Debug.Log["window-spawning"])
+    return
+  _p := Debug.Log.Path
+  FileAppend, % TS() " | window-spawning | " . msg . "`n", %_p%
 }
 
 WS_OnShellHook(wParam, lParam, msg, hwnd) {
@@ -93,21 +91,7 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
   Critical
   SetWinDelay, -1
 
-  ; --- Destruction: clean up tracking, detect brief processes (Tier 1) ---
   if (isDestroyed) {
-    ; Tier 3 — ExplorerPatcher Alt+Tab: MultitaskingViewFrame dismissed → next activation is intentional
-    if (WS.AltTabHwnd && lParam == WS.AltTabHwnd) {
-      WS.AltTabHwnd := 0
-      WS.AltTabTick := A_TickCount
-      if (Debug.Log["window-spawning"])
-        FileAppend, % TS() " | window-spawning | " "ALTTAB-DISMISS: hwnd=" . lParam . "`n", % Debug.Log.Path
-    }
-    ; Clear intent signals when foreground window closes — prevents false positives
-    ; on the subsequent Z-order fallback activation.
-    if (lParam == WS.LastForegroundHwnd) {
-      WS.OverlayTick := 0
-      WS.ZOrderFallbackTick := A_TickCount
-    }
     WS.Pending.Delete(lParam + 0)
     WS.PrePending.Delete(lParam + 0)
     WS.Hidden.Delete(lParam + 0)
@@ -116,125 +100,25 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
 
   cursorMon := GetCursorMonitor()
 
-  ; --- Activation path: positive intent detection ---
   if (isActivated) {
-    if (!WS_IsMovable(lParam)) {
-      ; Non-movable windows: record overlay timestamps for Tier 2/3 detection
-      WinGetClass, _nmClass, ahk_id %lParam%
-      if (_nmClass == "") {
-        WS.OverlayTick := A_TickCount
-        if (Debug.Log["window-spawning"]) {
-          WinGet, _nmExe, ProcessName, ahk_id %lParam%
-          FileAppend, % TS() " | window-spawning | " "OVERLAY (infra): hwnd=" . lParam . " exe=" . _nmExe . "`n", % Debug.Log.Path
-        }
-        return
-      }
-      if (_nmClass == "Shell_TrayWnd" || _nmClass == "Shell_SecondaryTrayWnd") {
-        WS.OverlayTick := A_TickCount
-        if (Debug.Log["window-spawning"])
-          FileAppend, % TS() " | window-spawning | " "OVERLAY (taskbar): hwnd=" . lParam . "`n", % Debug.Log.Path
-        return
-      }
-      ; Tier 3 — ExplorerPatcher Alt+Tab: track switcher hwnd for destruction detection
-      if (_nmClass == "MultitaskingViewFrame") {
-        WS.AltTabHwnd := lParam + 0
-        if (Debug.Log["window-spawning"])
-          FileAppend, % TS() " | window-spawning | " "ALTTAB-OPEN: hwnd=" . lParam . "`n", % Debug.Log.Path
-        return
-      }
-      if (_nmClass == "Windows.UI.Core.CoreWindow") {
-        WinGet, _nmExe, ProcessName, ahk_id %lParam%
-        if (_nmExe != "explorer.exe" && _nmExe != "StartMenuExperienceHost.exe")
-          return
-      }
-      WS.OverlayTick := A_TickCount
-      if (Debug.Log["window-spawning"]) {
-        WinGet, _nmExe, ProcessName, ahk_id %lParam%
-        FileAppend, % TS() " | window-spawning | " "OVERLAY: class=" . _nmClass . " exe=" . _nmExe . " hwnd=" . lParam . "`n", % Debug.Log.Path
-      }
+    if (!WS_IsMovable(lParam))
       return
-    }
-
-    ; Z-order fallback guard: if foreground was just destroyed, this activation
-    ; is Windows selecting the next window in z-order, not user intent.
-    if (WS.ZOrderFallbackTick && (A_TickCount - WS.ZOrderFallbackTick) < 200) {
-      WS.ZOrderFallbackTick := 0
-      if (Debug.Log["window-spawning"])
-        FileAppend, % TS() " | window-spawning | " "SKIP (z-order-fallback): hwnd=" . lParam . "`n", % Debug.Log.Path
-      return
-    }
-    WS.ZOrderFallbackTick := 0
-    prevHwnd := WS.LastForegroundHwnd
-    WS.LastForegroundHwnd := lParam
-    ; Clear overlay tick if previous window was minimized (Z-order fallback, not user launch)
-    if (prevHwnd) {
-      WinGet, _prevMinMax, MinMax, ahk_id %prevHwnd%
-      if (_prevMinMax == -1)
-        WS.OverlayTick := 0
-    }
     WinGet, _actExe, ProcessName, ahk_id %lParam%
-    _hasIntent := false
-
-    ; Tier 1: Brief process of same exe name (Win32 single-instance re-launch)
-    if (WS.RecentExes.HasKey(_actExe)) {
-      _intentAge := A_TickCount - WS.RecentExes[_actExe]
-      if (_intentAge < 5000) {
-        _hasIntent := true
-        WS.RecentExes.Delete(_actExe)
-        if (Debug.Log["window-spawning"])
-          FileAppend, % TS() " | window-spawning | " "INTENT (brief-process): exe=" . _actExe . " age=" . _intentAge . "ms" . "`n", % Debug.Log.Path
-      }
-    }
-
-    ; Tier 2: Overlay launch (Start menu, Action Center → different window activated)
-    if (!_hasIntent && WS.OverlayTick) {
-      _overlayAge := A_TickCount - WS.OverlayTick
-      if (_overlayAge < 2000 && lParam != prevHwnd) {
-        _hasIntent := true
-        if (Debug.Log["window-spawning"])
-          FileAppend, % TS() " | window-spawning | " "INTENT (overlay-launch): exe=" . _actExe . " overlay=" . _overlayAge . "ms ago" . "`n", % Debug.Log.Path
-      }
-    }
-    WS.OverlayTick := 0
-
-    ; Tier 3: ExplorerPatcher Alt+Tab (MultitaskingViewFrame dismissed → first activation is the chosen window)
-    ; Guard: lParam != prevHwnd ensures Escape (re-activating the same window) doesn't trigger a move.
-    if (!_hasIntent && WS.AltTabTick) {
-      _altTabAge := A_TickCount - WS.AltTabTick
-      WS.AltTabTick := 0
-      if (_altTabAge < 10000 && lParam != prevHwnd) {
-        _hasIntent := true
-        if (Debug.Log["window-spawning"])
-          FileAppend, % TS() " | window-spawning | " "INTENT (alttab-launch): exe=" . _actExe . " alttab=" . _altTabAge . "ms ago" . "`n", % Debug.Log.Path
-      }
-    }
-
-    if (!_hasIntent) {
-      if (Debug.Log["window-spawning"]) {
-        WinGetTitle, _dbgTitle, ahk_id %lParam%
-        FileAppend, % TS() " | window-spawning | " "SKIP (no-intent): """ . _dbgTitle . """ exe=" . _actExe . "`n", % Debug.Log.Path
-      }
+    if (!WS.RecentExes.HasKey(_actExe))
       return
-    }
-
-    ; Taskbar click guard: clicking a taskbar button is not a launch
-    MouseGetPos,,, _mouseWin
-    WinGetClass, _mouseClass, ahk_id %_mouseWin%
-    if (_mouseClass == "Shell_TrayWnd" || _mouseClass == "Shell_SecondaryTrayWnd") {
-      if (Debug.Log["window-spawning"]) {
-        WinGetTitle, _dbgTitle, ahk_id %lParam%
-        FileAppend, % TS() " | window-spawning | " "SKIP (taskbar-click): """ . _dbgTitle . """" . "`n", % Debug.Log.Path
-      }
+    _intentAge := A_TickCount - WS.RecentExes[_actExe]
+    if (_intentAge > 5000)
       return
-    }
-
     windowMon := GetMonitor("ahk_id " . lParam)
-    if (windowMon == cursorMon)
+    if (windowMon == cursorMon) {
+      WS.RecentExes.Delete(_actExe)
       return
+    }
+    WS.RecentExes.Delete(_actExe)
     WS_MoveToMonitor(lParam, windowMon, cursorMon)
     if (Debug.Log["window-spawning"]) {
       WinGetTitle, _dbgTitle, ahk_id %lParam%
-      FileAppend, % TS() " | window-spawning | " "MOVED (activate): """ . _dbgTitle . """ mon " . windowMon . " -> " . cursorMon . "`n", % Debug.Log.Path
+      WS_Log("MOVED (activate): """ . _dbgTitle . """ exe=" . _actExe . " mon " . windowMon . " -> " . cursorMon)
     }
     return
   }
@@ -243,11 +127,10 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
 
   ; Skip if already processed (duplicate HSHELL_WINDOWCREATED for same hwnd)
   ; Only suppress within 5s — long-lived single-instance apps reuse the same hwnd on re-launch
-  if (WS.Hidden.HasKey(lParam + 0) && WS.Hidden[lParam + 0] == -1
-      && WS.Pending.HasKey(lParam + 0)) {
+  if (WS.Processed.HasKey(lParam + 0)) {
     if (Debug.Log["window-spawning"]) {
       WinGetTitle, _dbgTitle, ahk_id %lParam%
-      FileAppend, % TS() " | window-spawning | " "SKIP (already-handled): """ . _dbgTitle . """ hwnd=" . lParam . "`n", % Debug.Log.Path
+      WS_Log("SKIP (already-handled): """ . _dbgTitle . """ hwnd=" . lParam)
     }
     return
   }
@@ -257,78 +140,14 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
     ppEntry := WS.PrePending.Delete(lParam + 0)
     if (Debug.Log["window-spawning"]) {
       ctDeltaUs := Round((WS_QPC() - ppEntry.qpc) * 1000000 / WS.QPCFreq)
-      FileAppend, % TS() " | window-spawning | " "SHELL: hwnd=" . lParam . " create-to-shell=" . ctDeltaUs . "µs" . "`n", % Debug.Log.Path
+      WS_Log("SHELL: hwnd=" . lParam . " create-to-shell=" . ctDeltaUs . "µs")
     }
-    targetMon := ppEntry.mon
-    if (WS_IsReady(lParam)) {
-      if (WS_IsMovable(lParam)) {
-        windowMon := GetMonitor("ahk_id " . lParam)
-        if (windowMon != targetMon) {
-          WS_MoveToMonitor(lParam, windowMon, targetMon)
-          if (Debug.Log["window-spawning"]) {
-            WinGetTitle, _dbgTitle, ahk_id %lParam%
-            FileAppend, % TS() " | window-spawning | " "MOVED (create-shell): """ . _dbgTitle . """ mon " . windowMon . " -> " . targetMon . " +" . (A_TickCount - ppEntry.tick) . "ms" . "`n", % Debug.Log.Path
-          }
-        } else if (Debug.Log["window-spawning"]) {
-          WinGetTitle, _dbgTitle, ahk_id %lParam%
-          FileAppend, % TS() " | window-spawning | " "OK (create-shell): """ . _dbgTitle . """ already on mon " . windowMon . "`n", % Debug.Log.Path
-        }
-        WS_Reveal(lParam)
-        return
-      }
-      WinGetTitle, _chkTitle, ahk_id %lParam%
-      if (_chkTitle != "") {
-        WS_Reveal(lParam)
-        return
-      }
-    }
-    ; Not ready — defer with pre-registered target
-    WS.Pending[lParam + 0] := {mon: targetMon, tick: ppEntry.tick}
-    _fn := Func("WS_BackupPoll").Bind(lParam + 0, 1)
-    SetTimer, %_fn%, -100
-    _fn2 := Func("WS_TimeoutPending").Bind(lParam + 0)
-    SetTimer, %_fn2%, -2000
-    if (Debug.Log["window-spawning"]) {
-      WinGetTitle, _dbgTitle, ahk_id %lParam%
-      WinGetClass, _dbgClass, ahk_id %lParam%
-      FileAppend, % TS() " | window-spawning | " "DEFERRED (create-path): hwnd=" . lParam . " """ . _dbgTitle . """ class=" . _dbgClass . "`n", % Debug.Log.Path
-    }
+    WS_TryMoveOrDefer(lParam, ppEntry.mon, ppEntry.tick)
     return
   }
 
   ; Fallback: no CREATE pre-registration (window missed by CREATE hook)
-  if (WS_IsReady(lParam)) {
-    if (WS_IsMovable(lParam)) {
-      windowMon := GetMonitor("ahk_id " . lParam)
-      if (windowMon != cursorMon) {
-        WS_MoveToMonitor(lParam, windowMon, cursorMon)
-        if (Debug.Log["window-spawning"]) {
-          WinGetTitle, _dbgTitle, ahk_id %lParam%
-          FileAppend, % TS() " | window-spawning | " "MOVED (instant): """ . _dbgTitle . """ mon " . windowMon . " -> " . cursorMon . "`n", % Debug.Log.Path
-        }
-      } else if (Debug.Log["window-spawning"]) {
-        WinGetTitle, _dbgTitle, ahk_id %lParam%
-        FileAppend, % TS() " | window-spawning | " "OK (instant): """ . _dbgTitle . """ already on mon " . windowMon . "`n", % Debug.Log.Path
-      }
-      WS_Reveal(lParam)
-      return
-    }
-    WinGetTitle, _chkTitle, ahk_id %lParam%
-    if (_chkTitle != "") {
-      WS_Reveal(lParam)
-      return
-    }
-  }
-  WS.Pending[lParam + 0] := {mon: cursorMon, tick: A_TickCount}
-  _fn := Func("WS_BackupPoll").Bind(lParam + 0, 1)
-  SetTimer, %_fn%, -100
-  _fn2 := Func("WS_TimeoutPending").Bind(lParam + 0)
-  SetTimer, %_fn2%, -2000
-  if (Debug.Log["window-spawning"]) {
-    WinGetTitle, _dbgTitle, ahk_id %lParam%
-    WinGetClass, _dbgClass, ahk_id %lParam%
-    FileAppend, % TS() " | window-spawning | " "DEFERRED: hwnd=" . lParam . " """ . _dbgTitle . """ class=" . _dbgClass . "`n", % Debug.Log.Path
-  }
+  WS_TryMoveOrDefer(lParam, cursorMon, A_TickCount)
 }
 
 ; WinEvent callback — fires for CREATE, SHOW, UNCLOAK events
@@ -349,13 +168,11 @@ WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTim
     if (_evClass == "Windows.UI.Core.CoreWindow") {
       WinGet, _evExe, ProcessName, ahk_id %hwnd%
       if (_evExe == "StartMenuExperienceHost.exe" || _evExe == "SearchHost.exe") {
-        WS.OverlayTick := A_TickCount
         cursorMon := GetCursorMonitor()
         windowMon := GetMonitor("ahk_id " . hwnd)
         if (windowMon != cursorMon) {
           WS_MoveToMonitor(hwnd, windowMon, cursorMon)
-          if (Debug.Log["window-spawning"])
-            FileAppend, % TS() " | window-spawning | " "MOVED (start-menu): mon " . windowMon . " -> " . cursorMon . " exe=" . _evExe . "`n", % Debug.Log.Path
+          WS_Log("MOVED (start-menu): mon " . windowMon . " -> " . cursorMon . " exe=" . _evExe)
         }
         return
       }
@@ -369,23 +186,23 @@ WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTim
     WinGetClass, _createClass, ahk_id %hwnd%
     if (_createClass == "")
       return
-    if (WS.Hidden.HasKey(hwnd))
+    if (WS.Processed.HasKey(hwnd))
       return
     ; Owner sentinel — skip if owner was recently moved (sibling protection)
     _ppOwner := DllCall("GetWindow", "Ptr", hwnd, "UInt", 4, "Ptr")  ; GW_OWNER=4
     if (_ppOwner && WS.OwnerSentinel.HasKey(_ppOwner + 0)) {
       if (A_TickCount - WS.OwnerSentinel[_ppOwner + 0] < 200) {
-        WS.Hidden[hwnd] := -1
+        WS.Processed[hwnd] := A_TickCount
         if (Debug.Log["window-spawning"]) {
           WinGetClass, _dbgClass, ahk_id %hwnd%
-          FileAppend, % TS() " | window-spawning | " "CREATE-SKIP-OWNER: hwnd=" . hwnd . " class=" . _dbgClass
-            . " owner=" . Format("0x{:08X}", _ppOwner) . "`n", % Debug.Log.Path
+          WS_Log("CREATE-SKIP-OWNER: hwnd=" . hwnd . " class=" . _dbgClass
+            . " owner=" . Format("0x{:08X}", _ppOwner))
         }
         return
       }
     }
     if (_ppOwner) {
-      if (WS.Hidden.HasKey(_ppOwner + 0) && WS.Hidden[_ppOwner + 0] == -1)
+      if (WS.Processed.HasKey(_ppOwner + 0))
         return
       WinGet, _ppOwnerStyle, Style, ahk_id %_ppOwner%
       if (_ppOwnerStyle & 0x10000000)  ; Owner is WS_VISIBLE → real dialog, skip
@@ -405,8 +222,8 @@ WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTim
     WS.PrePending[hwnd] := {mon: cursorMon, tick: A_TickCount, qpc: WS_QPC()}
     if (Debug.Log["window-spawning"]) {
       WinGetClass, _dbgClass, ahk_id %hwnd%
-      FileAppend, % TS() " | window-spawning | " "CREATE: hwnd=" . hwnd . " class=" . _dbgClass . " hide mon " . cursorMon
-        . (windowMon && windowMon != cursorMon ? " (from " . windowMon . ")" : "") . "`n", % Debug.Log.Path
+      WS_Log("CREATE: hwnd=" . hwnd . " class=" . _dbgClass . " hide mon " . cursorMon
+        . (windowMon && windowMon != cursorMon ? " (from " . windowMon . ")" : ""))
     }
     return
   }
@@ -419,39 +236,20 @@ WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTim
       WinGetTitle, _dbgTitle, ahk_id %hwnd%
       WinGetClass, _dbgClass, ahk_id %hwnd%
       _deltaUs := Round((WS_QPC() - ppEntry.qpc) * 1000000 / WS.QPCFreq)
-      FileAppend, % TS() " | window-spawning | " _evName . ": hwnd=" . hwnd . " """ . _dbgTitle . """ class=" . _dbgClass
-        . " create-to-" . _evName . "=" . (A_TickCount - ppEntry.tick) . "ms (" . _deltaUs . "µs)" . "`n", % Debug.Log.Path
+      WS_Log(_evName . ": hwnd=" . hwnd . " """ . _dbgTitle . """ class=" . _dbgClass
+        . " create-to-" . _evName . "=" . (A_TickCount - ppEntry.tick) . "ms (" . _deltaUs . "µs)")
     }
-    if (WS_IsReady(hwnd) && WS_IsMovable(hwnd)) {
-      windowMon := GetMonitor("ahk_id " . hwnd)
-      if (windowMon != ppEntry.mon) {
-        WS_MoveToMonitor(hwnd, windowMon, ppEntry.mon)
-        if (Debug.Log["window-spawning"]) {
-          WinGetTitle, _dbgTitle, ahk_id %hwnd%
-          FileAppend, % TS() " | window-spawning | " "MOVED (create-show): """ . _dbgTitle . """ mon " . windowMon . " -> " . ppEntry.mon . " +" . (A_TickCount - ppEntry.tick) . "ms" . "`n", % Debug.Log.Path
-        }
-      } else if (Debug.Log["window-spawning"]) {
-        WinGetTitle, _dbgTitle, ahk_id %hwnd%
-        FileAppend, % TS() " | window-spawning | " "OK (create-show): """ . _dbgTitle . """ already on mon " . windowMon . "`n", % Debug.Log.Path
-      }
-      WS_Reveal(hwnd)
+    if (WS_TryMoveOrDefer(hwnd, ppEntry.mon, ppEntry.tick, false))
       WS.Pending.Delete(hwnd)
-      return
-    }
+    return
   }
 
   ; --- Pending creation moves ---
   if (WS.Pending.HasKey(hwnd)) {
     if (WS_IsReady(hwnd)) {
-      if (WS_IsMovable(hwnd)) {
-        entry := WS.Pending.Delete(hwnd)
-        _evName := (event == 0x8002) ? "show" : "uncloak"
-        WS_ProcessPending(hwnd, entry.mon, _evName, entry.tick)
-      } else {
-        WinGetTitle, _chkTitle, ahk_id %hwnd%
-        if (_chkTitle != "")
-          WS.Pending.Delete(hwnd)
-      }
+      entry := WS.Pending.Delete(hwnd)
+      if (entry)
+        WS_TryMoveOrDefer(hwnd, entry.mon, entry.tick, false)
     }
     return
   }
@@ -469,23 +267,32 @@ WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTim
   }
 }
 
-; Process a deferred window that is now ready
-WS_ProcessPending(hwnd, targetMon, source:="event", tick:=0) {
+; Returns true if handled (moved or determined non-movable), false if deferred
+WS_TryMoveOrDefer(hwnd, targetMon, tick, shouldDefer:=true) {
   global WS
-  if (!WS_IsMovable(hwnd)) {
-    WS_Reveal(hwnd)
-    return
-  }
-  windowMon := GetMonitor("ahk_id " . hwnd)
-  if (windowMon != targetMon) {
-    WS_MoveToMonitor(hwnd, windowMon, targetMon)
-    if (Debug.Log["window-spawning"]) {
-      _elapsed := tick ? A_TickCount - tick : 0
-      WinGetTitle, _dbgTitle, ahk_id %hwnd%
-      FileAppend, % TS() " | window-spawning | " "MOVED (" . source . "): """ . _dbgTitle . """ mon " . windowMon . " -> " . targetMon . " +" . _elapsed . "ms" . "`n", % Debug.Log.Path
+  hwnd := hwnd + 0
+  if (WS_IsReady(hwnd)) {
+    if (WS_IsMovable(hwnd)) {
+      windowMon := GetMonitor("ahk_id " . hwnd)
+      if (windowMon != targetMon)
+        WS_MoveToMonitor(hwnd, windowMon, targetMon)
+      WS_Reveal(hwnd)
+      return true
+    }
+    WinGetTitle, _chkTitle, ahk_id %hwnd%
+    if (_chkTitle != "") {
+      WS_Reveal(hwnd)
+      return true
     }
   }
-  WS_Reveal(hwnd)
+  if (!shouldDefer)
+    return false
+  WS.Pending[hwnd] := {mon: targetMon, tick: tick}
+  _fn := Func("WS_BackupPoll").Bind(hwnd, 1)
+  SetTimer, %_fn%, -100
+  _fn2 := Func("WS_TimeoutPending").Bind(hwnd)
+  SetTimer, %_fn2%, -2000
+  return false
 }
 
 ; Escalating backup poll — catches windows where WinEvent didn't fire (e.g. elevated processes)
@@ -496,17 +303,10 @@ WS_BackupPoll(hwnd, attempt:=1) {
     return
   SetWinDelay, -1
   if (WS_IsReady(hwnd)) {
-    if (WS_IsMovable(hwnd)) {
-      entry := WS.Pending.Delete(hwnd)
-      WS_ProcessPending(hwnd, entry.mon, "poll", entry.tick)
-      return
-    }
-    WinGetTitle, _chkTitle, ahk_id %hwnd%
-    if (_chkTitle != "") {
-      WS.Pending.Delete(hwnd)
-      WS_Reveal(hwnd)
-      return
-    }
+    entry := WS.Pending.Delete(hwnd)
+    if (entry)
+      WS_TryMoveOrDefer(hwnd, entry.mon, entry.tick, false)
+    return
   }
   if (attempt < 4) {
     _delay := attempt == 1 ? 200 : attempt == 2 ? 300 : 400
@@ -522,10 +322,20 @@ WS_TimeoutPending(hwnd) {
     return
   entry := WS.Pending.Delete(hwnd)
   SetWinDelay, -1
-  if (WS_IsReady(hwnd))
-    WS_ProcessPending(hwnd, entry.mon, "timeout", entry.tick)
+  if (entry)
+    WS_TryMoveOrDefer(hwnd, entry.mon, entry.tick, false)
   else
     WS_Reveal(hwnd)
+}
+
+SweepStale(dict, maxAge) {
+  _now := A_TickCount
+  _stale := []
+  for _k, _v in dict
+    if (_now - _v > maxAge)
+      _stale.Push(_k)
+  for _i, _k in _stale
+    dict.Delete(_k)
 }
 
 ; Periodic cleanup of stale entries
@@ -544,55 +354,32 @@ WS_SweepTracking:
   }
 
   ; Stale owner sentinels
-  _staleKeys := []
-  for _h, _tick in WS.OwnerSentinel {
-    if (_now - _tick > 2000)
-      _staleKeys.Push(_h)
-  }
-  for _i, _k in _staleKeys
-    WS.OwnerSentinel.Delete(_k)
+  SweepStale(WS.OwnerSentinel, 2000)
 
   ; Orphan sweep: reveal windows stuck in Hidden that aren't tracked
   _staleKeys := []
   for _h, _val in WS.Hidden {
-    if (_val == -1) {
-      if (!WS.PrePending.HasKey(_h) && !WS.Pending.HasKey(_h))
-        _staleKeys.Push(_h)
-      continue
-    }
     if (!WinExist("ahk_id " . _h)) {
       _staleKeys.Push(_h)
       continue
     }
     if (!WS.PrePending.HasKey(_h) && !WS.Pending.HasKey(_h)) {
       _staleKeys.Push(_h)
-      if (Debug.Log["window-spawning"])
-        FileAppend, % TS() " | window-spawning | " "ORPHAN-REVEAL: hwnd=" . _h . "`n", % Debug.Log.Path
-      DllCall("SetLayeredWindowAttributes", "Ptr", _h, "UInt", 0, "UChar", 255, "UInt", 0x2)
-      if (!_val)
-        WinSet, ExStyle, -0x80000, ahk_id %_h%  ; -WS_EX_LAYERED (restore)
+      WS_Log("ORPHAN-REVEAL: hwnd=" . _h)
+      WS_RestoreOpacity(_h, _val)
     }
   }
   for _i, _k in _staleKeys
     WS.Hidden.Delete(_k)
 
+  ; Stale Processed entries (>5s)
+  SweepStale(WS.Processed, 5000)
+
   ; Stale recent-exe intent signals (>10s)
-  _staleKeys := []
-  for _exe, _tick in WS.RecentExes {
-    if (_now - _tick > 10000)
-      _staleKeys.Push(_exe)
-  }
-  for _i, _k in _staleKeys
-    WS.RecentExes.Delete(_k)
+  SweepStale(WS.RecentExes, 10000)
 
   ; Stale move-cooldown entries (>5s)
-  _staleKeys := []
-  for _h, _tick in WS.LastMoved {
-    if (_now - _tick > 5000)
-      _staleKeys.Push(_h)
-  }
-  for _i, _k in _staleKeys
-    WS.LastMoved.Delete(_k)
+  SweepStale(WS.LastMoved, 5000)
 
 return
 
@@ -640,15 +427,13 @@ WS_MoveToMonitor(hwnd, srcMon, tgtMon) {
     WS.Hidden.Delete(hwnd)
     return
   }
-  ; Pre-set sentinel BEFORE WinMove (prevents race with synchronous CREATE callbacks)
   _wasHidden := false
   _hadLayered := 0
   if (WS.Hidden.HasKey(hwnd)) {
-    _hadLayered := WS.Hidden[hwnd]
-    if (_hadLayered != -1)
-      _wasHidden := true
+    _hadLayered := WS.Hidden.Delete(hwnd)
+    _wasHidden := true
   }
-  WS.Hidden[hwnd] := -1
+  WS.Processed[hwnd] := A_TickCount
 
   ; Owner sentinel — protect sibling windows from re-hiding
   _moveOwner := DllCall("GetWindow", "Ptr", hwnd, "UInt", 4, "Ptr")  ; GW_OWNER=4
@@ -717,11 +502,14 @@ WS_MoveToMonitor(hwnd, srcMon, tgtMon) {
   }
 
   ; Restore opacity after move
-  if (_wasHidden) {
-    DllCall("SetLayeredWindowAttributes", "Ptr", hwnd, "UInt", 0, "UChar", 255, "UInt", 0x2)
-    if (!_hadLayered)
-      WinSet, ExStyle, -0x80000, ahk_id %hwnd%
-  }
+  if (_wasHidden)
+    WS_RestoreOpacity(hwnd, _hadLayered)
+}
+
+WS_RestoreOpacity(hwnd, hadLayered) {
+  DllCall("SetLayeredWindowAttributes", "Ptr", hwnd, "UInt", 0, "UChar", 255, "UInt", 0x2)
+  if (!hadLayered)
+    WinSet, ExStyle, -0x80000, ahk_id %hwnd%
 }
 
 ; Restore opacity for a window hidden at CREATE time (idempotent)
@@ -729,23 +517,18 @@ WS_Reveal(hwnd) {
   global WS
   hwnd := hwnd + 0
   if (!WS.Hidden.HasKey(hwnd)) {
-    WS.Hidden[hwnd] := -1
+    WS.Processed[hwnd] := A_TickCount
     return
   }
-  _hadLayered := WS.Hidden[hwnd]
-  if (_hadLayered == -1)
-    return
-  WS.Hidden[hwnd] := -1
+  _hadLayered := WS.Hidden.Delete(hwnd)
+  WS.Processed[hwnd] := A_TickCount
   if !WinExist("ahk_id " . hwnd)
     return
-  DllCall("SetLayeredWindowAttributes", "Ptr", hwnd, "UInt", 0, "UChar", 255, "UInt", 0x2)
-  if (!_hadLayered)
-    WinSet, ExStyle, -0x80000, ahk_id %hwnd%
+  WS_RestoreOpacity(hwnd, _hadLayered)
 }
 
 ; Alt+Tab switcher (DWM overlay — doesn't trigger shell hooks)
 ~!Tab::
-  WS.AltTabTick := A_TickCount
   _targetMon := GetCursorMonitor()
   _hwnd := WinExist("Task Switching ahk_class XamlExplorerHostIslandWindow")
   if (_hwnd) {
@@ -762,6 +545,9 @@ WS_TimeoutAltTab:
   WS.PendingAltTab := ""
 Return
 
+WS_ClearInitTip:
+  ToolTip
+Return
 
 WS_WMIPoll:
   Critical
@@ -780,35 +566,13 @@ WS_WMIPoll:
     if (_procName != "") {
       if (WS_GetSubsystem(_evt.ProcessID, _procName) = 3 || _procName = "conhost.exe")
         continue
-      WS.RecentExes[_procName] := A_TickCount
-      if (Debug.Log["window-spawning"])
-        FileAppend, % TS() " | window-spawning | WMI-PROC: " . _procName . "`n", % Debug.Log.Path
-      ; If foreground window is this exe and on a different monitor, move it now
-      ; (no activation event fires when the window is already foreground)
-      if (WS.ZOrderFallbackTick && (A_TickCount - WS.ZOrderFallbackTick) < 1000)
+      ; Skip if same exe already has windows (protocol handler / URL stub, not a fresh launch)
+      if (WinExist("ahk_exe " . _procName)) {
+        WS_Log("SKIP (already-running): exe=" . _procName . " parentPid=" . _parentPid)
         continue
-      _fgHwnd := WinExist("A")
-      _fgKey := _fgHwnd + 0
-      _lastMove := WS.LastMoved.HasKey(_fgKey) ? WS.LastMoved[_fgKey] : 0
-      if (_lastMove && (A_TickCount - _lastMove) < 3000)
-        continue
-      WinGet, _fgExe, ProcessName, ahk_id %_fgHwnd%
-      if (_fgExe = _procName) {
-        WinGet, _fgPid, PID, ahk_id %_fgHwnd%
-        if (_parentPid = _fgPid) {
-          if (Debug.Log["window-spawning"])
-            FileAppend, % TS() " | window-spawning | SKIP (child-process): exe=" . _procName . " parentPid=" . _parentPid . "`n", % Debug.Log.Path
-          continue
-        }
-        SetWinDelay, -1
-        _curMon := GetCursorMonitor()
-        _winMon := GetMonitor("ahk_id " . _fgHwnd)
-        if (_curMon != _winMon && WS_IsMovable(_fgHwnd)) {
-          WS_MoveToMonitor(_fgHwnd, _winMon, _curMon)
-          if (Debug.Log["window-spawning"])
-            FileAppend, % TS() " | window-spawning | MOVED (wmi-foreground): exe=" . _procName . " mon " . _winMon . " -> " . _curMon . "`n", % Debug.Log.Path
-        }
       }
+      WS.RecentExes[_procName] := A_TickCount
+      WS_Log("WMI-PROC: " . _procName . " parentPid=" . _parentPid)
     }
     _evt := ""
   }
@@ -820,13 +584,8 @@ WS_Cleanup() {
   SetTimer, WS_WMIPoll, Off
   WS.WMIEvents := ""
   WS.WMIService := ""
-  for _h, _hadLayered in WS.Hidden {
-    if (_hadLayered == -1)
-      continue
-    DllCall("SetLayeredWindowAttributes", "Ptr", _h, "UInt", 0, "UChar", 255, "UInt", 0x2)
-    if (!_hadLayered)
-      WinSet, ExStyle, -0x80000, ahk_id %_h%
-  }
+  for _h, _hadLayered in WS.Hidden
+    WS_RestoreOpacity(_h, _hadLayered)
   WS.Hidden := {}
   WS.OwnerSentinel := {}
   DllCall("DeregisterShellHookWindow", "Ptr", WS.HookHwnd)
