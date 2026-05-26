@@ -50,10 +50,7 @@
     OnExit("G_UIACleanup")  ; Register cleanup (G_UIACleanup defined in AutoHotkey.ahk)
   }
 
-  ; SizeAll cursor: load once, reused across sessions
-  global G_hSizeAll  ; Singleton: cursor handle
-  If (!G_hSizeAll)
-    G_hSizeAll := DllCall("LoadCursor", "Ptr", 0, "Ptr", 32646, "Ptr")  ; IDC_SIZEALL
+  global G_hSizeAll, G_hArrowDefault, G_hIBeamDefault
 
   MouseGetPos,,, _win, _className
   MB.Win := _win, MB.ClassName := _className
@@ -304,7 +301,7 @@ MBDragTimer:
     }
     ; Restore cursor if we changed it
     If (MB.Cursor.Active) {
-      DllCall("SystemParametersInfo", "UInt", 0x57, "UInt", 0, "Ptr", 0, "UInt", 0)
+      RestoreCursor()
       MB.Cursor.Active := 0
     }
     MB.Cursor.Pending := 0
@@ -358,7 +355,7 @@ MBDragTimer:
       MB.Disabled := 1
       ; Restore cursor if we changed it
       If (MB.Cursor.Active) {
-        DllCall("SystemParametersInfo", "UInt", 0x57, "UInt", 0, "Ptr", 0, "UInt", 0)  ; SPI_SETCURSORS
+        RestoreCursor()
         MB.Cursor.Active := 0
       }
       If (MB.UIA.Pattern) {
@@ -1037,7 +1034,7 @@ Return
   global MB, Debug
   SetTimer, MBDragTimer, Off
   If (MB.Cursor.Active) {
-    DllCall("SystemParametersInfo", "UInt", 0x57, "UInt", 0, "Ptr", 0, "UInt", 0)  ; SPI_SETCURSORS
+    RestoreCursor()
     MB.Cursor.Active := 0
   }
   MB.Cursor.Pending := 0
@@ -1089,6 +1086,20 @@ SetDragCursor() {
   If (Debug.Log["mbutton-drag"])
     FileAppend, % TS() " | mbutton-drag | CURSOR_SET | activeCursor=" _cursor "`n", % Debug.Log.Path
   Return 1
+}
+
+RestoreCursor() {
+  global G_hArrowDefault, G_hIBeamDefault, Debug
+  If (G_hArrowDefault) {
+    hCopy1 := DllCall("CopyImage", "Ptr", G_hArrowDefault, "UInt", 2, "Int", 0, "Int", 0, "UInt", 0, "Ptr")
+    DllCall("SetSystemCursor", "Ptr", hCopy1, "UInt", 32512)
+  }
+  If (G_hIBeamDefault) {
+    hCopy2 := DllCall("CopyImage", "Ptr", G_hIBeamDefault, "UInt", 2, "Int", 0, "Int", 0, "UInt", 0, "Ptr")
+    DllCall("SetSystemCursor", "Ptr", hCopy2, "UInt", 32513)
+  }
+  If (Debug.Log["mbutton-drag"])
+    FileAppend, % TS() " | mbutton-drag | CURSOR_RESTORE | arrow=" G_hArrowDefault " ibeam=" G_hIBeamDefault "`n", % Debug.Log.Path
 }
 
 ; Check if a control has a visible Win32 scrollbar (window style check)
@@ -1530,6 +1541,26 @@ LogControlTree(parentHwnd, indent := 0) {
   }
 }
 
+MB_Init() {
+  global G_hSizeAll, G_hArrowDefault, G_hIBeamDefault
+  G_hSizeAll := DllCall("LoadCursor", "Ptr", 0, "Ptr", 32646, "Ptr")  ; IDC_SIZEALL
+  EnvGet, _localAppData, LOCALAPPDATA
+  _cursorsDir1 := _localAppData "\Microsoft\Windows\Cursors\"
+  _cursorsDir2 := A_WinDir "\Cursors\"
+  RegRead, _arrowPath, HKCU, Control Panel\Cursors, Arrow
+  RegRead, _ibeamPath, HKCU, Control Panel\Cursors, IBeam
+  If (_arrowPath) {
+    If (InStr(_arrowPath, "\") = 0)
+      _arrowPath := FileExist(_cursorsDir1 . _arrowPath) ? _cursorsDir1 . _arrowPath : _cursorsDir2 . _arrowPath
+    G_hArrowDefault := DllCall("LoadCursorFromFile", "Str", _arrowPath, "Ptr")
+  }
+  If (_ibeamPath) {
+    If (InStr(_ibeamPath, "\") = 0)
+      _ibeamPath := FileExist(_cursorsDir1 . _ibeamPath) ? _cursorsDir1 . _ibeamPath : _cursorsDir2 . _ibeamPath
+    G_hIBeamDefault := DllCall("LoadCursorFromFile", "Str", _ibeamPath, "Ptr")
+  }
+}
+
 ; Registered via OnExit("MB_Cleanup") in AutoHotkey.ahk
 MB_Cleanup() {
   global MB
@@ -1537,7 +1568,7 @@ MB_Cleanup() {
     Return
   SetTimer, MBDragTimer, Off
   If (MB.Cursor.Active) {
-    DllCall("SystemParametersInfo", "UInt", 0x57, "UInt", 0, "Ptr", 0, "UInt", 0)  ; SPI_SETCURSORS
+    RestoreCursor()
     MB.Cursor.Active := 0
   }
   If (MB.UIA.Pattern) {
