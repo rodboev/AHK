@@ -24,8 +24,9 @@ Debug := { Tooltips: {"scroll-accel": 0
 , Log: { Path: A_Temp . "\AHK_Debug.log"
   , "scroll-accel": 0
   , "mbutton-drag": 0
-  , "window-spawning": 0
-  , "terminal-anywhere": 0 }}
+  , "window-spawning": 1
+  , "terminal-anywhere": 0
+  , "image-paste": 0 }}
 
 FileDelete, % Debug.Log.Path
 
@@ -34,9 +35,11 @@ TS() {
   return _t
 }
 
+
 ; Disable hotkeys inside remote sessions (RDP, Hyper-V, VMWare)
 #If IsRemoteSession()
   If !IsRemoteSession() {
+    MB_Init()
     OnExit("MB_Cleanup")
     WS_Init() ; Init window spawning
     TerminalInit()
@@ -93,6 +96,14 @@ Return
 +!0::Send {U+2022} ; [ ShIft+Alt+0] -> Bullet
 ~RWin::Send {AppsKey} ; [RWin] -> Apps/context menu
 ~#t::Run explorer shell:::{3080F90E-D7AD-11D9-BD98-0000947B0257} ; Win+T -> Task View
+!`::WinSet, AlwaysOnTop, Toggle, A ; [ Alt+` ] -> Toggle always-on-top
+!PrintScreen::ScreenshotWindow() ; [ Alt+PrintScreen ] -> Screenshot window (always-on-top)
+!+PrintScreen:: ; [ Alt+Shift+PrintScreen ] -> Screenshot window to desktop
+  FormatTime, day,, ddd
+  FormatTime, time,, h.mm.ss
+  FormatTime, ampm,, tt
+  ScreenshotWindow(A_Desktop . "\" . day . " " . time . ampm . ".jpg")
+Return
 
 ; ⇒ Windows Explorer
 ^+!x:: ; -> [ Shift +Alt +X ] -> Restart Explorer
@@ -191,6 +202,31 @@ $XButton2::
     Sleep 100
   }
 Return
+
+; ⇒ Windows Terminal: convert clipboard image to file for Claude Code paste
+#If WinActive("ahk_exe WindowsTerminal.exe") && ClipboardHasImage()
+  ^v::
+    ConvertClipboardImageToFile()
+    Send ^v
+    Sleep, 100
+    FileDelete, %A_Temp%\clipboard_paste.png
+  Return
+  RButton::
+    MouseGetPos,,,, ctrl
+    If (Debug.Log["image-paste"])
+      FileAppend, % TS() " | image-paste | RButton | ctrl=" ctrl "`n", % Debug.Log.Path
+    If (ctrl != "Windows.UI.Composition.DesktopWindowContentBridge1") {
+      Click Right
+      Return
+    }
+    ConvertClipboardImageToFile()
+    If (Debug.Log["image-paste"])
+      FileAppend, % TS() " | image-paste | converted, sending ^v`n", % Debug.Log.Path
+    Send ^v
+    Sleep, 100
+    FileDelete, %A_Temp%\clipboard_paste.png
+  Return
+#If
 
 #IfWinActive ahk_exe JPEGView.exe
   Enter::
@@ -992,6 +1028,84 @@ IsProcessElevated(pid) {
   DllCall("advapi32\GetTokenInformation", "Ptr", hToken, "Int", 20, "UInt*", elevation, "UInt", 4, "UInt*", 0)
   DllCall("CloseHandle", "Ptr", hToken)
   Return elevation
+}
+
+ClipboardHasImage() {
+  Return DllCall("IsClipboardFormatAvailable", "UInt", 2) && !DllCall("IsClipboardFormatAvailable", "UInt", 15)
+}
+
+ConvertClipboardImageToFile() {
+  If (!DllCall("IsClipboardFormatAvailable", "UInt", 2) || DllCall("IsClipboardFormatAvailable", "UInt", 15))
+    Return false
+  clipFile := A_Temp . "\clipboard_paste.png"
+  SaveClipboardImage(clipFile)
+  If !FileExist(clipFile)
+    Return false
+  ClipboardSetFile(clipFile)
+  Return true
+}
+
+ScreenshotWindow(savePath := "") {
+  WinGet, hwnd, ID, A
+  WinGet, exStyle, ExStyle, ahk_id %hwnd%
+  wasOnTop := (exStyle & 0x8)
+  If (!wasOnTop)
+    WinSet, AlwaysOnTop, On, ahk_id %hwnd%
+  Sleep, 100
+  Send !{PrintScreen}
+  Sleep, 50
+  If (!wasOnTop)
+    WinSet, AlwaysOnTop, Off, ahk_id %hwnd%
+  If (savePath != "")
+    SaveClipboardImage(savePath)
+}
+
+SaveClipboardImage(filePath) {
+  SplitPath, filePath,,, ext
+  encoderCLSID := (ext = "png") ? "{557CF406-1A04-11D3-9A73-0000F81EF32E}"
+    : "{557CF401-1A04-11D3-9A73-0000F81EF32E}"
+  hGdi := DllCall("LoadLibrary", "Str", "gdiplus", "Ptr")
+  VarSetCapacity(si, A_PtrSize = 8 ? 24 : 16, 0)
+  NumPut(1, si, 0, "UInt")
+  pToken := 0
+  DllCall("gdiplus\GdiplusStartup", "Ptr*", pToken, "Ptr", &si, "Ptr", 0)
+  pBitmap := 0
+  Try {
+    If (!DllCall("OpenClipboard", "Ptr", 0))
+      Return
+    hBmp := DllCall("GetClipboardData", "UInt", 2, "Ptr")
+    If (!hBmp) {
+      DllCall("CloseClipboard")
+      Return
+    }
+    DllCall("gdiplus\GdipCreateBitmapFromHBITMAP", "Ptr", hBmp, "Ptr", 0, "Ptr*", pBitmap)
+    DllCall("CloseClipboard")
+    If (!pBitmap)
+      Return
+    VarSetCapacity(clsid, 16, 0)
+    DllCall("ole32\CLSIDFromString", "WStr", encoderCLSID, "Ptr", &clsid)
+    DllCall("gdiplus\GdipSaveImageToFile", "Ptr", pBitmap, "WStr", filePath, "Ptr", &clsid, "Ptr", 0)
+  } Finally {
+    If (pBitmap)
+      DllCall("gdiplus\GdipDisposeImage", "Ptr", pBitmap)
+    DllCall("gdiplus\GdiplusShutdown", "Ptr", pToken)
+    DllCall("FreeLibrary", "Ptr", hGdi)
+  }
+}
+
+ClipboardSetFile(filePath) {
+  pathLen := StrLen(filePath)
+  dropSize := 20 + (pathLen + 2) * 2
+  hDrop := DllCall("GlobalAlloc", "UInt", 0x42, "UPtr", dropSize, "Ptr")
+  pDrop := DllCall("GlobalLock", "Ptr", hDrop, "Ptr")
+  NumPut(20, pDrop + 0, "UInt")
+  NumPut(1, pDrop + 16, "Int")
+  StrPut(filePath, pDrop + 20, pathLen + 1, "UTF-16")
+  DllCall("GlobalUnlock", "Ptr", hDrop)
+  DllCall("OpenClipboard", "Ptr", 0)
+  DllCall("EmptyClipboard")
+  DllCall("SetClipboardData", "UInt", 15, "Ptr", hDrop)
+  DllCall("CloseClipboard")
 }
 
 RemoveToolTip:
