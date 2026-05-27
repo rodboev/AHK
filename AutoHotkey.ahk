@@ -24,7 +24,7 @@ Debug := { Tooltips: {"scroll-accel": 0
 , Log: { Path: A_Temp . "\AHK_Debug.log"
   , "scroll-accel": 0
   , "mbutton-drag": 0
-  , "window-spawning": 1
+  , "window-spawning": 0
   , "terminal-anywhere": 0
   , "image-paste": 0 }}
 
@@ -102,7 +102,7 @@ Return
   FormatTime, day,, ddd
   FormatTime, time,, h.mm.ss
   FormatTime, ampm,, tt
-  ScreenshotWindow(A_Desktop . "\" . day . " " . time . ampm . ".jpg")
+  ScreenshotWindow(A_Desktop . "\" . day . " " . time . " " . ampm . ".jpg")
 Return
 
 ; ⇒ Windows Explorer

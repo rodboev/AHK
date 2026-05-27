@@ -78,7 +78,7 @@ FileDelete, %_logFile%
 | File                    | Purpose                                                              |
 | ----------------------- | -------------------------------------------------------------------- |
 | `AutoHotkey.ahk`        | Parent: config directives, helpers, bindings, misc hotkeys           |
-| `terminal-anywhere.ahk` | Windows Terminal from anywhere (`F10` variants) — user/admin/SYSTEM  |
+| `terminal.ahk` | Windows Terminal from anywhere (`F10` variants) — user/admin/SYSTEM  |
 | `extended-spy.ahk`      | Extended Window Spy (`#w`) — tooltip/dialog with window/control info |
 | `mbutton-drag.ahk`      | MButton smooth drag (hotkeys, timer, scroll methods)                 |
 | `window-spawning.ahk`   | Shell hook window spawning (WS_Init, hooks, move logic, Alt+Tab)     |
@@ -223,7 +223,7 @@ UI Automation COM interfaces are called via `DllCall` to vtable offsets. Source:
 | `HasVal(arr, val)`       | `AutoHotkey.ahk`        | Check if array contains value (partial match)        |
 | `GetScrollPos(hwnd)`     | `mbutton-drag.ahk`      | Win32 vertical scroll position                       |
 | `ScrollCurve(dist)`      | `mbutton-drag.ahk`      | Power curve: `dist^0.8` up to 100px, slower beyond   |
-| `OpenTerminal(opts)`     | `terminal-anywhere.ahk` | Open WT with elevation options                       |
+| `OpenTerminal(opts)`     | `terminal.ahk` | Open WT with elevation options                       |
 
 ## Conventions
 

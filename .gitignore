@@ -4,3 +4,7 @@
 # Local privilege helper binaries (not tracked - obtain from trusted sources)
 ti.exe
 RunFromProcess-x64.exe
+
+# Claude Code local settings
+.claude/*
+!.claude/settings.local.json

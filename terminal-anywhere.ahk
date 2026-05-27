@@ -2,11 +2,19 @@
 ; ┃ WINDOWS TERMINAL FROM ANYWHERE ┃
 ; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 ; [ F10 ]                       -> Open current path
-; [ Shift + F10 ]               -> Open current path as admin
+; [ Ctrl + F10 ]                -> Run command in current path
+; [ Shift + F10 ]               -> Open as admin
+; [ Ctrl + Shift + F10 ]        -> Run command as admin
 ; [ Ctrl + Alt + Shift + F10 ]  -> Open current path as SYSTEM
 
-F10::OpenTerminal({elevate: false})
+#IfWinActive ahk_exe WindowsTerminal.exe
+  ^F4::Send ^+w
+#IfWinActive
+
+F10::OpenTerminal({})
+^F10::OpenTerminal({cmd: TA.CtrlCmd})
 +F10::OpenTerminal({elevate: true})
+^+F10::OpenTerminal({elevate: true, cmd: TA.CtrlCmd})
 ^!+F10:: ; [ Ctrl + Alt + Shift + F10 ] -> Open current path as SYSTEM
   _dir := GetTerminalDir()
   ; Resolve wt.exe to full path — SYSTEM context lacks user PATH entries
@@ -33,16 +41,29 @@ Return
 TerminalInit() {
   global TA, Debug
   TA := {}
+  TA.CtrlCmd := "claude"
   TA.WTProfile := GetWTFirstProfile()
   if (Debug.Log["terminal-anywhere"])
     FileAppend, % TS() . " | terminal-anywhere | " . "TerminalInit: WTProfile=" . TA.WTProfile . "`n", % Debug.Log.Path
 }
 
 OpenTerminal(opts) {
-  ; opts := {elevate: bool}
-  ;   elevate  true  = run as Administrator (UAC prompt)
+  ; opts := {elevate: bool, claude: bool}
 
   global TA, Debug
+
+  ; When active window is Windows Terminal and not launching Claude, duplicate the tab
+  WinGetClass, _class, A
+  If (_class = "CASCADIA_HOSTING_WINDOW_CLASS" && !opts.cmd) {
+    if (Debug.Log["terminal-anywhere"])
+      FileAppend, % TS() . " | terminal-anywhere | " . "OpenTerminal: duplicating tab (active window is WT)`n", % Debug.Log.Path
+    If (opts.elevate)
+      Send ^+t
+    Else
+      Send ^+d
+    Return
+  }
+
   _dir := GetTerminalDir()
   _args := []
   If (opts.elevate)
@@ -54,9 +75,13 @@ OpenTerminal(opts) {
   }
   _args.Push("-d")
   _args.Push(_dir)
+  If (opts.cmd) {
+    _args.Push("--")
+    _args.Push(opts.cmd)
+  }
 
   if (Debug.Log["terminal-anywhere"])
-    FileAppend, % TS() . " | terminal-anywhere | " . "OpenTerminal: elevate=" . (opts.elevate ? "true" : "false") . " dir=" . _dir . "`n", % Debug.Log.Path
+    FileAppend, % TS() . " | terminal-anywhere | " . "OpenTerminal: elevate=" . (opts.elevate ? "true" : "false") . " cmd=" . (opts.cmd ? opts.cmd : "") . " dir=" . _dir . "`n", % Debug.Log.Path
 
   UserRun(_args*)
 }
@@ -74,13 +99,59 @@ GetTerminalDir() {
       FileAppend, % TS() . " | terminal-anywhere | " . "GetExplorerPath returned: " . _path . "`n", % Debug.Log.Path
     _path := _path ? _path : A_MyDocuments
   } Else {
-    _exe := GetExePath()
-    _path := _exe.dir ? _exe.dir : A_MyDocuments
+    ; Try extracting a path from the title bar first
+    _path := GetTitleBarPath()
+    If (!_path)
+      _path := A_Desktop
   }
   ; For root paths like C:\, add trailing dot to avoid \" escape issue when quoted
   If (RegExMatch(_path, "^[A-Za-z]:\\$"))
     _path .= "."
   Return _path
+}
+
+; Extract a filesystem path from the active window's title bar.
+; Matches patterns like "C:\Users\..." or "\\server\share\..." anywhere in the title,
+; then walks back to the longest existing ancestor directory.
+GetTitleBarPath() {
+  global Debug
+  WinGetTitle, _title, A
+  If (_title = "")
+    Return ""
+  ; Match a path (drive letter or UNC) anywhere in the title
+  If (!RegExMatch(_title, "([A-Za-z]:\\[^""<>|*?:]+|\\\\[^""<>|*?:]+)", _m))
+    Return ""
+  _candidate := _m1
+  if (Debug.Log["terminal-anywhere"])
+    FileAppend, % TS() . " | terminal-anywhere | " . "GetTitleBarPath: candidate=" . _candidate . "`n", % Debug.Log.Path
+  ; Trim at " - " separators from right to left (title bar decoration)
+  _try := _candidate
+  Loop {
+    _trimmed := RegExReplace(_try, "[\s\-\.]+$")
+    _attr := FileExist(_trimmed)
+    If (_attr && !InStr(_attr, "D")) {
+      SplitPath, _trimmed,, _dir
+      Return _dir
+    }
+    If (InStr(_attr, "D"))
+      Return _trimmed
+    ; Trim at the last " - " and retry
+    _pos := InStr(_try, " - ",, 0)
+    If (!_pos)
+      Break
+    _try := SubStr(_try, 1, _pos - 1)
+  }
+  ; Walk up backslashes as fallback
+  _check := _candidate
+  Loop {
+    SplitPath, _check,, _parent
+    If (_parent = "" || _parent = _check)
+      Break
+    _check := _parent
+    If (InStr(FileExist(_check), "D"))
+      Return _check
+  }
+  Return ""
 }
 
 ; ⇒ Read first non-hidden profile name from Windows Terminal settings.json

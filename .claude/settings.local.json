@@ -6,5 +6,18 @@
     "deny": [
       "Read(./community-scripts/**)"
     ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -Command \"Get-ChildItem -Path 'C:\\Dropbox\\Projects\\AHK' -Filter '*.tmp.*' -Recurse -File | Remove-Item -Force -ErrorAction SilentlyContinue\""
+          }
+        ]
+      }
+    ]
   }
 }
