@@ -56,7 +56,7 @@ ExtendedSpyShowDialog() {
     Return
   ToolTip,,,, 10
   Gui, ExtendedSpy:Destroy
-  _curMon := GetCursorMonitor()
+  _curMon := IsFunc("GetCursorMonitor") ? GetCursorMonitor() : 1
   SysGet, Workspace, MonitorWorkArea, %_curMon%
   ; Dimensions from display content (same wrapping as tooltip)
   StringReplace, _, ExtendedSpyDisplayInfo, `n, `n, UseErrorLevel
@@ -103,9 +103,9 @@ CollectWindowInfo(hwnd) {
   info.style := _style
   WinGet, _exStyle, ExStyle, %_wt%
   info.exStyle := _exStyle
-  info.exe := GetExePath("ahk_id " . hwnd)
-  info.mon := GetMonitor("ahk_id " . hwnd)
-  info.elevated := IsProcessElevated(_pid)
+  info.exe := IsFunc("GetExePath") ? GetExePath("ahk_id " . hwnd) : {path: "", dir: ""}
+  info.mon := IsFunc("GetMonitor") ? GetMonitor("ahk_id " . hwnd) : 1
+  info.elevated := IsFunc("IsProcessElevated") ? IsProcessElevated(_pid) : false
   info.cmdLine := ""
   For _proc in ComObjGet("winmgmts:").ExecQuery("Select CommandLine from Win32_Process where ProcessId=" . _pid)
     info.cmdLine := _proc.CommandLine
@@ -178,7 +178,7 @@ FormatWindowInfo(info) {
   s .= "ahk_id: " . info.hwnd . "`n"
   If (info.HasKey("pointHwnd"))
     s .= "hWnd: " . info.pointHwnd . "`n"
-  If (info.class = "CabinetWClass") {
+  If (info.class = "CabinetWClass" && IsFunc("GetExplorerPath")) {
     _expPath := GetExplorerPath()
     If (_expPath != "")
       s .= "ExplorerPath: " . _expPath . "`n"
@@ -402,11 +402,11 @@ ExtendedSpyUpdate:
   }
 
   ; UIA PID override: use content process when it differs from host
-  _contentPid := GetUIAProcessId(CursorWin)
+  _contentPid := IsFunc("GetUIAProcessId") ? GetUIAProcessId(CursorWin) : 0
   If (_contentPid && _contentPid != info.pid) {
     info.hostPid := info.pid
     info.pid := _contentPid
-    info.elevated := IsProcessElevated(_contentPid)
+    info.elevated := IsFunc("IsProcessElevated") ? IsProcessElevated(_contentPid) : false
     info.cmdLine := ""
     For _proc in ComObjGet("winmgmts:").ExecQuery("Select CommandLine from Win32_Process where ProcessId=" . _contentPid)
       info.cmdLine := _proc.CommandLine
@@ -424,7 +424,7 @@ ExtendedSpyUpdate:
   ExtendedSpyLastContent := display
 
   ; Position tooltip in bottom-right corner
-  _curMon := GetCursorMonitor()
+  _curMon := IsFunc("GetCursorMonitor") ? GetCursorMonitor() : 1
   SysGet, Workspace, MonitorWorkArea, %_curMon%
   tooltipHeader := "Extended Spy (#w to freeze, Esc to close)`n`n"
   ToolTip, %tooltipHeader%%display%, WorkspaceRight - 550, WorkspaceBottom - 620, 10

@@ -5,6 +5,32 @@
 ; Uses shell hooks (creation/activation) and WinEvent hooks (SHOW/UNCLOAK/CREATE)
 ; for instant, event-driven detection.
 
+; ⇒ Get which monitor a window is on (1-based)
+GetMonitor(winTitle := "A") {
+  WinGetPos, x, y, w, h, %winTitle%
+  centerX := x + w // 2, centerY := y + h // 2
+  SysGet, monCount, MonitorCount
+  Loop, %monCount% {
+    SysGet, mon, Monitor, %A_Index%
+    If (centerX >= monLeft && centerX <= monRight && centerY >= monTop && centerY <= monBottom)
+      Return A_Index
+  }
+  Return 1
+}
+
+; ⇒ Get which monitor the cursor is on (1-based)
+GetCursorMonitor() {
+  CoordMode, Mouse, Screen
+  MouseGetPos, mx, my
+  SysGet, monCount, MonitorCount
+  Loop, %monCount% {
+    SysGet, mon, Monitor, %A_Index%
+    If (mx >= monLeft && mx <= monRight && my >= monTop && my <= monBottom)
+      Return A_Index
+  }
+  Return 1
+}
+
 WS_Init() {
   global WS, Debug
   WS := {}

@@ -86,6 +86,54 @@ OpenTerminal(opts) {
   UserRun(_args*)
 }
 
+; ╔══════════════════════════════════════════════════════════════════════════╗
+; ║  Shell Automation — Programmatic access to Explorer windows/folders      ║
+; ║  Docs: https://learn.microsoft.com/en-us/windows/win32/shell/shell-entry ║
+; ╚══════════════════════════════════════════════════════════════════════════╝
+; COM Interface (from ShObjIdl.h)
+;   IID_IShellBrowser = {000214E2-0000-0000-C000-000000000046}
+;
+; Used in ComObjQuery(window, SID, IID) where SID=IID for direct interface access.
+; Needed for tabbed Explorer: IOleWindow::GetWindow (vtable 3) returns tab HWND.
+
+; ⇒ Get current path of active Explorer window (tab-aware for Win11 22H2+)
+GetExplorerPath() {
+  static shell := ComObjCreate("Shell.Application")
+  WinGet, hwnd, ID, A
+  ; ShellTabWindowClass1 = active tab (ClassNN 1 = highest z-order)
+  activeTab := 0
+  Try ControlGet, activeTab, Hwnd,, ShellTabWindowClass1, ahk_id %hwnd%
+  For window in shell.Windows {
+    If (window.hwnd != hwnd)
+      Continue
+    If (activeTab) {
+      ; IOleWindow::GetWindow (vtable 3) returns each tab's HWND
+      shellBrowser := ComObjQuery(window
+        , "{000214E2-0000-0000-C000-000000000046}"
+        , "{000214E2-0000-0000-C000-000000000046}")
+      If (!shellBrowser)
+        Continue
+      thisTab := 0
+      Try {
+        DllCall(NumGet(NumGet(shellBrowser+0)+3*A_PtrSize)
+          , "Ptr", shellBrowser, "UInt*", thisTab)
+      } Finally {
+        ObjRelease(shellBrowser)
+      }
+      If (thisTab != activeTab)
+        Continue
+    }
+    Try {
+      _path := window.Document.Folder.Self.Path
+      Return RegExMatch(_path, "^[A-Za-z]:\\|^\\\\") && !InStr(_path, "::") ? _path : ""
+    }
+    Catch {
+      Return ""  ; not a filesystem view
+    }
+  }
+  Return ""
+}
+
 GetTerminalDir() {
   global Debug
   WinGetClass, _class, A

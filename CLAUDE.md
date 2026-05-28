@@ -78,7 +78,8 @@ FileDelete, %_logFile%
 | File                    | Purpose                                                              |
 | ----------------------- | -------------------------------------------------------------------- |
 | `AutoHotkey.ahk`        | Parent: config directives, helpers, bindings, misc hotkeys           |
-| `terminal.ahk` | Windows Terminal from anywhere (`F10` variants) — user/admin/SYSTEM  |
+| `processes.ahk`         | Process mgmt: UserRun, FindInPath, IsProcessElevated, GetExePath     |
+| `terminal-anywhere.ahk` | Windows Terminal from anywhere (`F10` variants) — user/admin/SYSTEM  |
 | `extended-spy.ahk`      | Extended Window Spy (`#w`) — tooltip/dialog with window/control info |
 | `mbutton-drag.ahk`      | MButton smooth drag (hotkeys, timer, scroll methods)                 |
 | `window-spawning.ahk`   | Shell hook window spawning (WS_Init, hooks, move logic, Alt+Tab)     |
@@ -215,15 +216,15 @@ UI Automation COM interfaces are called via `DllCall` to vtable offsets. Source:
 
 | Function                 | File                    | Purpose                                              |
 | ------------------------ | ----------------------- | ---------------------------------------------------- |
-| `UserRun(exe, args*)`    | `AutoHotkey.ahk`        | Process execution with elevation and quoting         |
-| `GetExplorerPath()`      | `AutoHotkey.ahk`        | Active Explorer window's filesystem path (tab-aware) |
-| `GetCursorMonitor()`     | `AutoHotkey.ahk`        | Returns 1-based monitor index for cursor             |
-| `IsProcessElevated(pid)` | `AutoHotkey.ahk`        | Checks admin privileges via token                    |
-| `FindInPath(exe)`        | `AutoHotkey.ahk`        | Resolves exe name to full PATH entry                 |
+| `UserRun(exe, args*)`    | `processes.ahk`         | Process execution with elevation and quoting         |
+| `GetExplorerPath()`      | `terminal-anywhere.ahk` | Active Explorer window's filesystem path (tab-aware) |
+| `GetCursorMonitor()`     | `window-spawning.ahk`   | Returns 1-based monitor index for cursor             |
+| `IsProcessElevated(pid)` | `processes.ahk`         | Checks admin privileges via token                    |
+| `FindInPath(exe)`        | `processes.ahk`         | Resolves exe name to full PATH entry                 |
 | `HasVal(arr, val)`       | `AutoHotkey.ahk`        | Check if array contains value (partial match)        |
 | `GetScrollPos(hwnd)`     | `mbutton-drag.ahk`      | Win32 vertical scroll position                       |
 | `ScrollCurve(dist)`      | `mbutton-drag.ahk`      | Power curve: `dist^0.8` up to 100px, slower beyond   |
-| `OpenTerminal(opts)`     | `terminal.ahk` | Open WT with elevation options                       |
+| `OpenTerminal(opts)`     | `terminal-anywhere.ahk` | Open WT with elevation options                       |
 
 ## Conventions
 

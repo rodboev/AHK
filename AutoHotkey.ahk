@@ -68,6 +68,7 @@ Return
 #IfWinActive
 
 ; ⇒ Sublime Text
+#n::UserRun("C:\Apps\Sublime\subl.exe")
 #IfWinActive ahk_exe sublime_text.exe
   ^Tab::Send {Ctrl Down}{PgDn}{Ctrl Up} ; [ Ctrl+Tab ] -> Next tab
   +^Tab::Send {Ctrl Down}{PgUp}{Ctrl Up} ; [ ShIft+Ctrl+Tab ] -> Previous tab
@@ -98,11 +99,13 @@ Return
 ~#t::Run explorer shell:::{3080F90E-D7AD-11D9-BD98-0000947B0257} ; Win+T -> Task View
 !`::WinSet, AlwaysOnTop, Toggle, A ; [ Alt+` ] -> Toggle always-on-top
 !PrintScreen::ScreenshotWindow() ; [ Alt+PrintScreen ] -> Screenshot window (always-on-top)
-!+PrintScreen:: ; [ Alt+Shift+PrintScreen ] -> Screenshot window to desktop
+!+PrintScreen:: ; [ Alt+Shift+PrintScreen ] -> Screenshot window to desktop with shadow
   FormatTime, day,, ddd
   FormatTime, time,, h.mm.ss
   FormatTime, ampm,, tt
-  ScreenshotWindow(A_Desktop . "\" . day . " " . time . " " . ampm . ".jpg")
+  _screenshotPath := A_Desktop . "\" . day . " " . time . " " . ampm . ".png"
+  ScreenshotWindow(_screenshotPath, 8)
+  UserRun(FindInPath("addshadow.cmd"), _screenshotPath)
 Return
 
 ; ⇒ Windows Explorer
@@ -120,7 +123,7 @@ Return
   Backspace:: ; [ Backspace ] -> Go up a folder instead of backwards in history
     ControlGet renamestatus,Visible,,Edit1,A
     ControlGetFocus focused, A
-    If (renamestatus != 1 and (focused = "DirectUIHWND3" or focused = "SysTreeView321"))
+    If (renamestatus != 1 and (focused = "DirectUIHWND2" or focused = "DirectUIHWND3" or focused = "SysTreeView321"))
       SendInput {Alt Down}{Up}{Alt Up}
     Else
       Send {Backspace}
@@ -228,17 +231,18 @@ Return
   Return
 #If
 
-#IfWinActive ahk_exe JPEGView.exe
+#If MouseIsOver("ahk_exe JPEGView.exe")
   Enter::
     WinGet, active_id, ID, A
     Send w
     WinClose, ahk_id %active_id%
   Return
   $MButton::SendInput {F11}
-#IfWinActive
-#IfWinActive ahk_class QWidget
+#If
+
+#If MouseIsOver("ahk_class QWidget")
   *MButton::Send n ; VLC: next file on middle click
-#IfWinActive
+#If
 
 ; Alt+Shift+S = Run or activate Everything
 ~+!s::
@@ -297,7 +301,7 @@ Return
 ; [ Win + Shift + E ] -> Alternate Explorer app in case of issues after Windows updates
 #+e::
   WinGetClass, ahk_class, A
-  path := GetExplorerPath()
+  path := IsFunc("GetExplorerPath") ? GetExplorerPath() : ""
   If (ahk_class = "Progman")
     path := A_Desktop
   Else If (ahk_class != "CabinetWClass" || path = "")
@@ -458,107 +462,6 @@ GetScrollAccel(divisor := 100) {
   Return
 }
 
-; ⇒ Search for executable in PATH
-FindInPath(exe) {
-  If FileExist(exe)
-    Return exe
-
-  EnvGet, pathVar, PATH
-  Loop, Parse, pathVar, `;
-  {
-    If (A_LoopField = "")
-        continue
-    fullPath := RTrim(A_LoopField, "\") "\" exe
-    If FileExist(fullPath)
-        Return fullPath
-  }
-  Return ""
-}
-
-; ╔══════════════════════════════════════════════════════════════════════════╗
-; ║  Shell Automation — Programmatic access to Explorer windows/folders      ║
-; ║  Used by: Terminal hotkeys (F10) to get current Explorer directory       ║
-; ║  Docs: https://learn.microsoft.com/en-us/windows/win32/shell/shell-entry ║
-; ╚══════════════════════════════════════════════════════════════════════════╝
-; COM Interface (from ShObjIdl.h)
-;   IID_IShellBrowser = {000214E2-0000-0000-C000-000000000046}
-;
-; Used in ComObjQuery(window, SID, IID) where SID=IID for direct interface access.
-; Needed for tabbed Explorer: IOleWindow::GetWindow (vtable 3) returns tab HWND.
-
-; ⇒ Get current path of active Explorer window (tab-aware for Win11 22H2+)
-GetExplorerPath() {
-  static shell := ComObjCreate("Shell.Application")
-  WinGet, hwnd, ID, A
-  ; ShellTabWindowClass1 = active tab (ClassNN 1 = highest z-order)
-  activeTab := 0
-  Try ControlGet, activeTab, Hwnd,, ShellTabWindowClass1, ahk_id %hwnd%
-  For window in shell.Windows {
-    If (window.hwnd != hwnd)
-      Continue
-    If (activeTab) {
-      ; IOleWindow::GetWindow (vtable 3) returns each tab's HWND
-      shellBrowser := ComObjQuery(window
-        , "{000214E2-0000-0000-C000-000000000046}"
-        , "{000214E2-0000-0000-C000-000000000046}")
-      If (!shellBrowser)
-        Continue
-      thisTab := 0
-      Try {
-        DllCall(NumGet(NumGet(shellBrowser+0)+3*A_PtrSize)
-          , "Ptr", shellBrowser, "UInt*", thisTab)
-      } Finally {
-        ObjRelease(shellBrowser)
-      }
-      If (thisTab != activeTab)
-        Continue
-    }
-    Try {
-      _path := window.Document.Folder.Self.Path
-      Return RegExMatch(_path, "^[A-Za-z]:\\|^\\\\") && !InStr(_path, "::") ? _path : ""
-    }
-    Catch {
-      Return ""  ; not a filesystem view
-    }
-  }
-  Return ""
-}
-
-; ⇒ Get exe path and/or directory for a window
-; Example: info := GetExePath() or info := GetExePath("ahk_id " hwnd)
-; Returns: { path: "C:\...\app.exe", dir: "C:\..." }
-GetExePath(winTitle := "A") {
-  WinGet, exePath, ProcessPath, %winTitle%
-  SplitPath, exePath,, exeDir
-  Return {path: exePath, dir: exeDir}
-}
-
-; ⇒ Get which monitor a window is on (1-based)
-GetMonitor(winTitle := "A") {
-  WinGetPos, x, y, w, h, %winTitle%
-  centerX := x + w // 2, centerY := y + h // 2
-  SysGet, monCount, MonitorCount
-  Loop, %monCount% {
-    SysGet, mon, Monitor, %A_Index%
-    If (centerX >= monLeft && centerX <= monRight && centerY >= monTop && centerY <= monBottom)
-      Return A_Index
-  }
-  Return 1
-}
-
-; Get which monitor the cursor is on (1-based)
-GetCursorMonitor() {
-  CoordMode, Mouse, Screen
-  MouseGetPos, mx, my
-  SysGet, monCount, MonitorCount
-  Loop, %monCount% {
-    SysGet, mon, Monitor, %A_Index%
-    If (mx >= monLeft && mx <= monRight && my >= monTop && my <= monBottom)
-      Return A_Index
-  }
-  Return 1
-}
-
 G_UIACleanup() {
   If (G_UIA) {
     ObjRelease(G_UIA)
@@ -598,33 +501,6 @@ GetUIAProcessId(hwnd) {
     Return _uiaPid ? _uiaPid : _winPid
   }
   Return _winPid
-}
-
-; ⇒ Get CmdLine for a window (by PID, or active window if omitted)
-GetActiveWindowCommandLine(pid := "") {
-  If (pid = "")
-    WinGet, pid, PID, A
-
-  If (pid) {
-    cmdLine := ""
-    For process in ComObjGet("winmgmts:").ExecQuery("Select CommandLine from Win32_Process where ProcessId=" . pid)
-      cmdLine := process.CommandLine
-
-    If (cmdLine)
-      Return cmdLine
-    exe := GetExePath()
-    If (exe.path)
-      Return exe.path
-  }
-  Return "."
-}
-
-; Check if a process with specific command line exists
-ProcessExistsByCommandLine(cmdLine) {
-  For process in ComObjGet("winmgmts:").ExecQuery("Select ProcessId, CommandLine from Win32_Process")
-    If (InStr(process.CommandLine, cmdLine))
-      Return process.ProcessId
-  Return 0
 }
 
 ; ⇒ Check if non-elevated user has write access to a file
@@ -802,234 +678,6 @@ _FixAdvertisedShortcut(lnkPath) {
   Return false
 }
 
-; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-; ┃ === SAFE RUN (as user, admin, SYSTEM) === ┃
-; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-; "elevate" sentinel elevates via PS Start-Process -Verb RunAs
-; Spawns from Explorer (via RunFromProcess) for clean process trees
-; UserRun("wt", "-d", A_Desktop) | UserRun("elevate", "wt", "-d", path)
-UserRun(Executable, Args*) {
-    global UserRun_LastError, WS
-
-    UserRun_LastError := ""
-
-    if (IsObject(WS)) {
-        if (RegExMatch(Executable, "i)([^\\\/]+\.exe)\s*$", _m))
-            WS.RecentExes[_m1] := A_TickCount
-        for _i, _a in Args {
-            if (RegExMatch(_a, "i)([^\\\/]+\.exe)\s*$", _m))
-                WS.RecentExes[_m1] := A_TickCount
-        }
-    }
-
-    ; "elevate" is a sentinel: elevate the real target in Args[1]
-    elevate := (Executable = "elevate")
-    if (elevate) {
-        if (Args.Length() < 1) {
-            MsgBox, 16, UserRun failed, Missing target executable for elevate.
-            return false
-        }
-        Executable := Args[1]
-        Args.RemoveAt(1)
-    }
-
-    ; Check if any arg needs PowerShell for env var expansion
-    needsPowerShell := false
-    Loop % Args.Length() {
-        arg := Args[A_Index]
-        if (RegExMatch(arg, "%(.*?)%") || InStr(arg, "$env:")) {
-            needsPowerShell := true
-            break
-        }
-    }
-
-    ; Resolve RunFromProcess once. Empty string means "not available".
-    rfp := FindInPath("RunFromProcess-x64.exe")
-
-    ; --------------------------------------------------------------------------
-    ; PowerShell-required path
-    ; --------------------------------------------------------------------------
-    if (needsPowerShell) {
-        ; Resolve PowerShell only here, because only this branch requires it.
-        psPath := FindInPath("powershell.exe")
-        if (psPath = "")
-            psPath := FindInPath("pwsh.exe")
-
-        if (psPath = "") {
-            MsgBox, 16, UserRun failed, PowerShell is required for this launch path but was not found.
-            return false
-        }
-
-        ; pwsh-only environment workaround
-        psPrefix := ""
-        if RegExMatch(psPath, "(?i)\\pwsh\.exe$")
-            psPrefix := "set DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 && "
-
-        _safeExe := StrReplace(Executable, "'", "''")
-        quotedExe := "'" _safeExe "'"
-        psCmd := "& " quotedExe
-
-        Loop % Args.Length() {
-            arg := Args[A_Index]
-
-            ; Handle "-d <path>" specially (Windows Terminal)
-            if RegExMatch(arg, "(?i)^\s*-d\s+(.+)$", m) {
-                rawPath := m1
-                expanded := RegExReplace(rawPath, "(?i)%(.*?)%", "$env:$1")
-                _safePath := StrReplace(expanded, "'", "''")
-                psCmd .= " -d '" _safePath "'"
-            } else {
-                expanded := RegExReplace(arg, "(?i)%(.*?)%", "$env:$1")
-                _safeArg := StrReplace(expanded, "'", "''")
-                psCmd .= " '" _safeArg "'"
-            }
-        }
-
-        if (elevate) {
-            ; Elevation in this branch is PowerShell-mediated by design.
-            _psCmdEsc := StrReplace(psCmd, "'", "''")
-            psExeQ := """" psPath """"
-            psArg := "-NoProfile -Command ""Start-Process " psExeQ " -ArgumentList '-NoProfile -Command " _psCmdEsc "' -Verb RunAs -WindowStyle Hidden"""
-
-            if (rfp != "") {
-                full := """" rfp """ explorer.exe conhost.exe --headless cmd.exe /C """ psPrefix psExeQ " " psArg """"
-                Run, %full%, , UseErrorLevel Hide
-                if (ErrorLevel) {
-                    MsgBox, 16, UserRun failed, % "Run failed.`nErrorLevel: " ErrorLevel "`n`nCommand:`n" full
-                    return false
-                }
-                return true
-            }
-
-            ; Fallback: Explorer shell (may inherit elevation)
-            ToolTip, UserRun: PS + elevated + ShellExecute (no RFP)
-            SetTimer, RemoveToolTip, -3000
-            if !ShellRunUserOrFail("cmd.exe", "/C " Chr(34) psPrefix psExeQ " " psArg Chr(34), "", "open", 0)
-                return false
-
-            return true
-        }
-
-        ; Non-elevated PowerShell path
-        psExeQ := """" psPath """"
-        psArg := "-NoProfile -Command " Chr(34) psCmd Chr(34)
-
-        if (Debug.Log["terminal-anywhere"]) {
-            FileAppend, % TS() . " | terminal-anywhere | UserRun PS path: psCmd=" . psCmd . "`n", % Debug.Log.Path
-        }
-
-        if (rfp != "") {
-            full := """" rfp """ explorer.exe conhost.exe --headless cmd.exe /C """ psPrefix psExeQ " " psArg """"
-            if (Debug.Log["terminal-anywhere"])
-                FileAppend, % TS() . " | terminal-anywhere | UserRun full cmd: " . full . "`n", % Debug.Log.Path
-            Run, %full%, , UseErrorLevel Hide
-            if (ErrorLevel) {
-                MsgBox, 16, UserRun failed, % "Run failed.`nErrorLevel: " ErrorLevel "`n`nCommand:`n" full
-                return false
-            }
-            return true
-        }
-
-        ToolTip, UserRun: PS + non-elevated + ShellExecute (no RFP)
-        SetTimer, RemoveToolTip, -3000
-        if !ShellRunUserOrFail("cmd.exe", "/C " Chr(34) psPrefix psExeQ " " psArg Chr(34), "", "open", 0)
-            return false
-
-        return true
-    }
-
-    ; --------------------------------------------------------------------------
-    ; Direct execution path (no PowerShell semantics required)
-    ; --------------------------------------------------------------------------
-    argStr := ""
-    Loop % Args.Length() {
-        arg := Args[A_Index]
-        _safeArg := StrReplace(arg, """", """""")
-        argStr .= " """ _safeArg """"
-    }
-
-    if (elevate) {
-        ; If AHK is already elevated, run directly
-        if (IsProcessElevated(DllCall("GetCurrentProcessId"))) {
-            _safeExeD := StrReplace(Executable, """", """""")
-            full := """" _safeExeD """" argStr
-            Run, %full%, , UseErrorLevel
-            if (ErrorLevel) {
-                MsgBox, 16, UserRun failed, % "Run failed.`nErrorLevel: " ErrorLevel "`n`nCommand:`n" full
-                return false
-            }
-            return true
-        }
-
-        ; AHK is not elevated - use AHK's *RunAs verb (simpler than PowerShell Start-Process)
-        _safeExeD := StrReplace(Executable, """", """""")
-        full := "*RunAs """ _safeExeD """" argStr
-        Run, %full%, , UseErrorLevel
-        if (ErrorLevel) {
-            MsgBox, 16, UserRun failed, % "Run failed.`nErrorLevel: " ErrorLevel "`n`nCommand:`n" full
-            return false
-        }
-        return true
-    }
-
-    ; Direct non-elevated path
-    _safeExeD := StrReplace(Executable, """", """""")
-    full := ""
-
-    if (rfp != "") {
-        innerCmd := _safeExeD . argStr
-        full := """" rfp """ explorer.exe conhost.exe --headless cmd.exe /C " innerCmd
-        Run, %full%, , UseErrorLevel Hide
-        if (ErrorLevel) {
-            MsgBox, 16, UserRun failed, % "Run failed.`nErrorLevel: " ErrorLevel "`n`nCommand:`n" full
-            return false
-        }
-        return true
-    }
-
-    ToolTip, UserRun: Direct + non-elevated + ShellExecute (no RFP)
-    SetTimer, RemoveToolTip, -3000
-    if !ShellRunUserOrFail(Executable, LTrim(argStr), "", "open", 1)
-        return false
-
-    return true
-}
-ShellRunUser(exe, args := "", dir := "", verb := "open", show := 1) {
-    global UserRun_LastError
-    UserRun_LastError := ""
-    try {
-        shell := ComObjCreate("Shell.Application")
-        shell.ShellExecute(exe, args, dir, verb, show)
-        shell := ""
-        return true
-    } catch e {
-        UserRun_LastError := "ShellExecute failed: " e.Message
-        return false
-    }
-}
-ShellRunUserOrFail(exe, args := "", dir := "", verb := "open", show := 1) {
-    if !ShellRunUser(exe, args, dir, verb, show) {
-        MsgBox, 16, UserRun failed, % UserRun_LastError
-        return false
-    }
-    return true
-}
-
-IsProcessElevated(pid) {
-  hProcess := DllCall("OpenProcess", "UInt", 0x0400, "Int", false, "UInt", pid, "Ptr")  ; PROCESS_QUERY_INFORMATION
-  If (!hProcess)
-    Return false
-  hToken := 0
-  DllCall("advapi32\OpenProcessToken", "Ptr", hProcess, "UInt", 0x0008, "Ptr*", hToken)  ; TOKEN_QUERY
-  DllCall("CloseHandle", "Ptr", hProcess)
-  If (!hToken)
-    Return false
-  elevation := 0
-  DllCall("advapi32\GetTokenInformation", "Ptr", hToken, "Int", 20, "UInt*", elevation, "UInt", 4, "UInt*", 0)
-  DllCall("CloseHandle", "Ptr", hToken)
-  Return elevation
-}
-
 ClipboardHasImage() {
   Return DllCall("IsClipboardFormatAvailable", "UInt", 2) && !DllCall("IsClipboardFormatAvailable", "UInt", 15)
 }
@@ -1045,7 +693,7 @@ ConvertClipboardImageToFile() {
   Return true
 }
 
-ScreenshotWindow(savePath := "") {
+ScreenshotWindow(savePath := "", cornerRadius := 0) {
   WinGet, hwnd, ID, A
   WinGet, exStyle, ExStyle, ahk_id %hwnd%
   wasOnTop := (exStyle & 0x8)
@@ -1057,10 +705,10 @@ ScreenshotWindow(savePath := "") {
   If (!wasOnTop)
     WinSet, AlwaysOnTop, Off, ahk_id %hwnd%
   If (savePath != "")
-    SaveClipboardImage(savePath)
+    SaveClipboardImage(savePath, cornerRadius)
 }
 
-SaveClipboardImage(filePath) {
+SaveClipboardImage(filePath, cornerRadius := 0) {
   SplitPath, filePath,,, ext
   encoderCLSID := (ext = "png") ? "{557CF406-1A04-11D3-9A73-0000F81EF32E}"
     : "{557CF401-1A04-11D3-9A73-0000F81EF32E}"
@@ -1070,6 +718,7 @@ SaveClipboardImage(filePath) {
   pToken := 0
   DllCall("gdiplus\GdiplusStartup", "Ptr*", pToken, "Ptr", &si, "Ptr", 0)
   pBitmap := 0
+  pDest := 0
   Try {
     If (!DllCall("OpenClipboard", "Ptr", 0))
       Return
@@ -1082,10 +731,46 @@ SaveClipboardImage(filePath) {
     DllCall("CloseClipboard")
     If (!pBitmap)
       Return
+
+    If (cornerRadius > 0) {
+      DllCall("gdiplus\GdipGetImageWidth", "Ptr", pBitmap, "UInt*", imgW)
+      DllCall("gdiplus\GdipGetImageHeight", "Ptr", pBitmap, "UInt*", imgH)
+      DllCall("gdiplus\GdipCreateBitmapFromScan0"
+        , "Int", imgW, "Int", imgH, "Int", 0, "Int", 0x26200A, "Ptr", 0, "Ptr*", pDest)
+      pGraphics := 0
+      DllCall("gdiplus\GdipGetImageGraphicsContext", "Ptr", pDest, "Ptr*", pGraphics)
+      DllCall("gdiplus\GdipSetSmoothingMode", "Ptr", pGraphics, "Int", 4)  ; AntiAlias
+      DllCall("gdiplus\GdipSetPixelOffsetMode", "Ptr", pGraphics, "Int", 2)  ; HighQuality
+      pBrush := 0
+      DllCall("gdiplus\GdipCreateTexture", "Ptr", pBitmap, "Int", 0, "Ptr*", pBrush)
+      pPath := 0
+      DllCall("gdiplus\GdipCreatePath", "Int", 0, "Ptr*", pPath)
+      _dpi := DllCall("GetDpiForSystem", "UInt")
+      r := cornerRadius * _dpi / 96.0, d := r * 2.0, w := imgW + 0.0, h := imgH + 0.0
+      DllCall("gdiplus\GdipAddPathArc", "Ptr", pPath
+        , "Float", 0.0, "Float", 0.0, "Float", d, "Float", d, "Float", 180.0, "Float", 90.0)
+      DllCall("gdiplus\GdipAddPathArc", "Ptr", pPath
+        , "Float", w-d, "Float", 0.0, "Float", d, "Float", d, "Float", 270.0, "Float", 90.0)
+      DllCall("gdiplus\GdipAddPathArc", "Ptr", pPath
+        , "Float", w-d, "Float", h-d, "Float", d, "Float", d, "Float", 0.0, "Float", 90.0)
+      DllCall("gdiplus\GdipAddPathArc", "Ptr", pPath
+        , "Float", 0.0, "Float", h-d, "Float", d, "Float", d, "Float", 90.0, "Float", 90.0)
+      DllCall("gdiplus\GdipClosePathFigure", "Ptr", pPath)
+      DllCall("gdiplus\GdipFillPath", "Ptr", pGraphics, "Ptr", pBrush, "Ptr", pPath)
+      DllCall("gdiplus\GdipDeletePath", "Ptr", pPath)
+      DllCall("gdiplus\GdipDeleteBrush", "Ptr", pBrush)
+      DllCall("gdiplus\GdipDeleteGraphics", "Ptr", pGraphics)
+      DllCall("gdiplus\GdipDisposeImage", "Ptr", pBitmap)
+      pBitmap := pDest
+      pDest := 0
+    }
+
     VarSetCapacity(clsid, 16, 0)
     DllCall("ole32\CLSIDFromString", "WStr", encoderCLSID, "Ptr", &clsid)
     DllCall("gdiplus\GdipSaveImageToFile", "Ptr", pBitmap, "WStr", filePath, "Ptr", &clsid, "Ptr", 0)
   } Finally {
+    If (pDest)
+      DllCall("gdiplus\GdipDisposeImage", "Ptr", pDest)
     If (pBitmap)
       DllCall("gdiplus\GdipDisposeImage", "Ptr", pBitmap)
     DllCall("gdiplus\GdiplusShutdown", "Ptr", pToken)
@@ -1113,6 +798,7 @@ RemoveToolTip:
 Return
 
 ; === Module Includes ===
+#Include %A_ScriptDir%\processes.ahk
 #Include %A_ScriptDir%\terminal-anywhere.ahk
 #Include %A_ScriptDir%\extended-spy.ahk
 #Include %A_ScriptDir%\mbutton-drag.ahk
