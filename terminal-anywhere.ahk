@@ -41,7 +41,7 @@ Return
 TerminalInit() {
   global TA, Debug
   TA := {}
-  TA.CtrlCmd := "claude"
+  TA.CtrlCmd := FindInPath("claude")
   TA.WTProfile := GetWTFirstProfile()
   if (Debug.Log["terminal-anywhere"])
     FileAppend, % TS() . " | terminal-anywhere | " . "TerminalInit: WTProfile=" . TA.WTProfile . "`n", % Debug.Log.Path

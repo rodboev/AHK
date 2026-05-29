@@ -2,19 +2,50 @@
 ; ┃ === PROCESS MANAGEMENT / PRIVILEGE ESCALATION === ┃
 ; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
-; ⇒ Search for executable in PATH
+; ⇒ Search for executable in PATH (PATHEXT-aware for extensionless names)
 FindInPath(exe) {
-  If FileExist(exe)
-    Return exe
+  SplitPath, exe,,, _ext
+  if (_ext != "") {
+    If FileExist(exe)
+      Return exe
+    EnvGet, pathVar, PATH
+    Loop, Parse, pathVar, `;
+    {
+      If (A_LoopField = "")
+        continue
+      fullPath := RTrim(A_LoopField, "\") "\" exe
+      If FileExist(fullPath)
+        Return fullPath
+    }
+    Return ""
+  }
+
+  EnvGet, pathExt, PATHEXT
+  if (pathExt = "")
+    pathExt := ".COM;.EXE;.BAT;.CMD"
+
+  Loop, Parse, pathExt, `;
+  {
+    if (A_LoopField = "")
+      continue
+    if FileExist(exe . A_LoopField)
+      Return exe . A_LoopField
+  }
 
   EnvGet, pathVar, PATH
   Loop, Parse, pathVar, `;
   {
     If (A_LoopField = "")
+      continue
+    _dir := RTrim(A_LoopField, "\")
+    Loop, Parse, pathExt, `;
+    {
+      if (A_LoopField = "")
         continue
-    fullPath := RTrim(A_LoopField, "\") "\" exe
-    If FileExist(fullPath)
+      fullPath := _dir "\" exe . A_LoopField
+      If FileExist(fullPath)
         Return fullPath
+    }
   }
   Return ""
 }

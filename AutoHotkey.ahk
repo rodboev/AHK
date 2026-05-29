@@ -20,10 +20,10 @@ SetTitleMatchMode, 2
 
 global Debug
 Debug := { Tooltips: {"scroll-accel": 0
-  , "mbutton-drag": 1 }
+  , "mbutton-drag": 0 }
 , Log: { Path: A_Temp . "\AHK_Debug.log"
   , "scroll-accel": 0
-  , "mbutton-drag": 1
+  , "mbutton-drag": 0
   , "window-spawning": 0
   , "terminal-anywhere": 0
   , "image-paste": 0 }}
