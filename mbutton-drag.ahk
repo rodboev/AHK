@@ -53,6 +53,7 @@
   global G_hSizeAll, G_hArrowDefault, G_hIBeamDefault
 
   MouseGetPos,,, _win, _className
+  MouseGetPos,,, , _ctrlHwnd, 2
   MB.Win := _win, MB.ClassName := _className
   WinGetClass, _winClass, ahk_id %_win%
   MB.WinClass := _winClass
@@ -98,10 +99,15 @@
   MouseGetPos, _x1, _y1
   MB.X1 := _x1, MB.Y1 := _y1
 
-  _mbClassName := MB.ClassName
-  ControlGet, _ctrl, Hwnd,, %_mbClassName%, ahk_id %_mbWin%
+  If (_ctrlHwnd) {
+    MB.Ctrl := _ctrlHwnd + 0
+  } Else {
+    _mbClassName := MB.ClassName
+    ControlGet, _ctrl, Hwnd,, %_mbClassName%, ahk_id %_mbWin%
+    MB.Ctrl := _ctrl
+  }
   WinGet, _procName, ProcessName, ahk_id %_mbWin%
-  MB.Ctrl := _ctrl, MB.ProcName := _procName
+  MB.ProcName := _procName
   MB.Triggered := 0
   MB.DragDist := 0
   MB.ScrollTicks := 0
@@ -109,6 +115,23 @@
 
   ; TreeView controls -> direct to VSCROLL (skip native probe, never has native MButton scroll)
   If (InStr(MB.ClassName, "SysTreeView32")) {
+    ; Drill down from window to find the TreeView under cursor (tabbed Explorer has duplicate ClassNNs)
+    _ptHwnd := MB.Win + 0
+    Loop, 20 {
+      VarSetCapacity(_cpt, 8, 0)
+      NumPut(MB.X1, _cpt, 0, "Int"), NumPut(MB.Y1, _cpt, 4, "Int")
+      DllCall("ScreenToClient", "Ptr", _ptHwnd, "Ptr", &_cpt)
+      _child := DllCall("RealChildWindowFromPoint", "Ptr", _ptHwnd, "Int64", NumGet(_cpt, 0, "Int64"), "Ptr")
+      If (!_child or _child = _ptHwnd)
+        Break
+      _ptHwnd := _child
+      VarSetCapacity(_cn, 256)
+      DllCall("GetClassName", "Ptr", _ptHwnd, "Str", _cn, "Int", 255)
+      If (InStr(_cn, "SysTreeView32")) {
+        MB.Ctrl := _ptHwnd
+        Break
+      }
+    }
     MB.Method := "VSCROLL"
     MB.Probe.Active := 0
     ; If scrollbar exists, show cursor immediately; otherwise verify on scroll
@@ -922,8 +945,12 @@ MBDragTimer:
       If (AbsDistX >= MB.Threshold)
         DeltaX := SendHWheel(target, curveValueX, SignedDistX, MB.X1, MB.Y1, 5, 360, 30)
 
+      MB.ScrollTicks++
+
       If (Debug.Tooltips["mbutton-drag"])
         ToolTip, % "VSCROLL: dirY=" (AbsDistY >= MB.Threshold ? scrollDirY : "-") " dX=" (AbsDistX >= MB.Threshold ? DeltaX : "-") " timer=" timerMs "ms"
+      If (Debug.Log["mbutton-drag"] && MB.ScrollTicks <= 2)
+        FileAppend, % TS() " | mbutton-drag | VSCROLL | proc=" MB.ProcName " tick=" MB.ScrollTicks " target=" _vscrollTarget " absY=" AbsDistY " absX=" AbsDistX " dY=" DeltaY "`n", % Debug.Log.Path
 
     } Else {
       ; ===========================================
@@ -1632,8 +1659,6 @@ MB_EndSession() {
 
 MB_Init() {
   global G_hSizeAll, G_hArrowDefault, G_hIBeamDefault
-  ; Ensure wheel routing is default (cursor position) in case a prior session didn't restore
-  DllCall("SystemParametersInfo", "UInt", 0x201D, "UInt", 0, "Ptr", 2, "UInt", 0)
   G_hSizeAll := DllCall("LoadCursor", "Ptr", 0, "Ptr", 32646, "Ptr")  ; IDC_SIZEALL
   EnvGet, _localAppData, LOCALAPPDATA
   _cursorsDir1 := _localAppData "\Microsoft\Windows\Cursors\"
