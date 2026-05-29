@@ -20,10 +20,10 @@ SetTitleMatchMode, 2
 
 global Debug
 Debug := { Tooltips: {"scroll-accel": 0
-  , "mbutton-drag": 0 }
+  , "mbutton-drag": 1 }
 , Log: { Path: A_Temp . "\AHK_Debug.log"
   , "scroll-accel": 0
-  , "mbutton-drag": 0
+  , "mbutton-drag": 1
   , "window-spawning": 0
   , "terminal-anywhere": 0
   , "image-paste": 0 }}
@@ -62,7 +62,10 @@ TS() {
   Suspend
   Pause,,1
 Return
-+!e::Edit ; UserRun("vsc", A_ScriptFullPath) ; [ Shift+Alt+E ] -> Edit script in VS Code
++!e:: ; [ Shift+Alt+E ] -> Edit AHK scripts in Sublime
+  KeyWait, Shift
+  UserRun("subl.exe", "-n", A_ScriptDir "\*.ahk")
+Return
 #IfWinActive .ahk
   ~^s::Reload ; [ Ctrl+S ] -> Reload script on save (in any editor)
 #IfWinActive
@@ -86,7 +89,7 @@ Return
 #IfWinActive
 
 ; ⇒ VSCode + forks
-#If (WinActive("ahk_exe code.exe") OR WinActive("ahk_exe vscodium.exe") OR WinActive("ahk_exe cursor.exe"))
+#If (WinActive("ahk_exe code.exe") OR WinActive("ahk_exe vscodium.exe") OR WinActive("ahk_exe Cursor.app.exe"))
   +^w::Send {Alt Down}z{AltUp} ; [ Shift+Ctrl+W ] -> Toggle word wrap
   ^Tab::Send {Ctrl Down}{PgDn}{Ctrl Up} ; [ Ctrl+Tab ] -> Next tab
   +^Tab::Send {Ctrl Down}{PgUp}{Ctrl Up} ; [ ShIft+Ctrl+Tab ] -> Previous tab
@@ -134,7 +137,7 @@ Return
   !d::Send {Alt Down}n{Alt Up} ; [ Alt+D ] -> Focus filename field in Open dialog
 #IfWinActive
 
-#If WinActive("ahk_class CabinetWClass") || WinActive("ahk_class #32770")
+#If (WinActive("ahk_class CabinetWClass") || WinActive("ahk_class #32770")) && !WinActive("ahk_exe Everything.exe")
   ^e:: ; [ Ctrl+E ] -> Edit selected file in Notepad
     _selected := _GetSelectedFile()
     If (_selected = "")

@@ -15,7 +15,7 @@
   ; Core session state
   MB := { Threshold: 2, ClickThreshold: 10
     , X1: 0, Y1: 0, DragDist: 0
-    , Win: 0, Ctrl: 0
+    , Win: 0, Ctrl: 0, WheelRouting: -1
     , ClassName: "", ProcName: ""
     , Triggered: 0, Disabled: 0, DeferredDown: 0
     , Method: "VSCROLL", FallbackChecked: 0, ScrollBarChecked: 0
@@ -292,11 +292,15 @@
   }
 
   MBSetupCursor:
-  If (_hasScrollRange and !MB.Probe.InitCursorUnknown) {
+  If (_hasScrollRange and !MB.Probe.InitCursorUnknown and MB.UIA.Pattern) {
     MB.Cursor.Active := 1
     SetDragCursor()
     If (Debug.Log["mbutton-drag"])
       FileAppend, % TS() " | mbutton-drag | CURSOR_DOWN | scrollRange=1`n", % Debug.Log.Path
+  } Else If (_hasScrollRange and !MB.Probe.InitCursorUnknown) {
+    MB.Cursor.Pending := 1
+    If (Debug.Log["mbutton-drag"])
+      FileAppend, % TS() " | mbutton-drag | CURSOR_PENDING | scrollRange=1 noPattern`n", % Debug.Log.Path
   } Else If (_hasScrollRange and MB.Probe.InitCursorUnknown) {
     ; App already has a custom cursor (likely native autoscroll from prior click) — defer
     MB.Cursor.Pending := 1
@@ -804,11 +808,12 @@ MBDragTimer:
       target := _scrollTarget
 
       ; Send WHEEL message (vertical) — only if vertical movement exceeds threshold
+      _useInput := InStr(MB.ClassName, "DesktopWindowContentBridge") ? 1 : 0
       If (AbsDistY >= MB.Threshold) {
         ; VSCROLL fallback + GetScrollPos confirmation: first vertical scroll only
         If (!MB.FallbackChecked) {
           posBefore := GetScrollPos(target)
-          DeltaY := SendVWheel(target, curveValueY, SignedDistY, MB.X1, MB.Y1)
+          DeltaY := SendVWheel(target, curveValueY, SignedDistY, MB.X1, MB.Y1, _useInput)
           Sleep, 10
           posAfter := GetScrollPos(target)
           scrolledUnits := Abs(posAfter - posBefore)
@@ -827,7 +832,9 @@ MBDragTimer:
             MB_ConfirmCursor("method=WHEEL_CTRL scrolled=" scrolledUnits)
           }
         } Else {
-          DeltaY := SendVWheel(target, curveValueY, SignedDistY, MB.X1, MB.Y1)
+          DeltaY := SendVWheel(target, curveValueY, SignedDistY, MB.X1, MB.Y1, _useInput)
+          If (MB.Cursor.Pending and _useInput and DeltaY)
+            MB_ConfirmCursor("method=WHEEL_CTRL input=1")
         }
       }
 
@@ -964,6 +971,14 @@ MBDragTimer:
           DeltaY := SendVWheel(_mbWin, curveValueY, SignedDistY, MB.X1, MB.Y1)
         }
       }
+      ; UIA ScrollBar Value check (confirms scroll for apps without Win32 scrollbars)
+      If (MB.Cursor.Pending and MB.UIA.Scrollbar) {
+        _curValue := UIA_GetValue(MB.UIA.Scrollbar)
+        If (_curValue != MB.UIA.ScrollbarValue) {
+          MB.UIA.ScrollbarValue := _curValue
+          MB_ConfirmCursor("method=WHEEL uiaValue=" Round(_curValue, 1))
+        }
+      }
       MB.ScrollTicks++
 
       ; Horizontal: WM_MOUSEHWHEEL (0x20E) — 2x multiplier for perceptual parity with vertical
@@ -992,17 +1007,12 @@ Return
 
   ; Release MButton to app
   If (MB.DeferredDown) {
-    ; Explorer: MButton Down was deferred — send click on release
-    SendInput, {Blind}{MButton}
+    If (MB.DragDist < MB.ClickThreshold)
+      SendInput, {Blind}{MButton}
   } Else {
-    ; Non-Explorer: MButton Down was already sent, send Up to complete
-    ; Use ClickThreshold (>Threshold) so small drags still pass as clicks
-    passClick := (MB.DragDist < MB.ClickThreshold)
+    SendInput, {Blind}{MButton Up}
     If (Debug.Log["mbutton-drag"])
-      FileAppend, % TS() " | mbutton-drag | CLICK_DECISION | passClick=" passClick " dragDist=" MB.DragDist " threshold=" MB.ClickThreshold "`n", % Debug.Log.Path
-    If (passClick) {
-      SendInput, {Blind}{MButton Up}
-    }
+      FileAppend, % TS() " | mbutton-drag | MBUTTON_UP | dragDist=" MB.DragDist " method=" MB.Method "`n", % Debug.Log.Path
   }
 Return
 
@@ -1035,19 +1045,25 @@ FindScrollBarInTree(parentHwnd, visibleOnly := true, requireRange := true) {
       If (InStr(_className, "ScrollBar")) {
         If (!requireRange)
           Return _child
-        ; Check if scrollbar has actual scroll range
+        ; Check if scrollbar has actual scroll range and is onscreen
         _si := GetScrollInfoObj(_child, 2, 0x3)
+        VarSetCapacity(_rect, 16, 0)
+        DllCall("GetWindowRect", "Ptr", _child, "Ptr", &_rect)
+        _sbL := NumGet(_rect, 0, "Int"), _sbT := NumGet(_rect, 4, "Int")
+        _sbR := NumGet(_rect, 8, "Int"), _sbB := NumGet(_rect, 12, "Int")
         If (Debug.Log["mbutton-drag"]) {
-          VarSetCapacity(_rect, 16, 0)
-          DllCall("GetWindowRect", "Ptr", _child, "Ptr", &_rect)
-          _sbL := NumGet(_rect, 0, "Int"), _sbT := NumGet(_rect, 4, "Int")
-          _sbR := NumGet(_rect, 8, "Int"), _sbB := NumGet(_rect, 12, "Int")
           _parent := DllCall("GetParent", "Ptr", _child, "Ptr")
           VarSetCapacity(_parentClass, 256)
           DllCall("GetClassName", "Ptr", _parent, "Str", _parentClass, "Int", 255)
           FileAppend, % TS() " | mbutton-drag | SCROLLBAR_FOUND | hwnd=" _child " parent=" _parentClass " ret=" _si.ret " min=" _si.min " max=" _si.max " page=" _si.page " rect=" _sbL "," _sbT "," _sbR "," _sbB "`n", % Debug.Log.Path
         }
-        If (_si.ret and _si.max - _si.min > _si.page)
+        ; Reject offscreen scrollbars (e.g. rect 0,-100,100,-90)
+        VarSetCapacity(_winRect, 16, 0)
+        DllCall("GetWindowRect", "Ptr", parentHwnd, "Ptr", &_winRect)
+        _winB := NumGet(_winRect, 12, "Int"), _winT := NumGet(_winRect, 4, "Int")
+        _winL := NumGet(_winRect, 0, "Int"), _winR := NumGet(_winRect, 8, "Int")
+        _onscreen := (_sbB > _winT and _sbT < _winB and _sbR > _winL and _sbL < _winR)
+        If (_si.ret and _si.max - _si.min > _si.page and _onscreen)
           Return _child
       }
       _found := FindScrollBarInTree(_child, visibleOnly, requireRange)
@@ -1229,12 +1245,32 @@ SendHWheel(target, curveValue, signedDist, originX, originY, multiplier := 1.0, 
   Return delta
 }
 
-SendVWheel(target, curveValue, signedDist, originX, originY) {
-  magnitude := Max(1, Min(119, Floor(curveValue / 2)))
-  delta := (signedDist > 0) ? -magnitude : magnitude
-  wParam := delta << 16
-  lParam := ((originY & 0xFFFF) << 16) | (originX & 0xFFFF)
-  PostMessage, 0x20A, %wParam%, %lParam%,, ahk_id %target%
+SendVWheel(target, curveValue, signedDist, originX, originY, useInput := 0) {
+  If (useInput) {
+    global MB
+    static _accumInput := 0.0
+    _increment := curveValue / 30.0
+    _accumInput += (signedDist > 0) ? -_increment : _increment
+    If (Abs(_accumInput) >= 30.0) {
+      delta := ((_accumInput > 0) ? 30 : -30)
+      _accumInput -= delta
+      If (MB.WheelRouting < 0) {
+        _prevRouting := 0
+        DllCall("SystemParametersInfo", "UInt", 0x201C, "UInt", 0, "Ptr*", _prevRouting, "UInt", 0)
+        MB.WheelRouting := _prevRouting
+        DllCall("SystemParametersInfo", "UInt", 0x201D, "UInt", 0, "Ptr", 0, "UInt", 0)
+      }
+      DllCall("mouse_event", "UInt", 0x0800, "Int", 0, "Int", 0, "Int", delta, "UPtr", 0)
+      Return delta
+    }
+    Return 0
+  } Else {
+    magnitude := Max(1, Min(119, Floor(curveValue / 2)))
+    delta := (signedDist > 0) ? -magnitude : magnitude
+    wParam := delta << 16
+    lParam := ((originY & 0xFFFF) << 16) | (originX & 0xFFFF)
+    PostMessage, 0x20A, %wParam%, %lParam%,, ahk_id %target%
+  }
   Return delta
 }
 
@@ -1587,10 +1623,17 @@ MB_EndSession() {
   MB_DismissCursor()
   MB_ReleaseUIA()
   MB_ReleaseScrollbar()
+  If (MB.WheelRouting >= 0) {
+    _restore := MB.WheelRouting
+    DllCall("SystemParametersInfo", "UInt", 0x201D, "UInt", 0, "Ptr", _restore, "UInt", 0)
+    MB.WheelRouting := -1
+  }
 }
 
 MB_Init() {
   global G_hSizeAll, G_hArrowDefault, G_hIBeamDefault
+  ; Ensure wheel routing is default (cursor position) in case a prior session didn't restore
+  DllCall("SystemParametersInfo", "UInt", 0x201D, "UInt", 0, "Ptr", 2, "UInt", 0)
   G_hSizeAll := DllCall("LoadCursor", "Ptr", 0, "Ptr", 32646, "Ptr")  ; IDC_SIZEALL
   EnvGet, _localAppData, LOCALAPPDATA
   _cursorsDir1 := _localAppData "\Microsoft\Windows\Cursors\"
