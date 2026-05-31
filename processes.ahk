@@ -121,18 +121,57 @@ GetProcessCwd(pid) {
 }
 
 ; ⇒ Get the CWD of a WT window's active shell child process
-GetTerminalCwd(wtPid) {
+; Strategy: collect all shell descendants, match CWD against window title for disambiguation
+GetTerminalCwd(wtPid, hwnd := 0) {
   _shells := "cmd.exe|pwsh.exe|powershell.exe|bash.exe|wsl.exe"
-  _bestCwd := ""
+  If (hwnd)
+    WinGetTitle, _wtTitle, ahk_id %hwnd%
+  Else
+    WinGetTitle, _wtTitle, ahk_pid %wtPid%
+
+  ; Collect all shell descendants of WT (direct children + children of OpenConsole)
+  _wmi := ComObjGet("winmgmts:")
+  _shellPids := []
   _query := "Select ProcessId,Name from Win32_Process where ParentProcessId=" . wtPid
-  For _proc in ComObjGet("winmgmts:").ExecQuery(_query) {
-    _name := _proc.Name
-    If !RegExMatch(_name, "i)^(" . _shells . ")$")
-      Continue
-    _cwd := GetProcessCwd(_proc.ProcessId)
-    If (_cwd != "" && !RegExMatch(_cwd, "i)^C:\\Windows"))
+  For _proc in _wmi.ExecQuery(_query) {
+    If RegExMatch(_proc.Name, "i)^(" . _shells . ")$")
+      _shellPids.Push(_proc.ProcessId)
+    Else {
+      ; Check grandchildren (e.g. OpenConsole → cmd.exe)
+      _subQ := "Select ProcessId,Name from Win32_Process where ParentProcessId=" . _proc.ProcessId
+      For _sub in _wmi.ExecQuery(_subQ)
+        If RegExMatch(_sub.Name, "i)^(" . _shells . ")$")
+          _shellPids.Push(_sub.ProcessId)
+    }
+  }
+
+  If (_shellPids.Length() = 0)
+    Return ""
+  If (_shellPids.Length() = 1)
+    Return GetProcessCwd(_shellPids[1])
+
+  ; Multiple shells — read all CWDs and disambiguate via window title
+  _cwds := {}
+  For _i, _pid in _shellPids {
+    _cwd := GetProcessCwd(_pid)
+    If (_cwd != "")
+      _cwds[_pid] := _cwd
+  }
+
+  ; Strip spinner/decoration from title, check if any CWD's directory name appears in title
+  _cleanTitle := RegExReplace(_wtTitle, "^[^\w]*\s*")
+  For _pid, _cwd in _cwds {
+    SplitPath, _cwd, _dirName
+    If (_dirName != "" && InStr(_cleanTitle, _dirName))
       Return _cwd
-    If (_cwd != "" && _bestCwd = "")
+  }
+
+  ; Fallback: first non-system CWD
+  _bestCwd := ""
+  For _pid, _cwd in _cwds {
+    If (!RegExMatch(_cwd, "i)^C:\\Windows"))
+      Return _cwd
+    If (_bestCwd = "")
       _bestCwd := _cwd
   }
   Return _bestCwd
