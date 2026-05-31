@@ -2,19 +2,22 @@
 ; ┃ WINDOWS TERMINAL FROM ANYWHERE ┃
 ; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 ; [ F10 ]                       -> Open current path
-; [ Ctrl + F10 ]                -> Run command in current path
+; [ Ctrl + F10 ]                -> Run primary command
 ; [ Shift + F10 ]               -> Open as admin
-; [ Ctrl + Shift + F10 ]        -> Run command as admin
+; [ Ctrl + Shift + F10 ]        -> Run secondary command
 ; [ Ctrl + Alt + Shift + F10 ]  -> Open current path as SYSTEM
+; [ Win + E ]                   -> Open Explorer at contextual path
 
 #IfWinActive ahk_exe WindowsTerminal.exe
   ^F4::Send ^+w
 #IfWinActive
 
+#e::OpenExplorer()
+
 F10::OpenTerminal({})
-^F10::OpenTerminal({cmd: TA.CtrlCmd})
+^F10::OpenTerminal({cmd: TA.PrimaryCmd})
 +F10::OpenTerminal({elevate: true})
-^+F10::OpenTerminal({elevate: true, cmd: TA.CtrlCmd})
+^+F10::OpenTerminal({cmd: TA.SecondaryCmd})
 ^!+F10:: ; [ Ctrl + Alt + Shift + F10 ] -> Open current path as SYSTEM
   _dir := GetTerminalDir()
   ; Resolve wt.exe to full path — SYSTEM context lacks user PATH entries
@@ -41,7 +44,8 @@ Return
 TerminalInit() {
   global TA, Debug
   TA := {}
-  TA.CtrlCmd := FindInPath("claude")
+  TA.PrimaryCmd := FindInPath("claude")
+  TA.SecondaryCmd := FindInPath("cl")
   TA.WTProfile := GetWTFirstProfile()
   if (Debug.Log["terminal-anywhere"])
     FileAppend, % TS() . " | terminal-anywhere | " . "TerminalInit: WTProfile=" . TA.WTProfile . "`n", % Debug.Log.Path
@@ -232,4 +236,64 @@ GetWTFirstProfile() {
     }
   }
   Return ""
+}
+
+; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+; ┃ EXPLORER FROM ANYWHERE (Win+E contextual) ┃
+; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+OpenExplorer() {
+  global Debug
+  WinGetClass, _class, A
+
+  ; Explorer — open desktop namespace root
+  If (_class = "CabinetWClass") {
+    ComObjCreate("Shell.Application").Explore(0)
+    Return
+  }
+
+  ; Terminal — get CWD from shell child process
+  If (_class = "CASCADIA_HOSTING_WINDOW_CLASS") {
+    WinGet, _pid, PID, A
+    _path := GetTerminalCwd(_pid)
+  } Else {
+    ; Other apps — try extracting a path from the title bar
+    _path := GetTitleBarPath()
+  }
+
+  ; No path found — open desktop namespace root
+  If (!_path) {
+    ComObjCreate("Shell.Application").Explore(0)
+    Return
+  }
+
+  ; Activate existing Explorer window at this path instead of opening a new one
+  If (_ActivateExplorerAt(_path))
+    Return
+
+  Run, explorer "%_path%"
+}
+
+_ActivateExplorerAt(targetPath) {
+  static shell := ComObjCreate("Shell.Application")
+  _target := RTrim(targetPath, "\")
+  For window in shell.Windows {
+    Try _wPath := window.Document.Folder.Self.Path
+    Catch
+      Continue
+    If (_wPath = "" || InStr(_wPath, "::"))
+      Continue
+    If (RTrim(_wPath, "\") = _target) {
+      _hwnd := window.hwnd
+      WinActivate, ahk_id %_hwnd%
+      If (IsFunc("WS_MoveToMonitor")) {
+        _winMon := GetMonitor("ahk_id " . _hwnd)
+        _curMon := GetCursorMonitor()
+        If (_winMon != _curMon)
+          WS_MoveToMonitor(_hwnd, _winMon, _curMon)
+      }
+      Return true
+    }
+  }
+  Return false
 }
