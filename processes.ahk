@@ -86,6 +86,58 @@ ProcessExistsByCommandLine(cmdLine) {
   Return 0
 }
 
+; ⇒ Read a process's current working directory via PEB walk (x64 only)
+GetProcessCwd(pid) {
+  hProc := DllCall("OpenProcess"
+    , "UInt", 0x0410, "Int", 0, "UInt", pid, "Ptr")  ; QUERY_INFORMATION | VM_READ
+  If (!hProc)
+    Return ""
+  Try {
+    VarSetCapacity(_pbi, 48, 0)
+    _status := DllCall("ntdll\NtQueryInformationProcess"
+      , "Ptr", hProc, "Int", 0, "Ptr", &_pbi, "UInt", 48, "UInt*", 0, "UInt")
+    If (_status != 0)
+      Return ""
+    _peb := NumGet(_pbi, 8, "Ptr")
+    VarSetCapacity(_buf, 8, 0)
+    DllCall("ReadProcessMemory"
+      , "Ptr", hProc, "Ptr", _peb + 0x20, "Ptr", &_buf, "Ptr", 8, "Ptr*", 0)
+    _procParams := NumGet(_buf, 0, "Ptr")
+    ; CurrentDirectory.DosPath is a UNICODE_STRING at offset 0x38
+    VarSetCapacity(_us, 16, 0)
+    DllCall("ReadProcessMemory"
+      , "Ptr", hProc, "Ptr", _procParams + 0x38, "Ptr", &_us, "Ptr", 16, "Ptr*", 0)
+    _len := NumGet(_us, 0, "UShort")
+    _bufPtr := NumGet(_us, 8, "Ptr")
+    If (!_len || !_bufPtr)
+      Return ""
+    VarSetCapacity(_cwd, _len + 2, 0)
+    DllCall("ReadProcessMemory"
+      , "Ptr", hProc, "Ptr", _bufPtr, "Ptr", &_cwd, "Ptr", _len, "Ptr*", 0)
+    Return RTrim(StrGet(&_cwd, _len // 2, "UTF-16"), "\")
+  } Finally {
+    DllCall("CloseHandle", "Ptr", hProc)
+  }
+}
+
+; ⇒ Get the CWD of a WT window's active shell child process
+GetTerminalCwd(wtPid) {
+  _shells := "cmd.exe|pwsh.exe|powershell.exe|bash.exe|wsl.exe"
+  _bestCwd := ""
+  _query := "Select ProcessId,Name from Win32_Process where ParentProcessId=" . wtPid
+  For _proc in ComObjGet("winmgmts:").ExecQuery(_query) {
+    _name := _proc.Name
+    If !RegExMatch(_name, "i)^(" . _shells . ")$")
+      Continue
+    _cwd := GetProcessCwd(_proc.ProcessId)
+    If (_cwd != "" && !RegExMatch(_cwd, "i)^C:\\Windows"))
+      Return _cwd
+    If (_cwd != "" && _bestCwd = "")
+      _bestCwd := _cwd
+  }
+  Return _bestCwd
+}
+
 IsProcessElevated(pid) {
   hProcess := DllCall("OpenProcess", "UInt", 0x0400, "Int", false, "UInt", pid, "Ptr")  ; PROCESS_QUERY_INFORMATION
   If (!hProcess)

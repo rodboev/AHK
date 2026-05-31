@@ -183,6 +183,20 @@ FormatWindowInfo(info) {
     If (_expPath != "")
       s .= "ExplorerPath: " . _expPath . "`n"
   }
+  If (IsFunc("GetProcessCwd")) {
+    If (info.class = "CASCADIA_HOSTING_WINDOW_CLASS" && IsFunc("GetTerminalCwd")) {
+      _cwd := GetTerminalCwd(info.pid)
+      s .= "TerminalCwd: " . (_cwd ? _cwd : "(none)") . "`n"
+    } Else {
+      _cwd := GetProcessCwd(info.pid)
+      s .= "ProcessCwd: " . (_cwd ? _cwd : "(none)") . "`n"
+    }
+    If (IsFunc("GetTitleBarPath")) {
+      _tbPath := GetTitleBarPath()
+      If (_tbPath)
+        s .= "TitleBarPath: " . _tbPath . "`n"
+    }
+  }
   s .= "`n"
   ; Path/Process group
   s .= "Command line: " . WrapList(info.cmdLine, " ") . "`n"
