@@ -47,6 +47,9 @@ TerminalInit() {
   TA.PrimaryCmd := FindInPath("claude")
   TA.SecondaryCmd := FindInPath("cl")
   TA.WTProfile := GetWTFirstProfile()
+  TA.WindowCwd := {}
+  TA.PendingCwd := ""
+  TA.PendingTime := 0
   if (Debug.Log["terminal-anywhere"])
     FileAppend, % TS() . " | terminal-anywhere | " . "TerminalInit: WTProfile=" . TA.WTProfile . "`n", % Debug.Log.Path
 }
@@ -87,7 +90,217 @@ OpenTerminal(opts) {
   if (Debug.Log["terminal-anywhere"])
     FileAppend, % TS() . " | terminal-anywhere | " . "OpenTerminal: elevate=" . (opts.elevate ? "true" : "false") . " cmd=" . (opts.cmd ? opts.cmd : "") . " dir=" . _dir . "`n", % Debug.Log.Path
 
+  ; Store pending CWD so we can map the new window HWND when it appears
+  TA.PendingCwd := _dir
+  TA.PendingTime := A_TickCount
+  TA.ExistingHwnds := _GetWTHwnds()
   UserRun(_args*)
+  SetTimer, _TA_CaptureNewWindow, -100
+}
+
+_TA_CaptureNewWindow:
+  global TA, Debug
+  If (A_TickCount - TA.PendingTime > 5000) {
+    if (Debug.Log["terminal-anywhere"])
+      FileAppend, % TS() . " | terminal-anywhere | " . "CaptureNewWindow: timed out`n", % Debug.Log.Path
+    Return
+  }
+  _newHwnds := _GetWTHwnds()
+  For _i, _h in _newHwnds {
+    _found := false
+    For _j, _existing in TA.ExistingHwnds
+      If (_h + 0 = _existing + 0)
+        _found := true
+    If (!_found) {
+      TA.WindowCwd[_h + 0] := TA.PendingCwd
+      if (Debug.Log["terminal-anywhere"])
+        FileAppend, % TS() . " | terminal-anywhere | " . "CaptureNewWindow: mapped hwnd=" . _h . " -> " . TA.PendingCwd . "`n", % Debug.Log.Path
+      TA.PendingCwd := ""
+      Return
+    }
+  }
+  ; Window not yet created, retry
+  SetTimer, _TA_CaptureNewWindow, -200
+Return
+
+_GetWTHwnds() {
+  _hwnds := []
+  WinGet, _list, List, ahk_class CASCADIA_HOSTING_WINDOW_CLASS
+  Loop, %_list% {
+    _hwnds.Push(_list%A_Index%)
+  }
+  Return _hwnds
+}
+
+; ⇒ Get terminal CWD by reading visible content via UIA TextPattern
+; Matches on %PROMPT% and the folder emoji
+GetTerminalCwdFromContent(hwnd) {
+  global G_UIA, Debug
+  If (!G_UIA) {
+    G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}"
+      , "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
+    If (!G_UIA)
+      Return ""
+  }
+  ; Find the TermControl element (has TextPattern) via FindFirst with ClassName condition
+  ; IUIAutomation::ElementFromHandle (vtable 6)
+  _root := 0
+  DllCall(NumGet(NumGet(G_UIA+0)+6*A_PtrSize), "Ptr", G_UIA, "Ptr", hwnd, "Ptr*", _root)
+  If (!_root) {
+    if (Debug.Log["terminal-anywhere"])
+      FileAppend, % TS() . " | terminal-anywhere | " . "CwdFromContent: FAILED at ElementFromHandle`n", % Debug.Log.Path
+    Return ""
+  }
+  ; IUIAutomation::CreatePropertyCondition (vtable 23)
+  ; UIA_ClassNamePropertyId = 30012, value = "TermControl"
+  _cond := 0
+  VarSetCapacity(_var, 24, 0)
+  NumPut(8, _var, 0, "UShort")  ; VT_BSTR
+  _bstrClass := DllCall("OleAut32\SysAllocString", "Str", "TermControl", "Ptr")
+  NumPut(_bstrClass, _var, 8, "Ptr")
+  DllCall(NumGet(NumGet(G_UIA+0)+23*A_PtrSize), "Ptr", G_UIA, "Int", 30012, "Ptr", &_var, "Ptr*", _cond)
+  DllCall("OleAut32\SysFreeString", "Ptr", _bstrClass)
+  If (!_cond) {
+    ObjRelease(_root)
+    if (Debug.Log["terminal-anywhere"])
+      FileAppend, % TS() . " | terminal-anywhere | " . "CwdFromContent: FAILED at CreatePropertyCondition`n", % Debug.Log.Path
+    Return ""
+  }
+  ; IUIAutomationElement::FindFirst (vtable 5), scope=Descendants(4)
+  _el := 0
+  DllCall(NumGet(NumGet(_root+0)+5*A_PtrSize), "Ptr", _root, "Int", 4, "Ptr", _cond, "Ptr*", _el)
+  ObjRelease(_cond)
+  ObjRelease(_root)
+  If (!_el) {
+    if (Debug.Log["terminal-anywhere"])
+      FileAppend, % TS() . " | terminal-anywhere | " . "CwdFromContent: FAILED FindFirst(TermControl)`n", % Debug.Log.Path
+    Return ""
+  }
+  ; GetCurrentPattern(UIA_TextPatternId = 10014)
+  _textPat := 0
+  DllCall(NumGet(NumGet(_el+0)+16*A_PtrSize), "Ptr", _el, "Int", 10014, "Ptr*", _textPat)
+  ObjRelease(_el)
+  If (!_textPat) {
+    if (Debug.Log["terminal-anywhere"])
+      FileAppend, % TS() . " | terminal-anywhere | " . "CwdFromContent: FAILED GetCurrentPattern on TermControl`n", % Debug.Log.Path
+    Return ""
+  }
+  ; GetVisibleRanges (vtable 6) — only reads on-screen text, much faster than full buffer
+  _rangeArray := 0
+  DllCall(NumGet(NumGet(_textPat+0)+6*A_PtrSize), "Ptr", _textPat, "Ptr*", _rangeArray)
+  ObjRelease(_textPat)
+  If (!_rangeArray) {
+    if (Debug.Log["terminal-anywhere"])
+      FileAppend, % TS() . " | terminal-anywhere | " . "CwdFromContent: FAILED at GetVisibleRanges`n", % Debug.Log.Path
+    Return ""
+  }
+  ; IUIAutomationTextRangeArray::get_Length (vtable 3), GetElement (vtable 4)
+  _len := 0
+  DllCall(NumGet(NumGet(_rangeArray+0)+3*A_PtrSize), "Ptr", _rangeArray, "Int*", _len)
+  _text := ""
+  Loop %_len% {
+    _range := 0
+    DllCall(NumGet(NumGet(_rangeArray+0)+4*A_PtrSize), "Ptr", _rangeArray, "Int", A_Index - 1, "Ptr*", _range)
+    If (!_range)
+      Continue
+    _bstr := 0
+    DllCall(NumGet(NumGet(_range+0)+12*A_PtrSize), "Ptr", _range, "Int", -1, "Ptr*", _bstr)
+    ObjRelease(_range)
+    If (_bstr) {
+      _text .= StrGet(_bstr, "UTF-16")
+      DllCall("OleAut32\SysFreeString", "Ptr", _bstr)
+    }
+  }
+  ObjRelease(_rangeArray)
+  If (_text = "") {
+    if (Debug.Log["terminal-anywhere"])
+      FileAppend, % TS() . " | terminal-anywhere | " . "CwdFromContent: FAILED empty visible text`n", % Debug.Log.Path
+    Return ""
+  }
+  _folderEmoji := Chr(0xD83D) . Chr(0xDCC1)
+  if (Debug.Log["terminal-anywhere"])
+    FileAppend, % TS() . " | terminal-anywhere | " . "CwdFromContent: textLen=" . StrLen(_text) . " has📁=" . (InStr(_text, _folderEmoji) ? "yes" : "no") . "`n", % Debug.Log.Path
+
+  ; Match last folder emoji: `📁 <dirName>`
+  ; Search via surrogate pair (U+1F4C1 = 0xD83D 0xDCC1) since AHK v1.1 InStr fails on 4-byte emoji
+  _folderEmoji := Chr(0xD83D) . Chr(0xDCC1)
+  _pos := 1
+  _dirName := ""
+  While (_pos := InStr(_text, _folderEmoji, false, _pos)) {
+    _lineEnd := InStr(_text, "`n", false, _pos)
+    _after := SubStr(_text, _pos + 3, _lineEnd ? _lineEnd - _pos - 3 : 200)
+    _after := Trim(RegExReplace(_after, "\s+$"))
+    ; Extract directory name (everything before " (branch)")
+    If RegExMatch(_after, "^(.+?) \(", _m)
+      _dirName := _m1
+    Else If RegExMatch(_after, "^(\S+)", _m)
+      _dirName := _m1
+    _pos += 3
+  }
+  If (_dirName) {
+    ; Search PATH parent directories for this name (non-recursive)
+    EnvGet, _pathVar, PATH
+    Loop, Parse, _pathVar, `;
+    {
+      If (A_LoopField = "")
+        Continue
+      SplitPath, A_LoopField,, _parent
+      If (_parent = "")
+        _parent := A_LoopField
+      _candidate := RTrim(_parent, "\") . "\" . _dirName
+      If (InStr(FileExist(_candidate), "D")) {
+        if (Debug.Log["terminal-anywhere"])
+          FileAppend, % TS() . " | terminal-anywhere | " . "CwdFromContent: dir=" . _dirName . " resolved=" . _candidate . "`n", % Debug.Log.Path
+        Return _candidate
+      }
+    }
+  }
+
+  ; Fallback: Match last path in the form of %PROMPT%
+  _lastPath := ""
+  _pos := 1
+  While (_pos := RegExMatch(_text, "m)^([A-Za-z]:\\[^\r\n""<>|*?]+)> ", _m, _pos)) {
+    _candidate := RTrim(_m1, " .\t")
+    If (InStr(FileExist(_candidate), "D"))
+      _lastPath := _candidate
+    _pos += StrLen(_m)
+  }
+  if (Debug.Log["terminal-anywhere"])
+    FileAppend, % TS() . " | terminal-anywhere | " . "CwdFromContent: fallback path=" . (_lastPath ? _lastPath : "(none)") . "`n", % Debug.Log.Path
+  Return _lastPath
+}
+
+; ⇒ Get terminal CWD via tab duplication trick (flashes a new tab)
+GetTerminalCwdViaDup() {
+  global Debug
+  KeyWait, LWin
+  _savedClip := ClipboardAll
+  Clipboard := ""
+  WinGetTitle, _origTitle, A
+  Send ^+d
+  Loop 10 {
+    Sleep 10
+    WinGetTitle, _title, A
+    If (_title != _origTitle)
+      Break
+  }
+  If (_title = _origTitle) {
+    Send ^+w
+    Clipboard := _savedClip
+    _savedClip := ""
+    if (Debug.Log["terminal-anywhere"])
+      FileAppend, % TS() . " | terminal-anywhere | " . "GetTerminalCwdViaDup: FAILED (no tab switch signal)`n", % Debug.Log.Path
+    Return ""
+  }
+  SendInput cd | clip{Enter}
+  ClipWait, 1
+  Send ^+w
+  _cwd := RTrim(Clipboard, "`r`n ")
+  Clipboard := _savedClip
+  _savedClip := ""
+  if (Debug.Log["terminal-anywhere"])
+    FileAppend, % TS() . " | terminal-anywhere | " . "GetTerminalCwdViaDup: result=" . _cwd . "`n", % Debug.Log.Path
+  Return _cwd
 }
 
 ; ╔══════════════════════════════════════════════════════════════════════════╗
@@ -243,7 +456,8 @@ GetWTFirstProfile() {
 ; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
 OpenExplorer() {
-  global Debug
+  global TA, Debug
+  KeyWait, LWin
   WinGetClass, _class, A
 
   ; Explorer — open desktop namespace root
@@ -252,26 +466,52 @@ OpenExplorer() {
     Return
   }
 
-  ; Terminal — get CWD from shell child process
+  ; Terminal — use stored mapping if available, otherwise dup trick
   If (_class = "CASCADIA_HOSTING_WINDOW_CLASS") {
-    WinGet, _pid, PID, A
-    _path := GetTerminalCwd(_pid)
+    WinGet, _hwnd, ID, A
+    _path := TA.WindowCwd.HasKey(_hwnd + 0) ? TA.WindowCwd[_hwnd + 0] : ""
+    If (!_path) {
+      _path := GetTerminalCwdFromContent(_hwnd)
+      If (_path)
+        TA.WindowCwd[_hwnd + 0] := _path
+    }
+    If (!_path) {
+      _path := GetTerminalCwdViaDup()
+      If (_path)
+        TA.WindowCwd[_hwnd + 0] := _path
+    }
+    if (Debug.Log["terminal-anywhere"])
+      FileAppend, % TS() . " | terminal-anywhere | " . "OpenExplorer: path=" . (_path ? _path : "(none)") . " source=" . (TA.WindowCwd.HasKey(_hwnd + 0) ? "stored" : "dup") . "`n", % Debug.Log.Path
+    If (!_path) {
+      if (Debug.Log["terminal-anywhere"])
+        FileAppend, % TS() . " | terminal-anywhere | " . "OpenExplorer: FAILED (no terminal CWD)`n", % Debug.Log.Path
+      Return
+    }
   } Else {
     ; Other apps — try extracting a path from the title bar
     _path := GetTitleBarPath()
+    if (Debug.Log["terminal-anywhere"])
+      FileAppend, % TS() . " | terminal-anywhere | " . "OpenExplorer: titlebar=" . (_path ? _path : "(none)") . "`n", % Debug.Log.Path
   }
 
-  ; No path found — open desktop namespace root
-  If (!_path) {
+  ; No path found or path is Desktop — open namespace root
+  If (!_path || _path = A_Desktop) {
+    if (Debug.Log["terminal-anywhere"])
+      FileAppend, % TS() . " | terminal-anywhere | " . "OpenExplorer: namespace root (path=" . (_path ? _path : "none") . ")`n", % Debug.Log.Path
     ComObjCreate("Shell.Application").Explore(0)
     Return
   }
 
   ; Activate existing Explorer window at this path instead of opening a new one
-  If (_ActivateExplorerAt(_path))
+  If (_ActivateExplorerAt(_path)) {
+    if (Debug.Log["terminal-anywhere"])
+      FileAppend, % TS() . " | terminal-anywhere | " . "OpenExplorer: activated existing at " . _path . "`n", % Debug.Log.Path
     Return
+  }
 
-  Run, explorer "%_path%"
+  if (Debug.Log["terminal-anywhere"])
+    FileAppend, % TS() . " | terminal-anywhere | " . "OpenExplorer: opening new at " . _path . "`n", % Debug.Log.Path
+  UserRun("explorer", _path)
 }
 
 _ActivateExplorerAt(targetPath) {
