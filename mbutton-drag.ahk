@@ -285,6 +285,14 @@
     }
   }
 
+  ; Electron apps: no UIA pattern, no scrollbar -> pass through to native MButton handling
+  If (!_hasScrollRange and !MB.UIA.Pattern and MB.WinClass = "Chrome_WidgetWin_1") {
+    MB.Disabled := 1
+    If (Debug.Log["mbutton-drag"])
+      FileAppend, % TS() " | mbutton-drag | PASSTHROUGH | noPattern noScrollBar chrome=1 proc=" MB.ProcName "`n", % Debug.Log.Path
+    Return
+  }
+
   ; For UWP/XAML apps (Windows Terminal, etc.): walk UIA tree from cursor position
   ; ElementFromHandle on the window doesn't find XAML ScrollViewers, but ElementFromPoint does
   ; Search UIA tree for scrollability (works for UWP/XAML apps like Windows Terminal)
