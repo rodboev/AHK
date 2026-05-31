@@ -184,9 +184,14 @@ FormatWindowInfo(info) {
       s .= "ExplorerPath: " . _expPath . "`n"
   }
   If (IsFunc("GetProcessCwd")) {
-    If (info.class = "CASCADIA_HOSTING_WINDOW_CLASS" && IsFunc("GetTerminalCwd")) {
-      _cwd := GetTerminalCwd(info.pid)
-      s .= "TerminalCwd: " . (_cwd ? _cwd : "(none)") . "`n"
+    If (info.class = "CASCADIA_HOSTING_WINDOW_CLASS") {
+      If (IsObject(TA) && TA.WindowCwd.HasKey(info.hwnd + 0))
+        s .= "StoredCwd: " . TA.WindowCwd[info.hwnd + 0] . "`n"
+      If (IsFunc("GetTerminalCwdFromContent")) {
+        _contentCwd := GetTerminalCwdFromContent(info.hwnd)
+        If (_contentCwd)
+          s .= "TerminalCwd: " . _contentCwd . "`n"
+      }
     } Else {
       _cwd := GetProcessCwd(info.pid)
       s .= "ProcessCwd: " . (_cwd ? _cwd : "(none)") . "`n"
@@ -228,7 +233,7 @@ FormatWindowInfo(info) {
       s .= "  AutomationId: " . WrapList(info.uia.autoId, ",", 90, ", ") . "`n"
     If (info.uia.className != "")
       s .= "  ClassName: " . info.uia.className . "`n"
-    If (info.HasKey("scrollPattern"))
+    If (info.HasKey("scrollPattern") && info.scrollPattern)
       s .= "  ScrollPattern: " . info.scrollPattern . "`n"
   }
   s .= "`n"
