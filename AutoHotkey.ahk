@@ -26,7 +26,8 @@ Debug := { Tooltips: {"scroll-accel": 0
   , "mbutton-drag": 0
   , "window-spawning": 0
   , "terminal-anywhere": 0
-  , "image-paste": 0 }}
+  , "image-paste": 0
+  , "tab-search": 0 }}
 
 FileDelete, % Debug.Log.Path
 
@@ -64,7 +65,14 @@ TS() {
 Return
 +!e:: ; [ Shift+Alt+E ] -> Edit AHK scripts in Sublime
   KeyWait, Shift
-  UserRun("subl.exe", "-n", A_ScriptDir "\*.ahk")
+  SetTitleMatchMode, RegEx
+  _sublTitle := "ahk_exe sublime_text.exe"
+  If (WinExist("\.ahk.*Sublime Text " _sublTitle)) {
+    WinActivate
+  } Else {
+    UserRun("subl.exe", "-n", A_ScriptDir "\*.ahk")
+  }
+  SetTitleMatchMode, 1
 Return
 #IfWinActive .ahk
   ~^s::Reload ; [ Ctrl+S ] -> Reload script on save (in any editor)
@@ -87,6 +95,11 @@ Return
   Return
   +!d::Send {Alt Down}f{AltUp}e{Ctrl Down} ; [ Ctrl+Alt+D] -> Duplicate line
 #IfWinActive
+
+; Chrome — backtick opens tab search unless focused on a text input
+#If (WinActive("ahk_exe chrome.exe") && !ChromeFocusedOnEdit())
+  `::Send ^+a
+#If
 
 ; ⇒ VSCode + forks
 #If (WinActive("ahk_exe code.exe") OR WinActive("ahk_exe vscodium.exe") OR WinActive("ahk_exe Cursor.app.exe"))
@@ -470,6 +483,54 @@ G_UIACleanup() {
     ObjRelease(G_UIA)
     G_UIA := 0
   }
+}
+
+ChromeFocusedOnEdit() {
+  global G_UIA, Debug
+  If (!G_UIA) {
+    G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
+    OnExit("G_UIACleanup")
+  }
+  _el := 0
+  ; IUIAutomation::GetFocusedElement (vtable 8)
+  DllCall(NumGet(NumGet(G_UIA+0) + 8*A_PtrSize), "Ptr", G_UIA, "Ptr*", _el)
+  If (!_el) {
+    if (Debug.Log["tab-search"])
+      FileAppend, % TS() " | tab-search | no focused element | result=false`n", % Debug.Log.Path
+    Return false
+  }
+  _ct := 0
+  _name := ""
+  _className := ""
+  Try {
+    VarSetCapacity(_var, 24, 0)
+    ; UIA_ControlTypePropertyId = 30003
+    DllCall("OleAut32\VariantInit", "Ptr", &_var)
+    DllCall(NumGet(NumGet(_el+0) + 10*A_PtrSize), "Ptr", _el, "Int", 30003, "Ptr", &_var)
+    _ct := NumGet(_var, 8, "Int")
+    DllCall("OleAut32\VariantClear", "Ptr", &_var)
+    ; UIA_NamePropertyId = 30005
+    DllCall("OleAut32\VariantInit", "Ptr", &_var)
+    DllCall(NumGet(NumGet(_el+0) + 10*A_PtrSize), "Ptr", _el, "Int", 30005, "Ptr", &_var)
+    _vt := NumGet(_var, 0, "UShort")
+    if (_vt = 8)
+      _name := StrGet(NumGet(_var, 8, "Ptr"), "UTF-16")
+    DllCall("OleAut32\VariantClear", "Ptr", &_var)
+    ; UIA_ClassNamePropertyId = 30012
+    DllCall("OleAut32\VariantInit", "Ptr", &_var)
+    DllCall(NumGet(NumGet(_el+0) + 10*A_PtrSize), "Ptr", _el, "Int", 30012, "Ptr", &_var)
+    _vt := NumGet(_var, 0, "UShort")
+    if (_vt = 8)
+      _className := StrGet(NumGet(_var, 8, "Ptr"), "UTF-16")
+    DllCall("OleAut32\VariantClear", "Ptr", &_var)
+  } Finally {
+    ObjRelease(_el)
+  }
+  ; Edit=50004 (inputs, omnibox), ComboBox=50003 (editable dropdowns)
+  _isEdit := (_ct = 50004 || _ct = 50003)
+  if (Debug.Log["tab-search"])
+    FileAppend, % TS() " | tab-search | ct=" _ct " name=" _name " class=" _className " | result=" (_isEdit ? "true" : "false") "`n", % Debug.Log.Path
+  Return _isEdit
 }
 
 ; ⇒ Get the UIA content process PID for a window (resolves host vs content for UWP/Electron)
