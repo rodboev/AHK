@@ -10,6 +10,52 @@
 
 #IfWinActive ahk_exe WindowsTerminal.exe
   ^F4::Send ^+w
+  +Enter::
+    ControlGetFocus, _ctrl, A
+    If (InStr(_ctrl, "Windows.UI."))
+      Send ^j
+    Else
+      Send +{Enter}
+  Return
+  F10::Send ^+d
+  +F10::
+    WinGet, _pid, PID, A
+    If (IsProcessElevated(_pid)) {
+      Send ^+d
+      Return
+    }
+    WinGet, _hwnd, ID, A
+    _dir := TA.WindowCwd.HasKey(_hwnd + 0) ? TA.WindowCwd[_hwnd + 0] : ""
+    If (!_dir)
+      _dir := GetTerminalCwd(_pid, _hwnd)
+    If (!_dir)
+      _dir := GetTerminalCwdFromContent(_hwnd)
+    If (!_dir)
+      _dir := GetTerminalCwdViaDup()
+    If (!_dir)
+      _dir := A_Desktop
+    _args := ["elevate", "wt"]
+    If (TA.WTProfile) {
+      _args.Push("-p")
+      _args.Push(TA.WTProfile)
+    }
+    _args.Push("-d")
+    _args.Push(_dir)
+    UserRun(_args*)
+  Return
+  ^F10::
+    Send ^+d
+    Sleep 10
+    KeyWait, Ctrl
+    SendInput % TA.PrimaryCmd . "{Enter}"
+  Return
+  ^+F10::
+    Send ^+d
+    Sleep 10
+    KeyWait, Ctrl
+    KeyWait, Shift
+    SendInput % TA.SecondaryCmd . "{Enter}"
+  Return
 #IfWinActive
 
 #e::OpenExplorer()
@@ -44,8 +90,8 @@ Return
 TerminalInit() {
   global TA, Debug
   TA := {}
-  TA.PrimaryCmd := FindInPath("claude")
-  TA.SecondaryCmd := FindInPath("cl")
+  TA.PrimaryCmd := FindInPath("codex.cmd")
+  TA.SecondaryCmd := FindInPath("claude.cmd")
   TA.WTProfile := GetWTFirstProfile()
   TA.WindowCwd := {}
   TA.PendingCwd := ""
@@ -58,18 +104,6 @@ OpenTerminal(opts) {
   ; opts := {elevate: bool, claude: bool}
 
   global TA, Debug
-
-  ; When active window is Windows Terminal and not launching Claude, duplicate the tab
-  WinGetClass, _class, A
-  If (_class = "CASCADIA_HOSTING_WINDOW_CLASS" && !opts.cmd) {
-    if (Debug.Log["terminal-anywhere"])
-      FileAppend, % TS() . " | terminal-anywhere | " . "OpenTerminal: duplicating tab (active window is WT)`n", % Debug.Log.Path
-    If (opts.elevate)
-      Send ^+t
-    Else
-      Send ^+d
-    Return
-  }
 
   _dir := GetTerminalDir()
   _args := []
@@ -237,6 +271,8 @@ GetTerminalCwdFromContent(hwnd) {
       _dirName := _m1
     _pos += 3
   }
+  if (Debug.Log["terminal-anywhere"])
+    FileAppend, % TS() . " | terminal-anywhere | " . "CwdFromContent: dirName=" . (_dirName ? _dirName : "(none)") . "`n", % Debug.Log.Path
   If (_dirName) {
     ; Search PATH parent directories for this name (non-recursive)
     EnvGet, _pathVar, PATH
@@ -276,23 +312,9 @@ GetTerminalCwdViaDup() {
   KeyWait, LWin
   _savedClip := ClipboardAll
   Clipboard := ""
-  WinGetTitle, _origTitle, A
   Send ^+d
-  Loop 10 {
-    Sleep 10
-    WinGetTitle, _title, A
-    If (_title != _origTitle)
-      Break
-  }
-  If (_title = _origTitle) {
-    Send ^+w
-    Clipboard := _savedClip
-    _savedClip := ""
-    if (Debug.Log["terminal-anywhere"])
-      FileAppend, % TS() . " | terminal-anywhere | " . "GetTerminalCwdViaDup: FAILED (no tab switch signal)`n", % Debug.Log.Path
-    Return ""
-  }
-  SendInput cd | clip{Enter}
+  Sleep 10
+  SendInput cd.| clip{Enter}
   ClipWait, 1
   Send ^+w
   _cwd := RTrim(Clipboard, "`r`n ")
@@ -460,32 +482,47 @@ OpenExplorer() {
   KeyWait, LWin
   WinGetClass, _class, A
 
-  ; Explorer — open desktop namespace root
+  ; Explorer — open new Explorer window
   If (_class = "CabinetWClass") {
-    ComObjCreate("Shell.Application").Explore(0)
+    if (Debug.Log["terminal-anywhere"])
+      FileAppend, % TS() . " | terminal-anywhere | " . "OpenExplorer: from Explorer, opening new window`n", % Debug.Log.Path
+    Run explorer
     Return
   }
 
-  ; Terminal — use stored mapping if available, otherwise dup trick
+  ; Terminal — stored mapping → process CWD → visible content → dup trick
   If (_class = "CASCADIA_HOSTING_WINDOW_CLASS") {
     WinGet, _hwnd, ID, A
+    WinGet, _wtPid, PID, A
     _path := TA.WindowCwd.HasKey(_hwnd + 0) ? TA.WindowCwd[_hwnd + 0] : ""
+    _source := "stored"
+    if (Debug.Log["terminal-anywhere"] && _path)
+      FileAppend, % TS() . " | terminal-anywhere | " . "OpenExplorer: stored=" . _path . "`n", % Debug.Log.Path
+    If (!_path) {
+      _path := GetTerminalCwd(_wtPid, _hwnd)
+      _source := "process"
+      if (Debug.Log["terminal-anywhere"])
+        FileAppend, % TS() . " | terminal-anywhere | " . "OpenExplorer: GetTerminalCwd=" . (_path ? _path : "(none)") . "`n", % Debug.Log.Path
+    }
     If (!_path) {
       _path := GetTerminalCwdFromContent(_hwnd)
-      If (_path)
-        TA.WindowCwd[_hwnd + 0] := _path
+      _source := "content"
+      if (Debug.Log["terminal-anywhere"])
+        FileAppend, % TS() . " | terminal-anywhere | " . "OpenExplorer: GetTerminalCwdFromContent=" . (_path ? _path : "(none)") . "`n", % Debug.Log.Path
     }
     If (!_path) {
       _path := GetTerminalCwdViaDup()
-      If (_path)
-        TA.WindowCwd[_hwnd + 0] := _path
+      _source := "dup"
+      if (Debug.Log["terminal-anywhere"])
+        FileAppend, % TS() . " | terminal-anywhere | " . "OpenExplorer: GetTerminalCwdViaDup=" . (_path ? _path : "(none)") . "`n", % Debug.Log.Path
     }
+    If (_path)
+      TA.WindowCwd[_hwnd + 0] := _path
     if (Debug.Log["terminal-anywhere"])
-      FileAppend, % TS() . " | terminal-anywhere | " . "OpenExplorer: path=" . (_path ? _path : "(none)") . " source=" . (TA.WindowCwd.HasKey(_hwnd + 0) ? "stored" : "dup") . "`n", % Debug.Log.Path
+      FileAppend, % TS() . " | terminal-anywhere | " . "OpenExplorer: result path=" . (_path ? _path : "(none)") . " source=" . _source . "`n", % Debug.Log.Path
     If (!_path) {
       if (Debug.Log["terminal-anywhere"])
-        FileAppend, % TS() . " | terminal-anywhere | " . "OpenExplorer: FAILED (no terminal CWD)`n", % Debug.Log.Path
-      Return
+        FileAppend, % TS() . " | terminal-anywhere | " . "OpenExplorer: no terminal CWD, falling through to namespace root`n", % Debug.Log.Path
     }
   } Else {
     ; Other apps — try extracting a path from the title bar
@@ -494,11 +531,11 @@ OpenExplorer() {
       FileAppend, % TS() . " | terminal-anywhere | " . "OpenExplorer: titlebar=" . (_path ? _path : "(none)") . "`n", % Debug.Log.Path
   }
 
-  ; No path found or path is Desktop — open namespace root
+  ; No path found or path is Desktop — open Explorer home
   If (!_path || _path = A_Desktop) {
     if (Debug.Log["terminal-anywhere"])
-      FileAppend, % TS() . " | terminal-anywhere | " . "OpenExplorer: namespace root (path=" . (_path ? _path : "none") . ")`n", % Debug.Log.Path
-    ComObjCreate("Shell.Application").Explore(0)
+      FileAppend, % TS() . " | terminal-anywhere | " . "OpenExplorer: opening Explorer home (path=" . (_path ? _path : "none") . ")`n", % Debug.Log.Path
+    Run explorer
     Return
   }
 
@@ -510,7 +547,7 @@ OpenExplorer() {
   }
 
   if (Debug.Log["terminal-anywhere"])
-    FileAppend, % TS() . " | terminal-anywhere | " . "OpenExplorer: opening new at " . _path . "`n", % Debug.Log.Path
+    FileAppend, % TS() . " | terminal-anywhere | " . "OpenExplorer: opening new via UserRun(explorer, " . _path . ")`n", % Debug.Log.Path
   UserRun("explorer", _path)
 }
 
