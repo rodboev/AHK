@@ -81,18 +81,8 @@ WS_Init() {
     . " CREATE=" . (WS.EventHookCreate ? "OK" : "FAIL"))
   ; WMI process start monitoring — detects launches from any source (Run dialog, shortcuts, etc.)
   ; Uses semi-sync ExecNotificationQuery + timer poll (async SWbemSink unreliable in AHK STA)
-  Try {
-    _locator := ComObjCreate("WbemScripting.SWbemLocator")
-    WS.WMIService := _locator.ConnectServer(".", "root\cimv2")
-    WS.WMIService.Security_.ImpersonationLevel := 3  ; wbemImpersonationLevelImpersonate
-    WS.WMIEvents := WS.WMIService.ExecNotificationQuery("SELECT * FROM Win32_ProcessStartTrace")
-    SetTimer, WS_WMIPoll, 50
-    WS_Log("INIT: WMI=OK (polling)")
-  } catch _e {
-    WS_Log("INIT: WMI=FAIL err=" . _e.Message)
-    ToolTip, WMI unavailable — single-instance re-launch moves disabled
-    SetTimer, WS_ClearInitTip, -3000
-  }
+  WS.WMIBackoff := 1000
+  WS_WMIConnect()
 
   SetTimer, WS_SweepTracking, 1000
   OnExit("WS_Cleanup")
@@ -104,6 +94,33 @@ WS_Log(msg) {
     return
   _p := Debug.Log.Path
   FileAppend, % TS() " | window-spawning | " . msg . "`n", %_p%
+}
+
+WS_WMIConnect() {
+  global WS
+  SetTimer, WS_WMIRetry, Off
+  Try {
+    _locator := ComObjCreate("WbemScripting.SWbemLocator")
+    WS.WMIService := _locator.ConnectServer(".", "root\cimv2")
+    WS.WMIService.Security_.ImpersonationLevel := 3
+    WS.WMIEvents := WS.WMIService.ExecNotificationQuery("SELECT * FROM Win32_ProcessStartTrace")
+    SetTimer, WS_WMIPoll, 50
+    WS.WMIBackoff := ""
+    WS_Log("INIT: WMI=OK (polling)")
+  } catch _e {
+    WS.WMIService := "", WS.WMIEvents := ""
+    _delay := WS.WMIBackoff
+    if (_delay > 30000) {
+      WS_Log("INIT: WMI=FAIL err=" . _e.Message . " (giving up after backoff)")
+      WS.WMIBackoff := ""
+      ToolTip, WMI unavailable — single-instance re-launch moves disabled
+      SetTimer, WS_ClearInitTip, -3000
+      return
+    }
+    WS_Log("INIT: WMI=FAIL err=" . _e.Message . " (retry in " . _delay . "ms)")
+    SetTimer, WS_WMIRetry, % -_delay
+    WS.WMIBackoff := _delay * 2
+  }
 }
 
 WS_OnShellHook(wParam, lParam, msg, hwnd) {
@@ -298,6 +315,15 @@ WS_TryMoveOrDefer(hwnd, targetMon, tick, shouldDefer:=true) {
   global WS
   hwnd := hwnd + 0
   if (WS_IsReady(hwnd)) {
+    WinGet, _tmExe, ProcessName, ahk_id %hwnd%
+    WinGetTitle, _tmTitle, ahk_id %hwnd%
+    if (_tmExe == "Superwhisper.exe" && _tmTitle == "Superwhisper") {
+      WS.Hidden.Delete(hwnd)
+      WinHide, ahk_id %hwnd%
+      WS.Processed[hwnd] := A_TickCount
+      WS_Log("SUPPRESS: Superwhisper spawn hidden hwnd=" . hwnd)
+      return true
+    }
     if (WS_IsMovable(hwnd)) {
       windowMon := GetMonitor("ahk_id " . hwnd)
       if (windowMon != targetMon)
@@ -571,6 +597,11 @@ WS_TimeoutAltTab:
   WS.PendingAltTab := ""
 Return
 
+WS_WMIRetry:
+  global WS
+  WS_WMIConnect()
+Return
+
 WS_ClearInitTip:
   ToolTip
 Return
@@ -606,7 +637,7 @@ Return
 
 WS_Cleanup() {
   global WS
-  ; Stop WMI process monitoring
+  SetTimer, WS_WMIRetry, Off
   SetTimer, WS_WMIPoll, Off
   WS.WMIEvents := ""
   WS.WMIService := ""
