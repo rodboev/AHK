@@ -79,7 +79,7 @@ Return
 #IfWinActive
 
 ; ⇒ Sublime Text
-#n::UserRun("C:\Apps\Sublime\subl.exe")
+#n::UserRun("notepad")
 #IfWinActive ahk_exe sublime_text.exe
   ^Tab::Send {Ctrl Down}{PgDn}{Ctrl Up} ; [ Ctrl+Tab ] -> Next tab
   +^Tab::Send {Ctrl Down}{PgUp}{Ctrl Up} ; [ ShIft+Ctrl+Tab ] -> Previous tab
@@ -129,7 +129,7 @@ Return
   If (!FindInPath("rexplorer_x64.exe"))
     UserRun("cmd", "/c", "taskkill /f /im explorer.exe && start explorer.exe")
   Else If GetKeyState("Ctrl") ; -> [ Ctrl+Shift+Alt+X ] -> Restart Explorer
-    UserRun("rexplorer_x64.exe")
+    UserRun("rexplorer_x64.exe", "/r")
   Else
     UserRun("rexplorer_x64.exe", "/f")
 Return
@@ -145,6 +145,12 @@ Return
       Send {Backspace}
   Return
 #IfWinActive
+
+#If ExplorerShouldCloseOnEsc()
+  Esc:: ; [ Esc ] -> Close Explorer window unless focus is in a text input
+    WinClose, A
+  Return
+#If
 
 #IfWinActive, Open
   !d::Send {Alt Down}n{Alt Up} ; [ Alt+D ] -> Focus filename field in Open dialog
@@ -483,6 +489,32 @@ G_UIACleanup() {
     ObjRelease(G_UIA)
     G_UIA := 0
   }
+}
+
+ExplorerShouldCloseOnEsc() {
+  If !WinActive("ahk_class CabinetWClass")
+    Return false
+  If WinExist("ahk_class #32768")
+    Return false
+  Return !ExplorerFocusedOnTextInput()
+}
+
+ExplorerFocusedOnTextInput() {
+  ; Inline rename box
+  ControlGet, _renameVisible, Visible,, Edit1, A
+  If (_renameVisible = 1)
+    Return true
+
+  ControlGetFocus, _focused, A
+  If (_focused = "")
+    Return false
+
+  ; Address bar, search box, editable combos, and similar text-entry hosts
+  Return (InStr(_focused, "Edit") = 1
+    || InStr(_focused, "RichEdit") = 1
+    || InStr(_focused, "ComboBox") = 1
+    || InStr(_focused, "SearchEditBox") = 1
+    || InStr(_focused, "InputSiteWindowClass") = 1)
 }
 
 ChromeFocusedOnEdit() {
