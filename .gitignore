@@ -8,3 +8,4 @@ RunFromProcess-x64.exe
 # Claude Code local settings
 .claude/*
 !.claude/settings.local.json
+nearstream*
