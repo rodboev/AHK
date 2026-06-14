@@ -108,6 +108,13 @@ Return
   +^Tab::Send {Ctrl Down}{PgUp}{Ctrl Up} ; [ ShIft+Ctrl+Tab ] -> Previous tab
 #If
 
+; ⇒ Superwhisper
+#IfWinActive Superwhisper ahk_exe Superwhisper.exe
+  *Esc Up::
+    SuperwhisperCloseWindow()
+  Return
+#IfWinActive
+
 ; ⇒ Other global bindings
 +!-::Send {U+2014} ; [ ShIft+Alt+Minus ] -> Em-dash
 +!0::Send {U+2022} ; [ ShIft+Alt+0] -> Bullet
@@ -129,9 +136,9 @@ Return
   If (!FindInPath("rexplorer_x64.exe"))
     UserRun("cmd", "/c", "taskkill /f /im explorer.exe && start explorer.exe")
   Else If GetKeyState("Ctrl") ; -> [ Ctrl+Shift+Alt+X ] -> Restart Explorer
-    UserRun("rexplorer_x64.exe", "/r")
+    Run, rexplorer_x64.exe /r
   Else
-    UserRun("rexplorer_x64.exe", "/f")
+    Run, rexplorer_x64.exe /f
 Return
 
 #IfWinActive, ahk_class CabinetWClass
@@ -563,6 +570,12 @@ ChromeFocusedOnEdit() {
   if (Debug.Log["tab-search"])
     FileAppend, % TS() " | tab-search | ct=" _ct " name=" _name " class=" _className " | result=" (_isEdit ? "true" : "false") "`n", % Debug.Log.Path
   Return _isEdit
+}
+
+SuperwhisperCloseWindow(hwnd:=0) {
+  if (hwnd)
+    WinActivate, ahk_id %hwnd%
+  SendInput, !+{Pause}
 }
 
 ; ⇒ Get the UIA content process PID for a window (resolves host vs content for UWP/Electron)

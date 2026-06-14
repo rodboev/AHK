@@ -85,6 +85,7 @@ WS_Init() {
   WS_WMIConnect()
 
   SetTimer, WS_SweepTracking, 1000
+  SW_InitPTT()
   OnExit("WS_Cleanup")
 }
 
@@ -315,13 +316,12 @@ WS_TryMoveOrDefer(hwnd, targetMon, tick, shouldDefer:=true) {
   global WS
   hwnd := hwnd + 0
   if (WS_IsReady(hwnd)) {
-    WinGet, _tmExe, ProcessName, ahk_id %hwnd%
-    WinGetTitle, _tmTitle, ahk_id %hwnd%
-    if (_tmExe == "Superwhisper.exe" && _tmTitle == "Superwhisper") {
+    WinGet, _swExe, ProcessName, ahk_id %hwnd%
+    WinGetTitle, _swTitle, ahk_id %hwnd%
+    if (_swExe = "Superwhisper.exe" && _swTitle = "Superwhisper") {
       WS.Hidden.Delete(hwnd)
-      WinHide, ahk_id %hwnd%
+      WS_Reveal(hwnd)
       WS.Processed[hwnd] := A_TickCount
-      WS_Log("SUPPRESS: Superwhisper spawn hidden hwnd=" . hwnd)
       return true
     }
     if (WS_IsMovable(hwnd)) {
@@ -434,6 +434,73 @@ WS_SweepTracking:
   SweepStale(WS.LastMoved, 5000)
 
 return
+
+SW_InitPTT() {
+  global WS
+  WS.SW_PTTDown := 0
+  EnvGet, _localAppData, LOCALAPPDATA
+  _prefsFile := _localAppData . "\com.superwhisper.app\preferences.json"
+  FileRead, _json, %_prefsFile%
+  if (ErrorLevel || _json = "") {
+    WS_Log("SW: Could not read preferences from " . _prefsFile)
+    return
+  }
+  RegExMatch(_json, """pushToTalkShortcut""\s*:\s*""([^""]+)""", _m)
+  if (!_m1) {
+    WS_Log("SW: No pushToTalkShortcut in preferences")
+    return
+  }
+  _ahkKey := SW_ConvertKey(_m1)
+  if (!_ahkKey) {
+    WS_Log("SW: Could not convert key: " . _m1)
+    return
+  }
+  WS.SW_PTTKey := _ahkKey
+  Hotkey, % "~" . _ahkKey, SW_PTTKeyDown
+  Hotkey, % "~" . _ahkKey . " Up", SW_PTTKeyUp
+  WS_Log("SW: PTT key=" . _m1 . " -> " . _ahkKey)
+}
+
+SW_ConvertKey(swKey) {
+  _parts := StrSplit(swKey, "+")
+  _mods := ""
+  _key := ""
+  for _i, _part in _parts {
+    if (_part = "Control")
+      _mods .= "^"
+    else if (_part = "Alt")
+      _mods .= "!"
+    else if (_part = "Shift")
+      _mods .= "+"
+    else
+      _key := _part
+  }
+  if (RegExMatch(_key, "^Key([A-Z])$", _km))
+    _key := _km1
+  return _mods . _key
+}
+
+SW_PTTKeyDown:
+  global WS
+  if (!WS.SW_PTTDown)
+    WS.SW_PTTDown := A_TickCount
+return
+
+SW_PTTKeyUp:
+  global WS
+  _held := A_TickCount - WS.SW_PTTDown
+  WS.SW_PTTDown := 0
+  _delay := _held > 500 ? -5000 : -30000
+  SetTimer, SW_DelayedClose, %_delay%
+  WS_Log("SW: PTT up, held=" . _held . "ms, close in " . Abs(_delay) / 1000 . "s")
+return
+
+SW_DelayedClose:
+  DetectHiddenWindows, Off
+  WinWait, Superwhisper ahk_exe Superwhisper.exe, , 1
+  if (!ErrorLevel)
+    SuperwhisperCloseWindow(WinExist())
+Return
 
 WS_IsReady(hwnd) {
   if !WinExist("ahk_id " . hwnd)
@@ -637,6 +704,7 @@ Return
 
 WS_Cleanup() {
   global WS
+  SetTimer, SW_DelayedClose, Off
   SetTimer, WS_WMIRetry, Off
   SetTimer, WS_WMIPoll, Off
   WS.WMIEvents := ""
