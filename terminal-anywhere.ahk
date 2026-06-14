@@ -17,6 +17,13 @@
     Else
       Send +{Enter}
   Return
+  Esc::
+    ControlGetFocus, _ctrl, A
+    If (InStr(_ctrl, "Windows.UI."))
+      Send ^[
+    Else
+      Send {Esc}
+  Return
   F10::Send ^+d
   +F10::
     WinGet, _pid, PID, A
