@@ -79,7 +79,7 @@ FileDelete, %_logFile%
 | ----------------------- | -------------------------------------------------------------------- |
 | `AutoHotkey.ahk`        | Parent: config directives, helpers, bindings, misc hotkeys           |
 | `processes.ahk`         | Process mgmt: UserRun, FindInPath, IsProcessElevated, GetExePath     |
-| `terminal-anywhere.ahk` | Windows Terminal from anywhere (`F10` variants) — user/admin/SYSTEM  |
+| `terminal-anywhere.ahk` | Windows Terminal from anywhere (`F10` variants) — user/admin/command slots/SYSTEM |
 | `extended-spy.ahk`      | Extended Window Spy (`#w`) — tooltip/dialog with window/control info |
 | `mbutton-drag.ahk`      | MButton smooth drag (hotkeys, timer, scroll methods)                 |
 | `window-spawning.ahk`   | Shell hook window spawning (WS_Init, hooks, move logic, Alt+Tab)     |
@@ -89,7 +89,7 @@ FileDelete, %_logFile%
 1. **Explorer Smooth Scroll** (`MButton + drag`) — 5-method dual-axis system: LVM, UIA, WHEEL, WHEEL_CTRL, VSCROLL — in `mbutton-drag.ahk`
 2. **Window Spawning** — Shell hook + WinEvent hooks move new windows to cursor's monitor — in `window-spawning.ahk`
 3. **Extended Window Spy** (`Win+W`) — Persistent tooltip with window/control info — in `extended-spy.ahk`
-4. **Terminal/Elevation** (`F10`, `Shift+F10`, `Ctrl+Alt+Shift+F10`, `Ctrl+Shift+Plus`) — Context-aware terminal launching with admin elevation and SYSTEM via ti.exe
+4. **Terminal/Elevation** (`F10`, `Shift+F10`, `Ctrl+F10`, `Ctrl+Shift+F10`, `Alt+Shift+F10`, `Ctrl+Alt+Shift+F10`, `Ctrl+Shift+Plus`) — Context-aware terminal launching with admin elevation, reusable command slots (`codex`/`claude`/`mimo`), and SYSTEM via ti.exe
 
 ## Design Rationale
 
@@ -353,3 +353,8 @@ At `EVENT_OBJECT_CREATE`, hide windows using `WS_EX_LAYERED` + alpha 0. After mo
 
 - **32-bit masking**: `idObject & 0xFFFFFFFF` — WinEventProc params are 32-bit but AHK reads 64-bit on x64
 - **Numeric coercion**: `hwnd + 0` — ensures consistent object key type
+
+## Local Rules
+
+- Do not start, restart, or reload `AutoHotkey.ahk`; the user owns AHK lifecycle actions.
+- Only edit `AGENTS.md` or `CLAUDE.md` when the user explicitly asks.
