@@ -79,6 +79,11 @@ WS_Init() {
   WS_Log("INIT: SHOW=" . (WS.EventHookShow ? "OK" : "FAIL")
     . " UNCLOAK=" . (WS.EventHookUncloak ? "OK" : "FAIL")
     . " CREATE=" . (WS.EventHookCreate ? "OK" : "FAIL"))
+  ; ITaskbarList — re-register taskbar button on correct monitor after cross-monitor moves
+  WS.TaskbarList := ComObjCreate("{56FDF344-FD6D-11D0-958A-006097C9A090}"
+    , "{56FDF342-FD6D-11D0-958A-006097C9A090}")
+  if (WS.TaskbarList)
+    DllCall(NumGet(NumGet(WS.TaskbarList+0)+3*A_PtrSize), "Ptr", WS.TaskbarList, "Int")  ; HrInit
   ; WMI process start monitoring — detects launches from any source (Run dialog, shortcuts, etc.)
   ; Uses semi-sync ExecNotificationQuery + timer poll (async SWbemSink unreliable in AHK STA)
   WS.WMIBackoff := 1000
@@ -191,6 +196,12 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
   }
 
   ; Fallback: no CREATE pre-registration (window missed by CREATE hook)
+  if (Debug.Log["window-spawning"]) {
+    WinGetTitle, _dbgTitle, ahk_id %lParam%
+    WinGetClass, _dbgClass, ahk_id %lParam%
+    WS_Log("SHELL-CREATE: hwnd=" . lParam . " class=" . _dbgClass . " mon=" . cursorMon
+      . " title=""" . _dbgTitle . """")
+  }
   WS_TryMoveOrDefer(lParam, cursorMon, A_TickCount)
 }
 
@@ -234,6 +245,20 @@ WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTim
       return
     ; Owner sentinel — skip if owner was recently moved (sibling protection)
     _ppOwner := DllCall("GetWindow", "Ptr", hwnd, "UInt", 4, "Ptr")  ; GW_OWNER=4
+    _ppOwnerStyle := 0
+    _ppOwnerMon := 0
+    if (_ppOwner) {
+      WinGet, _ppOwnerStyle, Style, ahk_id %_ppOwner%
+      if ((_ppOwnerStyle & 0x10000000) && _createClass == "#32770") {
+        WinGetClass, _ppOwnerClass, ahk_id %_ppOwner%
+        if (_ppOwnerClass == "#32770") {
+          WinGet, _ppPid, PID, ahk_id %hwnd%
+          WinGet, _ppOwnerPid, PID, ahk_id %_ppOwner%
+          if (_ppPid = _ppOwnerPid)
+            _ppOwnerMon := GetMonitor("ahk_id " . _ppOwner)
+        }
+      }
+    }
     if (_ppOwner && WS.OwnerSentinel.HasKey(_ppOwner + 0)) {
       if (A_TickCount - WS.OwnerSentinel[_ppOwner + 0] < 200) {
         WS.Processed[hwnd] := A_TickCount
@@ -246,10 +271,9 @@ WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTim
       }
     }
     if (_ppOwner) {
-      if (WS.Processed.HasKey(_ppOwner + 0))
+      if (!_ppOwnerMon && WS.Processed.HasKey(_ppOwner + 0))
         return
-      WinGet, _ppOwnerStyle, Style, ahk_id %_ppOwner%
-      if (_ppOwnerStyle & 0x10000000)  ; Owner is WS_VISIBLE → real dialog, skip
+      if ((_ppOwnerStyle & 0x10000000) && !_ppOwnerMon)  ; Owner is WS_VISIBLE → real dialog, skip
         return
     }
     ; Hide FIRST — minimize latency before next VSYNC paints the window
@@ -261,7 +285,7 @@ WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTim
       , "UChar", Debug.Log["window-spawning"] ? 128 : 0, "UInt", 0x2)  ; LWA_ALPHA
     WS.Hidden[hwnd] := _hadLayered
     ; Now capture cursor/monitor (safe to do after hide)
-    cursorMon := GetCursorMonitor()
+    cursorMon := _ppOwnerMon ? _ppOwnerMon : GetCursorMonitor()
     windowMon := GetMonitor("ahk_id " . hwnd)
     WS.PrePending[hwnd] := {mon: cursorMon, tick: A_TickCount, qpc: WS_QPC()}
     if (Debug.Log["window-spawning"]) {
@@ -523,15 +547,26 @@ WS_IsMovable(hwnd) {
   WinGetClass, _cls, ahk_id %hwnd%
   if HasVal(WS.ExcludedClasses, _cls)
     return false
-  WinGetTitle, _title, ahk_id %hwnd%
-  if (_title == "" && _cls != "ApplicationFrameWindow")
-    return false
   _owner := DllCall("GetWindow", "Ptr", hwnd, "UInt", 4, "Ptr")  ; GW_OWNER=4
+  _ownerStyle := 0
+  _allowOwned32770 := false
   if (_owner) {
     WinGet, _ownerStyle, Style, ahk_id %_owner%
-    if (_ownerStyle & 0x10000000)  ; Owner is WS_VISIBLE
-      return false
+    if (_cls == "#32770" && (_ownerStyle & 0x10000000)) {
+      WinGetClass, _ownerCls, ahk_id %_owner%
+      if (_ownerCls == "#32770") {
+        WinGet, _pid, PID, ahk_id %hwnd%
+        WinGet, _ownerPid, PID, ahk_id %_owner%
+        if (_pid = _ownerPid)
+          _allowOwned32770 := true
+      }
+    }
   }
+  WinGetTitle, _title, ahk_id %hwnd%
+  if (_title == "" && _cls != "ApplicationFrameWindow" && !_allowOwned32770)
+    return false
+  if (_owner && (_ownerStyle & 0x10000000) && !_allowOwned32770)
+    return false
   WinGet, _exStyle, ExStyle, ahk_id %hwnd%
   if (_exStyle & 0x80)  ; WS_EX_TOOLWINDOW
     return false
@@ -618,6 +653,12 @@ WS_MoveToMonitor(hwnd, srcMon, tgtMon) {
     if (newY + winH > tgtBottom)
       newY := tgtBottom - winH
     WinMove, ahk_id %hwnd%,, %newX%, %newY%, %winW%, %winH%
+  }
+
+  ; Force taskbar button onto the correct monitor's taskbar
+  if (WS.TaskbarList) {
+    DllCall(NumGet(NumGet(WS.TaskbarList+0)+5*A_PtrSize), "Ptr", WS.TaskbarList, "Ptr", hwnd)  ; DeleteTab
+    DllCall(NumGet(NumGet(WS.TaskbarList+0)+4*A_PtrSize), "Ptr", WS.TaskbarList, "Ptr", hwnd)  ; AddTab
   }
 
   ; Restore opacity after move
@@ -709,6 +750,9 @@ WS_Cleanup() {
   SetTimer, WS_WMIPoll, Off
   WS.WMIEvents := ""
   WS.WMIService := ""
+  if (WS.TaskbarList)
+    ObjRelease(WS.TaskbarList)
+  WS.TaskbarList := ""
   for _h, _hadLayered in WS.Hidden
     WS_RestoreOpacity(_h, _hadLayered)
   WS.Hidden := {}
