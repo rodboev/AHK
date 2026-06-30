@@ -2,11 +2,19 @@
 ; ┃ WINDOWS TERMINAL FROM ANYWHERE ┃
 ; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 ; [ F10 ]                       -> Open current path
-; [ Ctrl + F10 ]                -> Run primary command
+; [ Ctrl + F10 ]                -> Run command 1
 ; [ Shift + F10 ]               -> Open as admin
-; [ Ctrl + Shift + F10 ]        -> Run secondary command
+; [ Ctrl + Shift + F10 ]        -> Run command 2
+; [ Alt + Shift + F10 ]         -> Run command 3
 ; [ Ctrl + Alt + Shift + F10 ]  -> Open current path as SYSTEM
 ; [ Win + E ]                   -> Open Explorer at contextual path
+
+TA_GetCommand(slot) {
+  static commands := {1: "codex.cmd"
+    , 2: "claude.cmd"
+    , 3: "mimo.cmd"}
+  Return commands[slot]
+}
 
 #IfWinActive ahk_exe WindowsTerminal.exe
   ^F4::Send ^+w
@@ -17,12 +25,12 @@
     Else
       Send +{Enter}
   Return
-  Esc::
-    ControlGetFocus, _ctrl, A
-    If (InStr(_ctrl, "Windows.UI."))
-      Send ^[
-    Else
-      Send {Esc}
+  ; Esc::
+  ;   ControlGetFocus, _ctrl, A
+  ;   If (InStr(_ctrl, "Windows.UI."))
+  ;     Send ^[
+  ;   Else
+  ;     Send {Esc}
   Return
   F10::Send ^+d
   +F10::
@@ -51,26 +59,23 @@
     UserRun(_args*)
   Return
   ^F10::
-    Send ^+d
-    Sleep 10
-    KeyWait, Ctrl
-    SendInput % TA.PrimaryCmd . "{Enter}"
+    SendTerminalCommand(1, "Ctrl")
   Return
   ^+F10::
-    Send ^+d
-    Sleep 10
-    KeyWait, Ctrl
-    KeyWait, Shift
-    SendInput % TA.SecondaryCmd . "{Enter}"
+    SendTerminalCommand(2, "Ctrl", "Shift")
+  Return
+  !+F10::
+    SendTerminalCommand(3, "Alt", "Shift")
   Return
 #IfWinActive
 
 #e::OpenExplorer()
 
 F10::OpenTerminal({})
-^F10::OpenTerminal({cmd: TA.PrimaryCmd})
+^F10::OpenTerminal({cmd: TA_GetCommand(1)})
 +F10::OpenTerminal({elevate: true})
-^+F10::OpenTerminal({cmd: TA.SecondaryCmd})
+^+F10::OpenTerminal({cmd: TA_GetCommand(2)})
+!+F10::OpenTerminal({cmd: TA_GetCommand(3)})
 ^!+F10:: ; [ Ctrl + Alt + Shift + F10 ] -> Open current path as SYSTEM
   _dir := GetTerminalDir()
   ; Resolve wt.exe to full path — SYSTEM context lacks user PATH entries
@@ -97,18 +102,25 @@ Return
 TerminalInit() {
   global TA, Debug
   TA := {}
-  TA.PrimaryCmd := FindInPath("codex.cmd")
-  TA.SecondaryCmd := FindInPath("claude.cmd")
   TA.WTProfile := GetWTFirstProfile()
   TA.WindowCwd := {}
   TA.PendingCwd := ""
   TA.PendingTime := 0
   if (Debug.Log["terminal-anywhere"])
-    FileAppend, % TS() . " | terminal-anywhere | " . "TerminalInit: WTProfile=" . TA.WTProfile . "`n", % Debug.Log.Path
+    FileAppend, % TS() . " | terminal-anywhere | " . "TerminalInit: WTProfile=" . TA.WTProfile . " cmd1=" . TA_GetCommand(1) . " cmd2=" . TA_GetCommand(2) . " cmd3=" . TA_GetCommand(3) . "`n", % Debug.Log.Path
+}
+
+SendTerminalCommand(slot, heldKeys*) {
+  _cmd := TA_GetCommand(slot)
+  Send ^+d
+  Sleep 10
+  For _, _key in heldKeys
+    KeyWait, %_key%
+  SendInput % _cmd . "{Enter}"
 }
 
 OpenTerminal(opts) {
-  ; opts := {elevate: bool, claude: bool}
+  ; opts := {elevate: bool, cmd: string}
 
   global TA, Debug
 
