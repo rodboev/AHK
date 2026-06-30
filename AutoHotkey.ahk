@@ -235,6 +235,10 @@ $XButton2::
   }
 Return
 
+#IfWinActive, ahk_exe discordmaxxer.exe
+  Esc::WinClose
+#IfWinActive
+
 ; ⇒ Windows Terminal: convert clipboard image to file for Claude Code paste
 #If WinActive("ahk_exe WindowsTerminal.exe") && ClipboardHasImage()
   ^v::
