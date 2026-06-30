@@ -12,7 +12,8 @@
 TA_GetCommand(slot) {
   static commands := {1: "codex.cmd"
     , 2: "claude.cmd"
-    , 3: "mimo.cmd"}
+    , 3: "mimo.cmd"
+    , 4: "hermes"}
   Return commands[slot]
 }
 
@@ -64,6 +65,9 @@ TA_GetCommand(slot) {
   ^+F10::
     SendTerminalCommand(2, "Ctrl", "Shift")
   Return
+  !F10::
+    SendTerminalCommand(4, "Alt")
+  Return
   !+F10::
     SendTerminalCommand(3, "Alt", "Shift")
   Return
@@ -75,6 +79,7 @@ F10::OpenTerminal({})
 ^F10::OpenTerminal({cmd: TA_GetCommand(1)})
 +F10::OpenTerminal({elevate: true})
 ^+F10::OpenTerminal({cmd: TA_GetCommand(2)})
+!F10::OpenTerminal({cmd: TA_GetCommand(4)})
 !+F10::OpenTerminal({cmd: TA_GetCommand(3)})
 ^!+F10:: ; [ Ctrl + Alt + Shift + F10 ] -> Open current path as SYSTEM
   _dir := GetTerminalDir()
@@ -107,7 +112,7 @@ TerminalInit() {
   TA.PendingCwd := ""
   TA.PendingTime := 0
   if (Debug.Log["terminal-anywhere"])
-    FileAppend, % TS() . " | terminal-anywhere | " . "TerminalInit: WTProfile=" . TA.WTProfile . " cmd1=" . TA_GetCommand(1) . " cmd2=" . TA_GetCommand(2) . " cmd3=" . TA_GetCommand(3) . "`n", % Debug.Log.Path
+    FileAppend, % TS() . " | terminal-anywhere | " . "TerminalInit: WTProfile=" . TA.WTProfile . " cmd1=" . TA_GetCommand(1) . " cmd2=" . TA_GetCommand(2) . " cmd3=" . TA_GetCommand(3) . " cmd4=" . TA_GetCommand(4) . "`n", % Debug.Log.Path
 }
 
 SendTerminalCommand(slot, heldKeys*) {
