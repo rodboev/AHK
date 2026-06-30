@@ -35,6 +35,8 @@ WS_Init() {
   global WS, Debug
   WS := {}
   WS.RecentExes := {}              ; WMI: exe name -> A_TickCount (process started)
+  WS.LauncherTick := 0             ; Recent launcher-dialog interaction timestamp
+  WS.LauncherHwnd := 0             ; Launcher dialog hwnd
   WS.Pending := {}                 ; Deferred windows: hwnd -> {mon, tick}
   WS.PendingAltTab := ""           ; Alt+Tab: {mon, tick} or ""
   WS.PrePending := {}              ; CREATE pre-registration: hwnd -> {mon, tick, qpc}
@@ -141,6 +143,15 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
   SetWinDelay, -1
 
   if (isDestroyed) {
+    WinGetClass, _destroyClass, ahk_id %lParam%
+    if (_destroyClass == "#32770") {
+      WinGetTitle, _destroyTitle, ahk_id %lParam%
+      if (_destroyTitle == "Run") {
+        WS.LauncherTick := A_TickCount
+        WS.LauncherHwnd := lParam + 0
+        WS_Log("INTENT-SIGNAL (launcher-close): hwnd=" . lParam)
+      }
+    }
     WS.Pending.Delete(lParam + 0)
     WS.PrePending.Delete(lParam + 0)
     WS.Hidden.Delete(lParam + 0)
@@ -150,20 +161,44 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
   cursorMon := GetCursorMonitor()
 
   if (isActivated) {
+    WinGetClass, _actClass, ahk_id %lParam%
+    if (_actClass == "#32770") {
+      WinGetTitle, _actTitle, ahk_id %lParam%
+      if (_actTitle == "Run") {
+        WS.LauncherTick := A_TickCount
+        WS.LauncherHwnd := lParam + 0
+        WS_Log("INTENT-SIGNAL (launcher-activate): hwnd=" . lParam)
+        return
+      }
+    }
     if (!WS_IsMovable(lParam))
       return
     WinGet, _actExe, ProcessName, ahk_id %lParam%
-    if (!WS.RecentExes.HasKey(_actExe))
-      return
-    _intentAge := A_TickCount - WS.RecentExes[_actExe]
-    if (_intentAge > 5000)
+    _hasIntent := false
+    _wmiIntentMaxAge := 100
+    _launcherIntentMaxAge := 2000
+    if (WS.RecentExes.HasKey(_actExe)) {
+      _intentAge := A_TickCount - WS.RecentExes[_actExe]
+      if (_intentAge <= _wmiIntentMaxAge)
+        _hasIntent := true
+    }
+    if (!_hasIntent && WS.LauncherTick) {
+      _launcherAge := A_TickCount - WS.LauncherTick
+      if (_launcherAge <= _launcherIntentMaxAge && lParam != WS.LauncherHwnd)
+        _hasIntent := true
+    }
+    if (!_hasIntent)
       return
     windowMon := GetMonitor("ahk_id " . lParam)
     if (windowMon == cursorMon) {
       WS.RecentExes.Delete(_actExe)
+      WS.LauncherTick := 0
+      WS.LauncherHwnd := 0
       return
     }
     WS.RecentExes.Delete(_actExe)
+    WS.LauncherTick := 0
+    WS.LauncherHwnd := 0
     WS_MoveToMonitor(lParam, windowMon, cursorMon)
     if (Debug.Log["window-spawning"]) {
       WinGetTitle, _dbgTitle, ahk_id %lParam%
@@ -727,21 +762,75 @@ WS_WMIPoll:
     if (!IsObject(_evt))
       break
     _procName := _evt.ProcessName
+    _procId := _evt.ProcessID
     _parentPid := _evt.ParentProcessID
     if (_procName != "") {
       if (WS_GetSubsystem(_evt.ProcessID, _procName) = 3 || _procName = "conhost.exe")
         continue
-      ; Skip if same exe already has windows (protocol handler / URL stub, not a fresh launch)
-      if (WinExist("ahk_exe " . _procName)) {
-        WS_Log("SKIP (already-running): exe=" . _procName . " parentPid=" . _parentPid)
+      ; Skip same-name descendant launches (multi-process helper churn, not user intent)
+      if (WS_HasSameNameAncestor(_procId, _parentPid, _procName)) {
+        WS_Log("SKIP (same-name-ancestor): exe=" . _procName . " pid=" . _procId . " parentPid=" . _parentPid)
         continue
       }
       WS.RecentExes[_procName] := A_TickCount
-      WS_Log("WMI-PROC: " . _procName . " parentPid=" . _parentPid)
+      WS_Log("WMI-PROC: " . _procName . " pid=" . _procId . " parentPid=" . _parentPid)
     }
     _evt := ""
   }
 Return
+
+WS_HasSameNameAncestor(pid, parentPid, procName) {
+  if (!parentPid || parentPid = pid || procName = "")
+    return false
+  _seen := {}
+  _curPid := parentPid
+  Loop, 12 {
+    if (!_curPid || _seen.HasKey(_curPid))
+      return false
+    _seen[_curPid] := 1
+    _ancestorName := WS_GetProcessName(_curPid)
+    if (_ancestorName = "")
+      return false
+    if (_ancestorName = procName)
+      return true
+    _curPid := WS_GetParentPid(_curPid)
+  }
+  return false
+}
+
+WS_GetProcessName(pid) {
+  static _svc := ""
+  if (!pid)
+    return ""
+  Try {
+    if (!IsObject(_svc)) {
+      _locator := ComObjCreate("WbemScripting.SWbemLocator")
+      _svc := _locator.ConnectServer(".", "root\cimv2")
+      _svc.Security_.ImpersonationLevel := 3
+    }
+    _rows := _svc.ExecQuery("SELECT Name FROM Win32_Process WHERE ProcessId=" . pid)
+    for _row in _rows
+      return _row.Name
+  }
+  return ""
+}
+
+WS_GetParentPid(pid) {
+  static _svc := ""
+  if (!pid)
+    return 0
+  Try {
+    if (!IsObject(_svc)) {
+      _locator := ComObjCreate("WbemScripting.SWbemLocator")
+      _svc := _locator.ConnectServer(".", "root\cimv2")
+      _svc.Security_.ImpersonationLevel := 3
+    }
+    _rows := _svc.ExecQuery("SELECT ParentProcessId FROM Win32_Process WHERE ProcessId=" . pid)
+    for _row in _rows
+      return _row.ParentProcessId + 0
+  }
+  return 0
+}
 
 WS_Cleanup() {
   global WS
