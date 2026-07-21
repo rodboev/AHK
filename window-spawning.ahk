@@ -48,7 +48,7 @@ WS_Init() {
   WS.ExcludedClasses := ["tooltips_class32", "NotifyIconOverflowWindow"
     , "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Progman", "WorkerW"
     , "MultitaskingViewFrame", "Windows.UI.Core.CoreWindow", "ForegroundStaging"
-    , "RAIL_WINDOW"]
+    , "RAIL_WINDOW", "CASCADIA_HOSTING_WINDOW_CLASS"]
   DllCall("QueryPerformanceFrequency", "Int64*", _qpcFreq)
   WS.QPCFreq := _qpcFreq
 
@@ -275,6 +275,8 @@ WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTim
       return
     WinGetClass, _createClass, ahk_id %hwnd%
     if (_createClass == "")
+      return
+    if HasVal(WS.ExcludedClasses, _createClass)  ; excluded classes: never hide or move
       return
     if (WS.Processed.HasKey(hwnd))
       return

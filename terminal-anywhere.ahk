@@ -111,6 +111,7 @@ TerminalInit() {
   TA.WindowCwd := {}
   TA.PendingCwd := ""
   TA.PendingTime := 0
+  TA.PendingMon := 0
   if (Debug.Log["terminal-anywhere"])
     FileAppend, % TS() . " | terminal-anywhere | " . "TerminalInit: WTProfile=" . TA.WTProfile . " cmd1=" . TA_GetCommand(1) . " cmd2=" . TA_GetCommand(2) . " cmd3=" . TA_GetCommand(3) . " cmd4=" . TA_GetCommand(4) . "`n", % Debug.Log.Path
 }
@@ -151,6 +152,7 @@ OpenTerminal(opts) {
   ; Store pending CWD so we can map the new window HWND when it appears
   TA.PendingCwd := _dir
   TA.PendingTime := A_TickCount
+  TA.PendingMon := GetCursorMonitor()  ; capture at launch; cursor may move before window appears
   TA.ExistingHwnds := _GetWTHwnds()
   UserRun(_args*)
   SetTimer, _TA_CaptureNewWindow, -100
@@ -171,8 +173,14 @@ _TA_CaptureNewWindow:
         _found := true
     If (!_found) {
       TA.WindowCwd[_h + 0] := TA.PendingCwd
+      ; window-spawning excludes CASCADIA class; reposition explicitly here instead
+      If (IsFunc("WS_MoveToMonitor") && TA.PendingMon) {
+        _winMon := GetMonitor("ahk_id " . _h)
+        If (_winMon != TA.PendingMon)
+          WS_MoveToMonitor(_h, _winMon, TA.PendingMon)
+      }
       if (Debug.Log["terminal-anywhere"])
-        FileAppend, % TS() . " | terminal-anywhere | " . "CaptureNewWindow: mapped hwnd=" . _h . " -> " . TA.PendingCwd . "`n", % Debug.Log.Path
+        FileAppend, % TS() . " | terminal-anywhere | " . "CaptureNewWindow: mapped hwnd=" . _h . " -> " . TA.PendingCwd . " mon=" . TA.PendingMon . "`n", % Debug.Log.Path
       TA.PendingCwd := ""
       Return
     }
