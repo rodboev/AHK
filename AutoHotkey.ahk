@@ -104,8 +104,6 @@ Return
 ; ⇒ VSCode + forks
 #If (WinActive("ahk_exe code.exe") OR WinActive("ahk_exe vscodium.exe") OR WinActive("ahk_exe Cursor.app.exe"))
   +^w::Send {Alt Down}z{AltUp} ; [ Shift+Ctrl+W ] -> Toggle word wrap
-  ^Tab::Send {Ctrl Down}{PgDn}{Ctrl Up} ; [ Ctrl+Tab ] -> Next tab
-  +^Tab::Send {Ctrl Down}{PgUp}{Ctrl Up} ; [ ShIft+Ctrl+Tab ] -> Previous tab
 #If
 
 ; ⇒ Superwhisper
