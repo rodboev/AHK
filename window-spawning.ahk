@@ -175,9 +175,14 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
       return
     WinGet, _actExe, ProcessName, ahk_id %lParam%
     _hasIntent := false
-    _wmiIntentMaxAge := 100
+    _wmiIntentMaxAge := 50
     _launcherIntentMaxAge := 2000
-    if (WS.RecentExes.HasKey(_actExe)) {
+    ; Process age: if the process is <500ms old, it's a fresh launch
+    WinGet, _actPid, PID, ahk_id %lParam%
+    _procAge := WS_GetProcessAge(_actPid)
+    if (_procAge >= 0 && _procAge < 500)
+      _hasIntent := true
+    if (!_hasIntent && WS.RecentExes.HasKey(_actExe)) {
       _intentAge := A_TickCount - WS.RecentExes[_actExe]
       if (_intentAge <= _wmiIntentMaxAge)
         _hasIntent := true
@@ -202,7 +207,7 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
     WS_MoveToMonitor(lParam, windowMon, cursorMon)
     if (Debug.Log["window-spawning"]) {
       WinGetTitle, _dbgTitle, ahk_id %lParam%
-      WS_Log("MOVED (activate): """ . _dbgTitle . """ exe=" . _actExe . " mon " . windowMon . " -> " . cursorMon)
+      WS_Log("MOVED (activate): """ . _dbgTitle . """ exe=" . _actExe . " mon " . windowMon . " -> " . cursorMon . " age=" . _procAge . "ms")
     }
     return
   }
@@ -781,6 +786,7 @@ WS_WMIPoll:
   }
 Return
 
+
 WS_HasSameNameAncestor(pid, parentPid, procName) {
   if (!parentPid || parentPid = pid || procName = "")
     return false
@@ -801,37 +807,49 @@ WS_HasSameNameAncestor(pid, parentPid, procName) {
 }
 
 WS_GetProcessName(pid) {
-  static _svc := ""
   if (!pid)
     return ""
-  Try {
-    if (!IsObject(_svc)) {
-      _locator := ComObjCreate("WbemScripting.SWbemLocator")
-      _svc := _locator.ConnectServer(".", "root\cimv2")
-      _svc.Security_.ImpersonationLevel := 3
-    }
-    _rows := _svc.ExecQuery("SELECT Name FROM Win32_Process WHERE ProcessId=" . pid)
-    for _row in _rows
-      return _row.Name
-  }
-  return ""
+  _hProc := DllCall("OpenProcess", "UInt", 0x1000, "Int", 0, "UInt", pid, "Ptr")
+  if (!_hProc)
+    return ""
+  VarSetCapacity(_buf, 520, 0)
+  _len := 260
+  _ok := DllCall("QueryFullProcessImageNameW", "Ptr", _hProc, "UInt", 0, "Ptr", &_buf, "UInt*", _len)
+  DllCall("CloseHandle", "Ptr", _hProc)
+  if (!_ok || _len <= 0)
+    return ""
+  _fullPath := StrGet(&_buf, _len, "UTF-16")
+  SplitPath, _fullPath, _name
+  return _name
+}
+
+WS_GetProcessAge(pid) {
+  if (!pid)
+    return -1
+  _hProc := DllCall("OpenProcess", "UInt", 0x1000, "Int", 0, "UInt", pid, "Ptr")
+  if (!_hProc)
+    return -1
+  VarSetCapacity(_ct, 8), VarSetCapacity(_et, 8), VarSetCapacity(_kt, 8), VarSetCapacity(_ut, 8)
+  DllCall("GetProcessTimes", "Ptr", _hProc, "Ptr", &_ct, "Ptr", &_et, "Ptr", &_kt, "Ptr", &_ut)
+  DllCall("CloseHandle", "Ptr", _hProc)
+  VarSetCapacity(_now, 8)
+  DllCall("GetSystemTimeAsFileTime", "Ptr", &_now)
+  return (NumGet(_now, 0, "Int64") - NumGet(_ct, 0, "Int64")) // 10000
 }
 
 WS_GetParentPid(pid) {
-  static _svc := ""
   if (!pid)
     return 0
-  Try {
-    if (!IsObject(_svc)) {
-      _locator := ComObjCreate("WbemScripting.SWbemLocator")
-      _svc := _locator.ConnectServer(".", "root\cimv2")
-      _svc.Security_.ImpersonationLevel := 3
-    }
-    _rows := _svc.ExecQuery("SELECT ParentProcessId FROM Win32_Process WHERE ProcessId=" . pid)
-    for _row in _rows
-      return _row.ParentProcessId + 0
-  }
-  return 0
+  _hProc := DllCall("OpenProcess", "UInt", 0x1000, "Int", 0, "UInt", pid, "Ptr")
+  if (!_hProc)
+    return 0
+  VarSetCapacity(_pbi, 48, 0)
+  _status := DllCall("ntdll\NtQueryInformationProcess"
+    , "Ptr", _hProc, "Int", 0, "Ptr", &_pbi, "UInt", 48, "UInt*", 0, "UInt")
+  DllCall("CloseHandle", "Ptr", _hProc)
+  if (_status != 0)
+    return 0
+  return NumGet(_pbi, 40, "Ptr") + 0
 }
 
 WS_Cleanup() {
