@@ -113,6 +113,21 @@
   MB.ScrollTicks := 0
   MB.SessionStart := A_TickCount
 
+  ; Native-autoscroll browsers: hard passthrough, no probe, no UIA setup.
+  ; Under CPU contention the probe loses its cursor-change race (autoscroll icon
+  ; renders late) and UIA setup blocks the script on the busy renderer process.
+  _browsers := ["chrome.exe", "msedge.exe", "brave.exe", "vivaldi.exe", "opera.exe"]
+  If (HasVal(_browsers, MB.ProcName)) {
+    If (MB.DeferredDown) {
+      MB.DeferredDown := 0
+      SendInput, {Blind}{MButton Down}
+    }
+    MB.Disabled := 1
+    If (Debug.Log["mbutton-drag"])
+      FileAppend, % TS() " | mbutton-drag | PASSTHROUGH | browser=" MB.ProcName " class=" MB.ClassName "`n", % Debug.Log.Path
+    Return
+  }
+
   ; TreeView controls -> direct to VSCROLL (skip native probe, never has native MButton scroll)
   If (InStr(MB.ClassName, "SysTreeView32")) {
     ; Drill down from window to find the TreeView under cursor (tabbed Explorer has duplicate ClassNNs)

@@ -294,33 +294,44 @@ Return
 #IfWinActive
 
 ; Accelerated scrolling
-; MouseIsOver("ahk_exe sublime_text.exe") || MouseIsOver("ahk_exe WindowsTerminal.exe") || MouseIsOver("ahk_exe Merge.exe")
+; Divisor 0 excludes the app via #If: the hook never suppresses the notch, so
+; passthrough apps scroll natively; #IfTimeout also lets notches through when the main thread is blocked
+WheelAccelDivisor() {
+  global G_WheelDivisor, Debug
+  MouseGetPos,,, _hwnd
+  WinGet, _exe, ProcessName, ahk_id %_hwnd%
+  WinGetClass, _class, ahk_id %_hwnd%
+  divisors := [{ahk_class: "Chrome_WidgetWin_1", divisor: 0}
+             , {ahk_class: "MediaPlayerClassicW", divisor: 500}
+             , {ahk_exe: "Code.exe", divisor: 100}
+             , {ahk_exe: "Merge.exe", divisor: 250}]
+  divisor := 100 ; default
+  for _, entry in divisors
+    if (entry.ahk_class && entry.ahk_class == _class)
+      divisor := entry.divisor
+  for _, entry in divisors
+    if (entry.ahk_exe && entry.ahk_exe == _exe)
+      divisor := entry.divisor
+  G_WheelDivisor := divisor
+  If (Debug.Log["scroll-accel"] and divisor = 0)
+    FileAppend, % TS() " | scroll-accel | PASSTHROUGH | exe=" _exe " class=" _class "`n", % Debug.Log.Path
+  Return divisor
+}
+
+#If (WheelAccelDivisor() != 0)
   WheelUp::
   WheelDown::
-    MouseGetPos,,, _hwnd
-    WinGet, _exe, ProcessName, ahk_id %_hwnd%
-    WinGetClass, _class, ahk_id %_hwnd%
-    divisors := [{ahk_class: "Chrome_WidgetWin_1", divisor: 0}
-               , {ahk_class: "MediaPlayerClassicW", divisor: 500}
-               , {ahk_exe: "Code.exe", divisor: 100}
-               , {ahk_exe: "Merge.exe", divisor: 250}]
-    divisor := 100 ; default
-    for _, entry in divisors
-      if (entry.ahk_class && entry.ahk_class == _class)
-        divisor := entry.divisor
-    for _, entry in divisors
-      if (entry.ahk_exe && entry.ahk_exe == _exe)
-        divisor := entry.divisor
-    v := GetScrollAccel(divisor)
+    global G_WheelDivisor
+    v := GetScrollAccel(G_WheelDivisor)
     MouseClick, %A_ThisHotkey%, , , %v%
   Return
+#If
   +WheelUp::Send {Click WheelUp 10}
   +WheelDown::Send {Click WheelDown 10}
   !WheelUp::Send {WheelLeft}
   !WheelDown::Send {WheelRight}
   !+WheelUp::Send {WheelLeft 10}
   !+WheelDown::Send {WheelRight 10}
-; #If
 
 
 ; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
