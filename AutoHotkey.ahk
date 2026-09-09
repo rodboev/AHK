@@ -24,12 +24,21 @@ Debug := { Tooltips: {"scroll-accel": 0
 , Log: { Path: A_Temp . "\AHK_Debug.log"
   , "scroll-accel": 0
   , "mbutton-drag": 0
-  , "window-spawning": 0
+  , "window-spawning": 1
   , "terminal-anywhere": 0
-  , "image-paste": 0
-  , "tab-search": 0 }}
+  , "herdr-anywhere": 0
+  , "tab-search": 0
+  , "anti-afk": 0 }}
 
 FileDelete, % Debug.Log.Path
+
+; DisplayFusion handles ordinary application launches. Keep the special window
+; routing for Run, Start, and owned #32770 dialogs in this script.
+WindowSpawningEnabled := 1
+WindowSpawningSpecialOnly := 1
+_alacrittyDpiScale := GetAlacrittyDpiScale()
+G_AlacrittyMenuLeftWidth := 225 * _alacrittyDpiScale
+G_AlacrittyMenuTopHeight := 50 * _alacrittyDpiScale
 
 TS() {
   FormatTime, _t,, HH:mm:ss
@@ -42,8 +51,10 @@ TS() {
   If !IsRemoteSession() {
     MB_Init()
     OnExit("MB_Cleanup")
-    WS_Init() ; Init window spawning
+    If (WindowSpawningEnabled)
+      WS_Init(WindowSpawningSpecialOnly)
     TerminalInit()
+    AntiAFK_Init("09:30-03:30")
   }
   Return
 #If
@@ -58,11 +69,12 @@ TS() {
 ; ┃ === BINDINGS / REMAPS === ┃
 ; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 ; ⇒ AutoHotkey/global
-+!r::Reload ; [ ShIft+Alt+R ] -> Reload script
 +!p::       ; [ ShIft+Alt+P ] -> Toggle pause script+suspend hotkeys
   Suspend
   Pause,,1
 Return
+#IfWinNotActive ahk_exe chrome.exe
++!r::Reload ; [ ShIft+Alt+R ] -> Reload script
 +!e:: ; [ Shift+Alt+E ] -> Edit AHK scripts in Sublime
   KeyWait, Shift
   SetTitleMatchMode, RegEx
@@ -74,12 +86,22 @@ Return
   }
   SetTitleMatchMode, 1
 Return
+#IfWinNotActive
 #IfWinActive .ahk
   ~^s::Reload ; [ Ctrl+S ] -> Reload script on save (in any editor)
 #IfWinActive
 
 ; ⇒ Sublime Text
-#n::UserRun("notepad")
+#n::
+  If (WinExist("ahk_exe sublime_text.exe")) {
+    If (WinActive("ahk_exe sublime_text.exe"))
+      UserRun("notepad")
+    Else
+      WinActivate, ahk_exe sublime_text.exe
+  } Else {
+    UserRun("notepad")
+  }
+Return
 #IfWinActive ahk_exe sublime_text.exe
   ^Tab::Send {Ctrl Down}{PgDn}{Ctrl Up} ; [ Ctrl+Tab ] -> Next tab
   +^Tab::Send {Ctrl Down}{PgUp}{Ctrl Up} ; [ ShIft+Ctrl+Tab ] -> Previous tab
@@ -96,11 +118,6 @@ Return
   +!d::Send {Alt Down}f{AltUp}e{Ctrl Down} ; [ Ctrl+Alt+D] -> Duplicate line
 #IfWinActive
 
-; Chrome — backtick opens tab search unless focused on a text input
-#If (WinActive("ahk_exe chrome.exe") && !ChromeFocusedOnEdit())
-  `::Send ^+a
-#If
-
 ; ⇒ VSCode + forks
 #If (WinActive("ahk_exe code.exe") OR WinActive("ahk_exe vscodium.exe") OR WinActive("ahk_exe Cursor.app.exe"))
   +^w::Send {Alt Down}z{AltUp} ; [ Shift+Ctrl+W ] -> Toggle word wrap
@@ -116,6 +133,29 @@ Return
 ; ⇒ Other global bindings
 +!-::Send {U+2014} ; [ ShIft+Alt+Minus ] -> Em-dash
 +!0::Send {U+2022} ; [ ShIft+Alt+0] -> Bullet
+
+#If (WinActive("ahk_exe chrome.exe"))
+  ^+l::Send {Raw}https://linkedin.com/in/rodboev
+  ^+g::Send {Raw}https://github.com/rodboev
+  ^+r::Send {Raw}C:\Dropbox\Projects\basedin.nyc\resume.pdf
+  ^+b::Send {Raw}https://basedin.nyc
+  ^+p::Send {Raw}347-644-9001
+  ^+c::Send {Raw}New York
+  ^+e::Send {Raw}rod@basedin.nyc
+  ^+s::Send {Raw}Stony Brook University
+  ^+d::Send {Raw}Bachelor's Degree
+#If
+
+#a::
+  _alacrittyConfig := "C:\Users\Rod\AppData\Roaming\alacritty\alacritty.toml"
+  _configWindow := WinExist("alacritty.toml")
+  If (_configWindow)
+    WinActivate, ahk_id %_configWindow%
+  Else
+    UserRun("explorer.exe", _alacrittyConfig)
+Return
+
+#c::SendInput, #a
 ~RWin::Send {AppsKey} ; [RWin] -> Apps/context menu
 ~#t::Run explorer shell:::{3080F90E-D7AD-11D9-BD98-0000947B0257} ; Win+T -> Task View
 !`::WinSet, AlwaysOnTop, Toggle, A ; [ Alt+` ] -> Toggle always-on-top
@@ -237,29 +277,157 @@ Return
   Esc::WinClose
 #IfWinActive
 
-; ⇒ Windows Terminal: convert clipboard image to file for Claude Code paste
-#If WinActive("ahk_exe WindowsTerminal.exe") && ClipboardHasImage()
+; ┏━━━━━━━━━━━━━━━━━━━━━━━┓
+; ┃ === ANTI-AFK (VC) === ┃
+; ┗━━━━━━━━━━━━━━━━━━━━━━━┛
+; Nudges input before Discord's idle timeout so voice chat doesn't flip to AFK.
+; Based on https://github.com/yurehito/antiafk-discordvc
+^!s:: ; [ Ctrl+Alt+S ] -> Toggle anti-AFK
+  global G_AntiAFK
+  G_AntiAFK.Running := !G_AntiAFK.Running
+  _state := G_AntiAFK.Running ? "Running" : "Paused"
+  If (G_AntiAFK.Running && !AntiAFK_InWindow())
+    _state .= " (idle until " G_AntiAFK.Window ")"
+  ToolTip, % "Anti-AFK: " _state
+  SetTimer, RemoveToolTip, -1500
+Return
+
+; activeWindow: "HH:MM-HH:MM" 24-hour, wraps past midnight; "" runs around the clock
+AntiAFK_Init(activeWindow := "") {
+  global G_AntiAFK
+  G_AntiAFK := { Running: 1
+    , LastTick: 0
+    , IdleThreshold: 58000  ; under Discord's 60s AFK cutoff
+    , Procs: ["Discord.exe", "DiscordCanary.exe", "DiscordPTB.exe", "discordmaxxer.exe"] }
+  AntiAFK_SetWindow(activeWindow)
+  SetTimer, AntiAFKTimer, 1000
+}
+
+AntiAFK_SetWindow(activeWindow) {
+  global G_AntiAFK
+  G_AntiAFK.Window := activeWindow
+  G_AntiAFK.Start := -1
+  G_AntiAFK.End := -1
+  If (activeWindow = "")
+    Return
+  If (!RegExMatch(activeWindow, "^\s*(\d{1,2}):?(\d{2})\s*-\s*(\d{1,2}):?(\d{2})\s*$", _m))
+    Return
+  G_AntiAFK.Start := _m1 * 60 + _m2
+  G_AntiAFK.End := _m3 * 60 + _m4
+}
+
+AntiAFK_InWindow() {
+  global G_AntiAFK
+  If (G_AntiAFK.Start < 0 || G_AntiAFK.Start = G_AntiAFK.End)
+    Return true
+  _now := A_Hour * 60 + A_Min
+  If (G_AntiAFK.Start < G_AntiAFK.End)
+    Return (_now >= G_AntiAFK.Start && _now < G_AntiAFK.End)
+  Return (_now >= G_AntiAFK.Start || _now < G_AntiAFK.End) ; window wraps past midnight
+}
+
+AntiAFKTimer:
+  global G_AntiAFK, Debug
+  If (!G_AntiAFK.Running)
+    Return
+  _inWindow := AntiAFK_InWindow()
+  If (Debug.Log["anti-afk"] && _inWindow != G_AntiAFK.WasInWindow) {
+    FileAppend, % TS() " | anti-afk | window | " (_inWindow ? "open" : "closed") " range=" G_AntiAFK.Window "`n", % Debug.Log.Path
+    G_AntiAFK.WasInWindow := _inWindow
+  }
+  If (!_inWindow)
+    Return
+  ; A_TimeIdlePhysical ignores synthetic input, so our own nudges don't reset it
+  If (A_TimeIdlePhysical < G_AntiAFK.IdleThreshold)
+    Return
+  If (G_AntiAFK.LastTick && A_TickCount - G_AntiAFK.LastTick < G_AntiAFK.IdleThreshold)
+    Return
+  If (!AntiAFK_TargetRunning())
+    Return
+  AntiAFK_Nudge()
+  G_AntiAFK.LastTick := A_TickCount
+Return
+
+AntiAFK_TargetRunning() {
+  global G_AntiAFK
+  For _, _proc in G_AntiAFK.Procs {
+    Process, Exist, %_proc%
+    If (ErrorLevel)
+      Return _proc
+  }
+  Return ""
+}
+
+AntiAFK_Nudge() {
+  global Debug
+  Random, _roll, 1, 100
+  If (_roll <= 70) {
+    Random, _dx, 1, 4
+    Random, _dy, -2, 2
+    DllCall("mouse_event", "UInt", 0x0001, "Int", _dx, "Int", _dy, "UInt", 0, "UInt", 0)
+    Sleep, 40
+    DllCall("mouse_event", "UInt", 0x0001, "Int", -_dx, "Int", -_dy, "UInt", 0, "UInt", 0)
+    _action := "mouse dx=" _dx " dy=" _dy
+  } Else {
+    Random, _k, 1, 2
+    _key := (_k = 1) ? "Shift" : "Ctrl"
+    Send, {%_key%}
+    _action := "key " _key
+  }
+  If (Debug.Log["anti-afk"])
+    FileAppend, % TS() " | anti-afk | nudge | " _action " target=" AntiAFK_TargetRunning() "`n", % Debug.Log.Path
+  ; Randomize spacing so the nudges aren't on a fixed cadence
+  Random, _extra, 200, 800
+  Sleep, %_extra%
+}
+
+; ⇒ Terminal image paste: convert clipboard image to file for Claude Code
+#If (WinActive("ahk_exe WindowsTerminal.exe") || WinActive("ahk_exe alacritty.exe")) && ClipboardHasImage()
   ^v::
     ConvertClipboardImageToFile()
     Send ^v
     Sleep, 100
     FileDelete, %A_Temp%\clipboard_paste.png
   Return
+#If (MouseIsOver("ahk_exe WindowsTerminal.exe") || AlacrittySurfaceIsUnderMouse()) && ClipboardHasImage()
   RButton::
     MouseGetPos,,,, ctrl
-    If (Debug.Log["image-paste"])
-      FileAppend, % TS() " | image-paste | RButton | ctrl=" ctrl "`n", % Debug.Log.Path
-    If (ctrl != "Windows.UI.Composition.DesktopWindowContentBridge1") {
+    If (MouseIsOver("ahk_exe WindowsTerminal.exe") && ctrl != "Windows.UI.Composition.DesktopWindowContentBridge1") {
       Click Right
       Return
     }
+    If (AlacrittyMenuRightClick()) {
+      ActivateMouseWindow("ahk_exe alacritty.exe")
+      Click Right
+      Return
+    }
+    If (AlacrittySurfaceIsUnderMouse())
+      ActivateMouseWindow("ahk_exe alacritty.exe")
     ConvertClipboardImageToFile()
-    If (Debug.Log["image-paste"])
-      FileAppend, % TS() " | image-paste | converted, sending ^v`n", % Debug.Log.Path
     Send ^v
     Sleep, 100
     FileDelete, %A_Temp%\clipboard_paste.png
   Return
+#If
+
+#If WinActive("ahk_exe alacritty.exe") && !ClipboardHasImage()
+  $^v::PasteNormalizedClipboard()
+#If AlacrittySurfaceIsUnderMouse() && !ClipboardHasImage()
+  $RButton::
+    If (AlacrittyMenuRightClick()) {
+      ActivateMouseWindow("ahk_exe alacritty.exe")
+      Click Right
+      Return
+    }
+    PasteNormalizedClipboard()
+  Return
+#If
+
+; Send modified clicks to Herdr as unmodified clicks.
+#If AlacrittySurfaceIsUnderMouse()
+  $^RButton::SendInput, {RButton}
+  $+RButton::SendInput, {RButton}
+  $+LButton::SendInput, {LButton}
 #If
 
 #If MouseIsOver("ahk_exe JPEGView.exe")
@@ -401,8 +569,6 @@ Return
   }
 Return
 
-!+t::UserRun("taskschd.msc", "/s")
-
 ; ┏━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ; ┃ === HELPER FUNCTIONS === ┃
 ; ┗━━━━━━━━━━━━━━━━━━━━━━━━━━┛
@@ -535,54 +701,6 @@ ExplorerFocusedOnTextInput() {
     || InStr(_focused, "ComboBox") = 1
     || InStr(_focused, "SearchEditBox") = 1
     || InStr(_focused, "InputSiteWindowClass") = 1)
-}
-
-ChromeFocusedOnEdit() {
-  global G_UIA, Debug
-  If (!G_UIA) {
-    G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
-    OnExit("G_UIACleanup")
-  }
-  _el := 0
-  ; IUIAutomation::GetFocusedElement (vtable 8)
-  DllCall(NumGet(NumGet(G_UIA+0) + 8*A_PtrSize), "Ptr", G_UIA, "Ptr*", _el)
-  If (!_el) {
-    if (Debug.Log["tab-search"])
-      FileAppend, % TS() " | tab-search | no focused element | result=false`n", % Debug.Log.Path
-    Return false
-  }
-  _ct := 0
-  _name := ""
-  _className := ""
-  Try {
-    VarSetCapacity(_var, 24, 0)
-    ; UIA_ControlTypePropertyId = 30003
-    DllCall("OleAut32\VariantInit", "Ptr", &_var)
-    DllCall(NumGet(NumGet(_el+0) + 10*A_PtrSize), "Ptr", _el, "Int", 30003, "Ptr", &_var)
-    _ct := NumGet(_var, 8, "Int")
-    DllCall("OleAut32\VariantClear", "Ptr", &_var)
-    ; UIA_NamePropertyId = 30005
-    DllCall("OleAut32\VariantInit", "Ptr", &_var)
-    DllCall(NumGet(NumGet(_el+0) + 10*A_PtrSize), "Ptr", _el, "Int", 30005, "Ptr", &_var)
-    _vt := NumGet(_var, 0, "UShort")
-    if (_vt = 8)
-      _name := StrGet(NumGet(_var, 8, "Ptr"), "UTF-16")
-    DllCall("OleAut32\VariantClear", "Ptr", &_var)
-    ; UIA_ClassNamePropertyId = 30012
-    DllCall("OleAut32\VariantInit", "Ptr", &_var)
-    DllCall(NumGet(NumGet(_el+0) + 10*A_PtrSize), "Ptr", _el, "Int", 30012, "Ptr", &_var)
-    _vt := NumGet(_var, 0, "UShort")
-    if (_vt = 8)
-      _className := StrGet(NumGet(_var, 8, "Ptr"), "UTF-16")
-    DllCall("OleAut32\VariantClear", "Ptr", &_var)
-  } Finally {
-    ObjRelease(_el)
-  }
-  ; Edit=50004 (inputs, omnibox), ComboBox=50003 (editable dropdowns)
-  _isEdit := (_ct = 50004 || _ct = 50003)
-  if (Debug.Log["tab-search"])
-    FileAppend, % TS() " | tab-search | ct=" _ct " name=" _name " class=" _className " | result=" (_isEdit ? "true" : "false") "`n", % Debug.Log.Path
-  Return _isEdit
 }
 
 SuperwhisperCloseWindow(hwnd:=0) {
@@ -804,6 +922,107 @@ ClipboardHasImage() {
   Return DllCall("IsClipboardFormatAvailable", "UInt", 2) && !DllCall("IsClipboardFormatAvailable", "UInt", 15)
 }
 
+PasteNormalizedClipboard() {
+  ActivateMouseWindow("ahk_exe alacritty.exe")
+  _savedClipboard := ClipboardAll
+  _text := Clipboard
+  _text := StrReplace(_text, "`r`n", "`r")
+  _text := StrReplace(_text, "`n", "`r")
+  If (!ClipboardSetRawText(_text))
+    Clipboard := _text
+  ClipWait, 0.2
+  SendInput, ^v
+  Sleep, 100
+  Clipboard := _savedClipboard
+}
+
+ActivateMouseWindow(winTitle) {
+  MouseGetPos,,, _hwnd
+  If (!WinExist(winTitle " ahk_id " _hwnd)) {
+    If (winTitle = "ahk_exe alacritty.exe")
+      _hwnd := AlacrittyWindowAtMouse()
+    If (!_hwnd || !WinExist(winTitle " ahk_id " _hwnd))
+      Return false
+  }
+  WinActivate, ahk_id %_hwnd%
+  WinWaitActive, ahk_id %_hwnd%,, 0.2
+  Return true
+}
+
+GetAlacrittyDpiScale() {
+  WinGet, _hwnd, ID, ahk_exe alacritty.exe
+  If (_hwnd)
+    _dpi := DllCall("User32.dll\GetDpiForWindow", "Ptr", _hwnd, "UInt")
+  If (!_dpi)
+    _dpi := DllCall("User32.dll\GetDpiForSystem", "UInt")
+  If (!_dpi)
+    _dpi := 96
+  Return _dpi / 96
+}
+
+AlacrittyMenuRightClick() {
+  global G_AlacrittyMenuLeftWidth, G_AlacrittyMenuTopHeight
+  CoordMode, Mouse, Screen
+  MouseGetPos, _x, _y
+  _hwnd := AlacrittyWindowAtMouse()
+  If (!_hwnd)
+    Return false
+  WinGetPos, _left, _top, _width, _height, ahk_id %_hwnd%
+  If (_x < _left || _x >= _left + _width || _y < _top || _y >= _top + _height)
+    Return false
+  Return ((_x < _left + G_AlacrittyMenuLeftWidth)
+    || (_y < _top + G_AlacrittyMenuTopHeight))
+}
+
+AlacrittySurfaceIsUnderMouse() {
+  Return AlacrittyWindowAtMouse() != 0
+}
+
+AlacrittyWindowAtMouse() {
+  CoordMode, Mouse, Screen
+  MouseGetPos, _x, _y, _under
+  WinGet, _exe, ProcessName, ahk_id %_under%
+  If (_exe = "alacritty.exe")
+    Return _under
+  If (_exe != "herdr.exe")
+    Return 0
+  WinGet, _list, List, ahk_exe alacritty.exe
+  Loop, %_list% {
+    _hwnd := _list%A_Index%
+    WinGetPos, _left, _top, _width, _height, ahk_id %_hwnd%
+    If (_x >= _left && _x < _left + _width && _y >= _top && _y < _top + _height)
+      Return _hwnd
+  }
+  Return 0
+}
+
+
+ClipboardSetRawText(text) {
+  _length := StrLen(text)
+  _hText := DllCall("GlobalAlloc", "UInt", 0x42, "UPtr", (_length + 1) * 2, "Ptr")
+  If (!_hText)
+    Return false
+  _pText := DllCall("GlobalLock", "Ptr", _hText, "Ptr")
+  If (!_pText) {
+    DllCall("GlobalFree", "Ptr", _hText)
+    Return false
+  }
+  StrPut(text, _pText, _length + 1, "UTF-16")
+  DllCall("GlobalUnlock", "Ptr", _hText)
+  If (!DllCall("OpenClipboard", "Ptr", 0)) {
+    DllCall("GlobalFree", "Ptr", _hText)
+    Return false
+  }
+  DllCall("EmptyClipboard")
+  If (!DllCall("SetClipboardData", "UInt", 13, "Ptr", _hText)) {
+    DllCall("CloseClipboard")
+    DllCall("GlobalFree", "Ptr", _hText)
+    Return false
+  }
+  DllCall("CloseClipboard")
+  Return true
+}
+
 ConvertClipboardImageToFile() {
   If (!DllCall("IsClipboardFormatAvailable", "UInt", 2) || DllCall("IsClipboardFormatAvailable", "UInt", 15))
     Return false
@@ -925,3 +1144,4 @@ Return
 #Include %A_ScriptDir%\extended-spy.ahk
 #Include %A_ScriptDir%\mbutton-drag.ahk
 #Include %A_ScriptDir%\window-spawning.ahk
+#Include %A_ScriptDir%\herdr-anywhere.ahk

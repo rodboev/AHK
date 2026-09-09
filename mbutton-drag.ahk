@@ -1304,12 +1304,12 @@ SendVWheel(target, curveValue, signedDist, originX, originY, useInput := 0) {
     If (Abs(_accumInput) >= 30.0) {
       delta := ((_accumInput > 0) ? 30 : -30)
       _accumInput -= delta
-      If (MB.WheelRouting < 0) {
-        _prevRouting := 0
-        DllCall("SystemParametersInfo", "UInt", 0x201C, "UInt", 0, "Ptr*", _prevRouting, "UInt", 0)
-        MB.WheelRouting := _prevRouting
-        DllCall("SystemParametersInfo", "UInt", 0x201D, "UInt", 0, "Ptr", 0, "UInt", 0)
-      }
+      ; If (MB.WheelRouting < 0) {
+      ;   _prevRouting := 0
+      ;   DllCall("SystemParametersInfo", "UInt", 0x201C, "UInt", 0, "Ptr*", _prevRouting, "UInt", 0)
+      ;   MB.WheelRouting := _prevRouting
+      ;   DllCall("SystemParametersInfo", "UInt", 0x201D, "UInt", 0, "Ptr", 0, "UInt", 0)
+      ; }
       DllCall("mouse_event", "UInt", 0x0800, "Int", 0, "Int", 0, "Int", delta, "UPtr", 0)
       Return delta
     }
@@ -1673,15 +1673,17 @@ MB_EndSession() {
   MB_DismissCursor()
   MB_ReleaseUIA()
   MB_ReleaseScrollbar()
-  If (MB.WheelRouting >= 0) {
-    _restore := MB.WheelRouting
-    DllCall("SystemParametersInfo", "UInt", 0x201D, "UInt", 0, "Ptr", _restore, "UInt", 0)
-    MB.WheelRouting := -1
-  }
+  ; If (MB.WheelRouting >= 0) {
+  ;   _restore := MB.WheelRouting
+  ;   DllCall("SystemParametersInfo", "UInt", 0x201D, "UInt", 0, "Ptr", _restore, "UInt", 0)
+  ;   MB.WheelRouting := -1
+  ; }
 }
 
 MB_Init() {
   global G_hSizeAll, G_hArrowDefault, G_hIBeamDefault
+  ; TODO: remove once cleanup is proven stable
+  DllCall("SystemParametersInfo", "UInt", 0x201D, "UInt", 0, "Ptr", 1, "UInt", 0)
   G_hSizeAll := DllCall("LoadCursor", "Ptr", 0, "Ptr", 32646, "Ptr")  ; IDC_SIZEALL
   EnvGet, _localAppData, LOCALAPPDATA
   _cursorsDir1 := _localAppData "\Microsoft\Windows\Cursors\"

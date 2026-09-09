@@ -31,9 +31,10 @@ GetCursorMonitor() {
   Return 1
 }
 
-WS_Init() {
+WS_Init(specialOnly := false) {
   global WS, Debug
   WS := {}
+  WS.SpecialOnly := specialOnly
   WS.RecentExes := {}              ; WMI: exe name -> A_TickCount (process started)
   WS.LauncherTick := 0             ; Recent launcher-dialog interaction timestamp
   WS.LauncherHwnd := 0             ; Launcher dialog hwnd
@@ -86,10 +87,15 @@ WS_Init() {
     , "{56FDF342-FD6D-11D0-958A-006097C9A090}")
   if (WS.TaskbarList)
     DllCall(NumGet(NumGet(WS.TaskbarList+0)+3*A_PtrSize), "Ptr", WS.TaskbarList, "Int")  ; HrInit
-  ; WMI process start monitoring — detects launches from any source (Run dialog, shortcuts, etc.)
-  ; Uses semi-sync ExecNotificationQuery + timer poll (async SWbemSink unreliable in AHK STA)
-  WS.WMIBackoff := 1000
-  WS_WMIConnect()
+  ; Ordinary process-start routing is left to DisplayFusion in special-only mode.
+  if (!WS.SpecialOnly) {
+    ; WMI process start monitoring detects launches from any source.
+    ; Uses semi-sync ExecNotificationQuery + timer poll because async SWbemSink is unreliable in AHK STA.
+    WS.WMIBackoff := 1000
+    WS_WMIConnect()
+  } else {
+    WS_Log("INIT: special-only window routing")
+  }
 
   SetTimer, WS_SweepTracking, 1000
   SW_InitPTT()
@@ -171,21 +177,24 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
         return
       }
     }
+    if (WS.SpecialOnly && !WS_IsSpecialWindow(lParam))
+      return
     if (!WS_IsMovable(lParam))
       return
     WinGet, _actExe, ProcessName, ahk_id %lParam%
     _hasIntent := false
+    _realStart := false
     _wmiIntentMaxAge := 50
     _launcherIntentMaxAge := 2000
     ; Process age: if the process is <500ms old, it's a fresh launch
     WinGet, _actPid, PID, ahk_id %lParam%
     _procAge := WS_GetProcessAge(_actPid)
     if (_procAge >= 0 && _procAge < 500)
-      _hasIntent := true
+      _hasIntent := true, _realStart := true
     if (!_hasIntent && WS.RecentExes.HasKey(_actExe)) {
       _intentAge := A_TickCount - WS.RecentExes[_actExe]
       if (_intentAge <= _wmiIntentMaxAge)
-        _hasIntent := true
+        _hasIntent := true, _realStart := true
     }
     if (!_hasIntent && WS.LauncherTick) {
       _launcherAge := A_TickCount - WS.LauncherTick
@@ -194,6 +203,14 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
     }
     if (!_hasIntent)
       return
+    ; Borderless fullscreen (game/media): don't yank across monitors unless it's a fresh launch
+    if (WS_IsBorderlessFullscreen(lParam) && !_realStart) {
+      WS.RecentExes.Delete(_actExe)
+      WS.LauncherTick := 0
+      WS.LauncherHwnd := 0
+      WS_Log("SKIP (borderless-fullscreen activate): hwnd=" . lParam . " exe=" . _actExe)
+      return
+    }
     windowMon := GetMonitor("ahk_id " . lParam)
     if (windowMon == cursorMon) {
       WS.RecentExes.Delete(_actExe)
@@ -213,6 +230,9 @@ WS_OnShellHook(wParam, lParam, msg, hwnd) {
   }
 
   ; --- Creation path: new window ---
+
+  if (WS.SpecialOnly && !WS_IsSpecialWindow(lParam))
+    return
 
   ; Skip if already processed (duplicate HSHELL_WINDOWCREATED for same hwnd)
   ; Only suppress within 5s — long-lived single-instance apps reuse the same hwnd on re-launch
@@ -281,6 +301,8 @@ WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTim
     WinGetClass, _createClass, ahk_id %hwnd%
     if (_createClass == "")
       return
+    if (WS.SpecialOnly && !WS_IsSpecialWindow(hwnd))
+      return
     if HasVal(WS.ExcludedClasses, _createClass)  ; excluded classes: never hide or move
       return
     if (WS.Processed.HasKey(hwnd))
@@ -289,16 +311,14 @@ WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTim
     _ppOwner := DllCall("GetWindow", "Ptr", hwnd, "UInt", 4, "Ptr")  ; GW_OWNER=4
     _ppOwnerStyle := 0
     _ppOwnerMon := 0
+    WinGetTitle, _createTitle, ahk_id %hwnd%
     if (_ppOwner) {
       WinGet, _ppOwnerStyle, Style, ahk_id %_ppOwner%
       if ((_ppOwnerStyle & 0x10000000) && _createClass == "#32770") {
-        WinGetClass, _ppOwnerClass, ahk_id %_ppOwner%
-        if (_ppOwnerClass == "#32770") {
-          WinGet, _ppPid, PID, ahk_id %hwnd%
-          WinGet, _ppOwnerPid, PID, ahk_id %_ppOwner%
-          if (_ppPid = _ppOwnerPid)
-            _ppOwnerMon := GetMonitor("ahk_id " . _ppOwner)
-        }
+        WinGet, _ppPid, PID, ahk_id %hwnd%
+        WinGet, _ppOwnerPid, PID, ahk_id %_ppOwner%
+        if (_ppPid = _ppOwnerPid)
+          _ppOwnerMon := GetMonitor("ahk_id " . _ppOwner)
       }
     }
     if (_ppOwner && WS.OwnerSentinel.HasKey(_ppOwner + 0)) {
@@ -315,7 +335,8 @@ WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTim
     if (_ppOwner) {
       if (!_ppOwnerMon && WS.Processed.HasKey(_ppOwner + 0))
         return
-      if ((_ppOwnerStyle & 0x10000000) && !_ppOwnerMon)  ; Owner is WS_VISIBLE → real dialog, skip
+      if ((_ppOwnerStyle & 0x10000000) && !_ppOwnerMon
+        && !(_createClass == "#32770" && _createTitle == "Run"))  ; Keep Run dialog cursor-routed.
         return
     }
     ; Hide FIRST — minimize latency before next VSYNC paints the window
@@ -381,6 +402,10 @@ WS_OnWinEvent(hHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTim
 WS_TryMoveOrDefer(hwnd, targetMon, tick, shouldDefer:=true) {
   global WS
   hwnd := hwnd + 0
+  if (WS.SpecialOnly && !WS_IsSpecialWindow(hwnd)) {
+    WS_Reveal(hwnd)
+    return true
+  }
   if (WS_IsReady(hwnd)) {
     WinGet, _swExe, ProcessName, ahk_id %hwnd%
     WinGetTitle, _swTitle, ahk_id %hwnd%
@@ -391,6 +416,13 @@ WS_TryMoveOrDefer(hwnd, targetMon, tick, shouldDefer:=true) {
       return true
     }
     if (WS_IsMovable(hwnd)) {
+      ; Borderless fullscreen created by an already-running process: leave in place
+      WinGet, _bfPid, PID, ahk_id %hwnd%
+      _bfAge := WS_GetProcessAge(_bfPid)
+      if (WS_IsBorderlessFullscreen(hwnd) && !(_bfAge >= 0 && _bfAge < 500)) {
+        WS_Reveal(hwnd)
+        return true
+      }
       windowMon := GetMonitor("ahk_id " . hwnd)
       if (windowMon != targetMon)
         WS_MoveToMonitor(hwnd, windowMon, targetMon)
@@ -411,6 +443,11 @@ WS_TryMoveOrDefer(hwnd, targetMon, tick, shouldDefer:=true) {
   _fn2 := Func("WS_TimeoutPending").Bind(hwnd)
   SetTimer, %_fn2%, -2000
   return false
+}
+
+WS_IsSpecialWindow(hwnd) {
+  WinGetClass, _cls, ahk_id %hwnd%
+  return (_cls == "#32770")
 }
 
 ; Escalating backup poll — catches windows where WinEvent didn't fire (e.g. elevated processes)
@@ -596,23 +633,38 @@ WS_IsMovable(hwnd) {
     WinGet, _ownerStyle, Style, ahk_id %_owner%
     if (_cls == "#32770" && (_ownerStyle & 0x10000000)) {
       WinGetClass, _ownerCls, ahk_id %_owner%
-      if (_ownerCls == "#32770") {
-        WinGet, _pid, PID, ahk_id %hwnd%
-        WinGet, _ownerPid, PID, ahk_id %_owner%
-        if (_pid = _ownerPid)
-          _allowOwned32770 := true
-      }
+      WinGet, _pid, PID, ahk_id %hwnd%
+      WinGet, _ownerPid, PID, ahk_id %_owner%
+      if (_pid = _ownerPid && (WS.SpecialOnly || _ownerCls == "#32770"))
+        _allowOwned32770 := true
     }
   }
   WinGetTitle, _title, ahk_id %hwnd%
   if (_title == "" && _cls != "ApplicationFrameWindow" && !_allowOwned32770)
     return false
-  if (_owner && (_ownerStyle & 0x10000000) && !_allowOwned32770)
+  if (_owner && (_ownerStyle & 0x10000000) && !_allowOwned32770
+    && !(_cls == "#32770" && _title == "Run" && WS.SpecialOnly))
     return false
   WinGet, _exStyle, ExStyle, ahk_id %hwnd%
   if (_exStyle & 0x80)  ; WS_EX_TOOLWINDOW
     return false
   return true
+}
+
+; True when the window is a captionless popup covering its whole monitor (games, fullscreen media)
+WS_IsBorderlessFullscreen(hwnd) {
+  WinGet, _style, Style, ahk_id %hwnd%
+  if (_style & 0xC00000)  ; WS_CAPTION — has a title bar, not borderless
+    return false
+  WinGet, _minMax, MinMax, ahk_id %hwnd%
+  if (_minMax != 0)  ; min/maximized handled by WS_MoveToMonitor
+    return false
+  WinGetPos, _x, _y, _w, _h, ahk_id %hwnd%
+  if (_w <= 0 || _h <= 0)
+    return false
+  _mon := GetMonitor("ahk_id " . hwnd)
+  SysGet, m, Monitor, %_mon%  ; full bounds incl. taskbar area
+  return (_x <= mLeft && _y <= mTop && (_x + _w) >= mRight && (_y + _h) >= mBottom)
 }
 
 WS_MoveToMonitor(hwnd, srcMon, tgtMon) {

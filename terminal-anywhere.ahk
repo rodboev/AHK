@@ -10,7 +10,7 @@
 ; [ Win + E ]                   -> Open Explorer at contextual path
 
 TA_GetCommand(slot) {
-  static commands := {1: "codex.cmd"
+  static commands := {1: "codex.exe"
     , 2: "claude.cmd"
     , 3: "mimo.cmd"
     , 4: "hermes"}
@@ -73,36 +73,7 @@ TA_GetCommand(slot) {
   Return
 #IfWinActive
 
-#e::OpenExplorer()
-
-F10::OpenTerminal({})
-^F10::OpenTerminal({cmd: TA_GetCommand(1)})
-+F10::OpenTerminal({elevate: true})
-^+F10::OpenTerminal({cmd: TA_GetCommand(2)})
-!F10::OpenTerminal({cmd: TA_GetCommand(4)})
-!+F10::OpenTerminal({cmd: TA_GetCommand(3)})
-^!+F10:: ; [ Ctrl + Alt + Shift + F10 ] -> Open current path as SYSTEM
-  _dir := GetTerminalDir()
-  ; Resolve wt.exe to full path — SYSTEM context lacks user PATH entries
-  _wtPath := FindInPath("wt.exe")
-  If (!_wtPath) {
-    MsgBox, 16, TI Elevation, wt.exe not found in PATH
-    Return
-  }
-  ; Build display string and confirm before SYSTEM elevation
-  _tiCmd := "ti " . _wtPath
-  If (TA.WTProfile)
-    _tiCmd .= " -p " . TA.WTProfile
-  _tiCmd .= " -d " . _dir
-  _displayCmd := StrReplace(_tiCmd, "&", "&&")
-  MsgBox, 4, TI Elevation, % "Constructed command:`n`n" . _displayCmd . "`n`nClick Yes to run, No to cancel"
-  IfMsgBox No
-    Return
-  If (TA.WTProfile)
-    UserRun("elevate", "ti", _wtPath, "-p " . TA.WTProfile, "-d " . _dir)
-  Else
-    UserRun("elevate", "ti", _wtPath, "-d " . _dir)
-Return
+; Herdr-anywhere owns the global terminal launch hotkeys.
 
 TerminalInit() {
   global TA, Debug
