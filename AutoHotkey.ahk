@@ -17,6 +17,10 @@
 SendMode, Input
 SetWorkingDir, %A_ScriptDir%
 SetTitleMatchMode, 2
+; The hook suppresses the physical key while the main thread evaluates an #If.
+; Default is 1000ms; under CPU contention that is how long a click can be held.
+; Timing out passes the input through natively instead.
+#IfTimeout 50
 
 global Debug
 Debug := { Tooltips: {"scroll-accel": 0
@@ -24,7 +28,7 @@ Debug := { Tooltips: {"scroll-accel": 0
 , Log: { Path: A_Temp . "\AHK_Debug.log"
   , "scroll-accel": 0
   , "mbutton-drag": 0
-  , "mb-timing": 1
+  , "mb-timing": 0
   , "window-spawning": 1
   , "terminal-anywhere": 0
   , "herdr-anywhere": 1
@@ -57,9 +61,25 @@ TS() {
       WS_Init(WindowSpawningSpecialOnly)
     TerminalInit()
     AntiAFK_Init("09:30-03:30")
+    If (Debug.Log["mb-timing"])
+      SetTimer, MainThreadHeartbeat, 100
   }
   Return
 #If
+
+; Main-thread starvation probe. #If expressions guarding hotkeys are evaluated on
+; this thread while the hook holds the physical input, so lateness here is the
+; ceiling on how long a keypress or click can be stalled.
+MainThreadHeartbeat:
+  global G_HB, Debug
+  _hbNow := QPCms()
+  If (G_HB) {
+    _hbLate := _hbNow - G_HB - 100
+    If (_hbLate > 30)
+      FileAppend, % TS() " | mb-timing | STARVED | late=" Round(_hbLate, 1) "ms`n", % Debug.Log.Path
+  }
+  G_HB := _hbNow
+Return
 
 ; --------------------------------------------------------------------------
 ; END OF AUTO-EXECUTE
@@ -434,7 +454,7 @@ AntiAFK_Nudge() {
   $+LButton::SendInput, {LButton}
 #If
 
-#If MouseIsOver("ahk_exe JPEGView.exe")
+#If MouseIsOverMB("ahk_exe JPEGView.exe")
   Enter::
     WinGet, active_id, ID, A
     Send w
@@ -443,7 +463,7 @@ AntiAFK_Nudge() {
   $MButton::SendInput {F11}
 #If
 
-#If MouseIsOver("ahk_class QWidget")
+#If MouseIsOverMB("ahk_class QWidget")
   *MButton::Send n ; VLC: next file on middle click
 #If
 
@@ -551,6 +571,34 @@ HasVal(arr, val) {
 MouseIsOver(winTitle) {
   MouseGetPos,,, hwnd
   Return WinExist(winTitle " ahk_id " hwnd)
+}
+
+; ⇒ Whether MButton drag-scroll should claim the button at all.
+; Same idea as WheelAccelDivisor returning 0: a false result means the hook never
+; suppresses the button, so the app gets it straight from the hardware. Handling
+; it in the hotkey body instead is too late, because suppress-then-SendInput puts
+; the replay on a main thread that CPU contention can stall for seconds.
+; Browsers scroll MButton drag natively, so they never need us.
+MButtonHandled() {
+  MouseGetPos,,, _hwnd
+  WinGet, _exe, ProcessName, ahk_id %_hwnd%
+  Return !HasVal(["chrome.exe", "msedge.exe", "brave.exe", "vivaldi.exe", "opera.exe"], _exe)
+}
+
+; ⇒ MouseIsOver for #If contexts guarding MButton variants.
+; The mouse hook suppresses the physical button until the main thread evaluates
+; these, so their cost is added input latency in every app, even ones we pass
+; through. Accumulates per press for the mb-timing log; MButton reads G_MBIf.
+MouseIsOverMB(winTitle) {
+  global G_MBIf
+  _t0 := QPCms()
+  If (!IsObject(G_MBIf) or (_t0 - G_MBIf.End) > 250)
+    G_MBIf := {Ms: 0, N: 0}
+  _r := MouseIsOver(winTitle)
+  G_MBIf.End := QPCms()
+  G_MBIf.Ms += G_MBIf.End - _t0
+  G_MBIf.N++
+  Return _r
 }
 
 ; ⇒ Calculate scroll acceleration

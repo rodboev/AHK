@@ -9,8 +9,21 @@
 ; Version: 4.0
 
 ; -> [ MButton + drag ] -> Invoke smooth scrolling on any app; release to stop.
+; Gated so passthrough apps never have the button suppressed. G_MBDownHandled
+; pins the release to the same decision, so moving the cursor mid-drag can't
+; strand a session with its timer running and the cursor replaced.
+#If MButtonHandled()
 *MButton::
-  global MB, Debug
+  global MB, Debug, G_MBIf, G_MBDownHandled
+  _qpc0 := QPCms()
+  G_MBDownHandled := 1
+  ; The mouse hook holds the physical button while the main thread answers the
+  ; #If expressions guarding the JPEGView/VLC MButton variants, so that cost is
+  ; input latency for every app, passthrough ones included
+  _ifMs := 0, _ifN := 0, _dispatchMs := 0
+  If (IsObject(G_MBIf) and (_qpc0 - G_MBIf.End) < 250)
+    _ifMs := G_MBIf.Ms, _ifN := G_MBIf.N, _dispatchMs := _qpc0 - G_MBIf.End
+  _uiaInitMs := 0, _qpcSend0 := 0, _qpcSend1 := 0
 
   ; Core session state
   MB := { Threshold: 2, ClickThreshold: 10
@@ -46,8 +59,10 @@
 
   global G_UIA  ; Singleton: UIA root object (persists across sessions)
   If (!G_UIA) {
+    _qpcUIA := QPCms()
     G_UIA := ComObjCreate("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
     OnExit("G_UIACleanup")  ; Register cleanup (G_UIACleanup defined in AutoHotkey.ahk)
+    _uiaInitMs := QPCms() - _qpcUIA
   }
 
   global G_hSizeAll, G_hArrowDefault, G_hIBeamDefault
@@ -82,7 +97,9 @@
   If (_deferDown) {
     MB.DeferredDown := 1
   } Else {
+    _qpcSend0 := QPCms()
     SendInput, {Blind}{MButton Down}
+    _qpcSend1 := QPCms()
   }
   MB.Disabled := 0
 
@@ -112,21 +129,9 @@
   MB.DragDist := 0
   MB.ScrollTicks := 0
   MB.SessionStart := A_TickCount
-
-  ; Native-autoscroll browsers: hard passthrough, no probe, no UIA setup.
-  ; Under CPU contention the probe loses its cursor-change race (autoscroll icon
-  ; renders late) and UIA setup blocks the script on the busy renderer process.
-  _browsers := ["chrome.exe", "msedge.exe", "brave.exe", "vivaldi.exe", "opera.exe"]
-  If (HasVal(_browsers, MB.ProcName)) {
-    If (MB.DeferredDown) {
-      MB.DeferredDown := 0
-      SendInput, {Blind}{MButton Down}
-    }
-    MB.Disabled := 1
-    If (Debug.Log["mbutton-drag"])
-      FileAppend, % TS() " | mbutton-drag | PASSTHROUGH | browser=" MB.ProcName " class=" MB.ClassName "`n", % Debug.Log.Path
-    Return
-  }
+  MB.T0 := _qpc0
+  _qpcA := QPCms()
+  _qpcB0 := _qpcA, _qpcB1 := _qpcA, _qpcB2 := _qpcA, _qpcC := _qpcA, _qpcD := _qpcA
 
   ; TreeView controls -> direct to VSCROLL (skip native probe, never has native MButton scroll)
   If (InStr(MB.ClassName, "SysTreeView32")) {
@@ -172,6 +177,24 @@
     }
     If (Debug.Log["mbutton-drag"])
       FileAppend, % TS() " | mbutton-drag | LVM_PROBE | proc=" MB.ProcName " ctrl=" MB.ClassName " scrollRange=" _hasScrollRange " initPos=" MB.Probe.InitScrollPos "`n", % Debug.Log.Path
+    MB.Probe.Active := 1
+    SetTimer, MBDragTimer, 10
+    Return
+  }
+
+  ; Bare windows (no child HWNDs, no scroll styles) have nothing for the UIA walk to
+  ; find, and the walk costs ~110ms of cross-process COM before the first scroll event.
+  ; Skip straight to WHEEL. Custom-rendered apps like alacritty land here.
+  If (!DllCall("GetWindow", "Ptr", MB.Win, "UInt", 5, "Ptr") and !HasWin32Scrollbar(MB.Win, "any")) {
+    MB.Method := "WHEEL"
+    MB.Probe.InitScrollPos := GetScrollPos(MB.Win)
+    MB.Probe.InitScrollPct := -1.0
+    MB.Probe.InitScrollPctH := -1.0
+    If (Debug.Log["mb-timing"])
+      FileAppend, % TS() " | mb-timing | SETUP | proc=" MB.ProcName " class=" MB.WinClass " BARE_WINDOW skipUIA=1"
+        . " ifEval=" Round(_ifMs, 1) "/" _ifN " dispatch=" Round(_dispatchMs, 1) " uiaInit=" Round(_uiaInitMs, 1)
+        . " sendInput=" Round(_qpcSend1 - _qpcSend0, 1)
+        . " TOTAL=" Round(QPCms() - _qpc0, 1) "`n", % Debug.Log.Path
     MB.Probe.Active := 1
     SetTimer, MBDragTimer, 10
     Return
@@ -223,10 +246,13 @@
           FileAppend, % TS() " | mbutton-drag | UIA_SCROLLBAR_NONE | setupMs=" _setupMs " title=" _wtTitle "`n", % Debug.Log.Path
       }
     }
+    _qpcD := QPCms()
     Goto, MBSetupCursor
   }
 
+  _qpcB0 := QPCms()
   _scrollChild := FindScrollableChild(MB.Win, MB.X1, MB.Y1)
+  _qpcB1 := QPCms()
   _scrollElement := 0
   _pattern := 0
   _fallback := 0
@@ -254,6 +280,7 @@
     }
   }
 
+  _qpcB2 := QPCms()
   If (Debug.Log["mbutton-drag"])
     FileAppend, % TS() " | mbutton-drag | UIA_SETUP | scrollChild=" _scrollChild " scrollElement=" _scrollElement " pattern=" _pattern " fallback=" _fallback "`n", % Debug.Log.Path
 
@@ -308,6 +335,8 @@
     Return
   }
 
+  _qpcC := QPCms()
+
   ; For UWP/XAML apps (Windows Terminal, etc.): walk UIA tree from cursor position
   ; ElementFromHandle on the window doesn't find XAML ScrollViewers, but ElementFromPoint does
   ; Search UIA tree for scrollability (works for UWP/XAML apps like Windows Terminal)
@@ -337,6 +366,8 @@
     }
   }
 
+  _qpcD := QPCms()
+
   MBSetupCursor:
   If (_hasScrollRange and !MB.Probe.InitCursorUnknown and MB.UIA.Pattern) {
     MB.Cursor.Active := 1
@@ -364,9 +395,24 @@
   }
 
   ; Start timer in native probe mode
+  If (Debug.Log["mb-timing"]) {
+    _qpcE := QPCms()
+    FileAppend, % TS() " | mb-timing | SETUP | proc=" MB.ProcName " class=" MB.WinClass "/" MB.ClassName " ctrl=" MB.Ctrl
+      . " ifEval=" Round(_ifMs, 1) "/" _ifN
+      . " dispatch=" Round(_dispatchMs, 1)
+      . " uiaInit=" Round(_uiaInitMs, 1)
+      . " sendInput=" Round(_qpcSend1 - _qpcSend0, 1)
+      . " pre=" Round(_qpcA - _qpc0, 1)
+      . " findChild=" Round(_qpcB1 - _qpcB0, 1)
+      . " elemFromHandle=" Round(_qpcB2 - _qpcB1, 1)
+      . " scrollRange=" Round(_qpcC - _qpcB2, 1)
+      . " ancestorWalk=" Round(_qpcD - _qpcC, 1)
+      . " cursor=" Round(_qpcE - _qpcD, 1)
+      . " TOTAL=" Round(_qpcE - _qpc0, 1) "`n", % Debug.Log.Path
+  }
   MB.Probe.Active := 1
   SetTimer, MBDragTimer, 10
-Return 
+Return
 
 MBDragTimer:
   Critical ; Prevent MButton Up from interrupting mid-DllCall (race condition safety)
@@ -457,6 +503,8 @@ MBDragTimer:
       MB_ReleaseUIA()
       MB.Method := "WHEEL"
     }
+    If (Debug.Log["mb-timing"])
+      FileAppend, % TS() " | mb-timing | PROBE_END | proc=" MB.ProcName " method=" MB.Method " sinceDown=" Round(QPCms() - MB.T0, 1) " probeTicks=" MB.ScrollTicks "`n", % Debug.Log.Path
     If (Debug.Tooltips["mbutton-drag"])
       ToolTip, % "No native scroll — using " MB.Method
     ; Log session start
@@ -475,8 +523,11 @@ MBDragTimer:
   If (_dist > MB.DragDist)
     MB.DragDist := _dist
   If (AbsDistY >= MB.Threshold or AbsDistX >= MB.Threshold) {
-    If (!MB.Triggered)
+    If (!MB.Triggered) {
       MB.Triggered := 1
+      If (Debug.Log["mb-timing"])
+        FileAppend, % TS() " | mb-timing | FIRST_SCROLL | proc=" MB.ProcName " method=" MB.Method " sinceDown=" Round(QPCms() - MB.T0, 1) "`n", % Debug.Log.Path
+    }
     ; UIA uses gentler curve (0.8), non-UIA uses steeper curve (1.2) for more responsiveness
     ; UIA: gentle curve throughout; non-UIA: gentle start, steep at distance
     _steepCurve := (MB.Method != "UIA")
@@ -1005,7 +1056,9 @@ MBDragTimer:
           } Else If (_hasScrollbar) {
             MB.FallbackChecked := 1
             MB_ConfirmCursor("method=WHEEL")
-          } Else If (MB.Ctrl and !MB.UIA.Scrollbar) {
+          ; MouseGetPos returns the window itself when there are no child controls,
+          ; so retargeting to MB.Ctrl would resend to the same HWND
+          } Else If (MB.Ctrl and MB.Ctrl != MB.Win and !MB.UIA.Scrollbar) {
             MB.Method := "WHEEL_CTRL"
             MB.FallbackChecked := 0
             MB_DeferCursor()
@@ -1016,6 +1069,8 @@ MBDragTimer:
           } Else {
             MB.FallbackChecked := 1
           }
+          If (Debug.Log["mb-timing"])
+            FileAppend, % TS() " | mb-timing | WHEEL_VERIFY | proc=" MB.ProcName " hasScrollbar=" _hasScrollbar " method=" MB.Method " sinceDown=" Round(QPCms() - MB.T0, 1) "`n", % Debug.Log.Path
         } Else {
           _mbWin := MB.Win
           DeltaY := SendVWheel(_mbWin, curveValueY, SignedDistY, MB.X1, MB.Y1)
@@ -1044,10 +1099,18 @@ MBDragTimer:
   }
 Return
 
+; Bare global read, so a starved main thread can't stall the release the way a
+; function call under #If can
+#If G_MBDownHandled
 *MButton Up::
   Critical ; Prevent timer from firing during cleanup (race condition safety)
-  global MB, Debug
+  global MB, Debug, G_MBIf, G_MBDownHandled
+  _upQpc0 := QPCms()
+  _upIfMs := 0, _upIfN := 0, _upDispatch := 0
+  If (IsObject(G_MBIf) and (_upQpc0 - G_MBIf.End) < 250)
+    _upIfMs := G_MBIf.Ms, _upIfN := G_MBIf.N, _upDispatch := _upQpc0 - G_MBIf.End
   MB_EndSession()
+  _upQpcEnd := QPCms()
   If (Debug.Log["mbutton-drag"] && MB.Triggered) {
     _duration := A_TickCount - MB.SessionStart
     FileAppend, % TS() " | mbutton-drag | END | proc=" MB.ProcName " method=" MB.Method " ticks=" MB.ScrollTicks " duration=" _duration "ms`n", % Debug.Log.Path
@@ -1064,7 +1127,26 @@ Return
     If (Debug.Log["mbutton-drag"])
       FileAppend, % TS() " | mbutton-drag | MBUTTON_UP | dragDist=" MB.DragDist " method=" MB.Method "`n", % Debug.Log.Path
   }
+  If (Debug.Log["mb-timing"])
+    FileAppend, % TS() " | mb-timing | UP | proc=" MB.ProcName " disabled=" MB.Disabled
+      . " ifEval=" Round(_upIfMs, 1) "/" _upIfN
+      . " dispatch=" Round(_upDispatch, 1)
+      . " endSession=" Round(_upQpcEnd - _upQpc0, 1)
+      . " toApp=" Round(QPCms() - _upQpc0, 1) "`n", % Debug.Log.Path
+  G_MBDownHandled := 0
 Return
+#If
+
+; High-resolution timestamp in milliseconds (for setup-latency instrumentation)
+QPCms() {
+  static _freq := 0, _base := 0
+  DllCall("QueryPerformanceCounter", "Int64*", _c)
+  If (!_freq) {
+    DllCall("QueryPerformanceFrequency", "Int64*", _freq)
+    _base := _c  ; Rebase so deltas keep sub-ms precision in a double
+  }
+  Return (_c - _base) * 1000.0 / _freq
+}
 
 ; Get scroll position for a control (cross-process safe)
 ; bar: 1 = vertical (default), 0 = horizontal
@@ -1417,6 +1499,24 @@ SP_GetVViewSize(pattern) {
   Return vs
 }
 
+; True when the element maps to a top-level window, so its UIA siblings are other
+; applications' windows rather than sibling controls within this app
+UIA_IsTopLevel(element) {
+  VarSetCapacity(_var, 24, 0)
+  DllCall("OleAut32\VariantInit", "Ptr", &_var)
+  DllCall(NumGet(NumGet(element+0)+10*A_PtrSize), "Ptr", element, "Int", 30020, "Ptr", &_var)
+  _vt := NumGet(_var, 0, "UShort")
+  _hwnd := 0
+  If (_vt = 3)
+    _hwnd := NumGet(_var, 8, "Int") & 0xFFFFFFFF
+  Else If (_vt = 20 or _vt = 21)
+    _hwnd := NumGet(_var, 8, "Int64")
+  DllCall("OleAut32\VariantClear", "Ptr", &_var)
+  If (!_hwnd)
+    Return 0
+  Return (DllCall("GetAncestor", "Ptr", _hwnd, "UInt", 2, "Ptr") = _hwnd)  ; GA_ROOT
+}
+
 ; Read RangeValue.Value (property 30047) from a UIA element
 UIA_GetValue(element) {
   VarSetCapacity(_var, 24, 0)
@@ -1454,11 +1554,14 @@ FindUIAScrollAncestor(ptX, ptY) {
   If (!G_UIA)
     Return 0
 
+  _tA := QPCms(), _totalSibs := 0
+
   ; Get element at point: IUIAutomation::ElementFromPoint (vtable offset 7)
   VarSetCapacity(_pt, 8, 0)
   NumPut(ptX, _pt, 0, "Int"), NumPut(ptY, _pt, 4, "Int")
   _startEl := 0
   DllCall(NumGet(NumGet(G_UIA+0)+7*A_PtrSize), "Ptr", G_UIA, "Int64", NumGet(_pt, 0, "Int64"), "Ptr*", _startEl)
+  _tB := QPCms()
   If (!_startEl)
     Return 0
 
@@ -1497,11 +1600,14 @@ FindUIAScrollAncestor(ptX, ptY) {
     }
 
     ; Check siblings for ScrollPattern (some XAML layouts have ScrollViewer as sibling)
+    ; Skip at top-level: siblings there are other apps' windows, and querying their
+    ; providers costs a cross-process round trip each, stalling on whichever is busy
     _sibling := 0
-    DllCall(NumGet(NumGet(_walker+0)+6*A_PtrSize), "Ptr", _walker, "Ptr", _current, "Ptr*", _sibling)
+    If (!UIA_IsTopLevel(_current))
+      DllCall(NumGet(NumGet(_walker+0)+6*A_PtrSize), "Ptr", _walker, "Ptr", _current, "Ptr*", _sibling)
     _sibCount := 0
     While (_sibling and _sibCount < 10) {
-      _sibCount++
+      _sibCount++, _totalSibs++
       _pattern := UIA_GetPattern(_sibling)
       If (_pattern) {
         _viewSizeV := SP_GetVViewSize(_pattern)
@@ -1544,7 +1650,10 @@ FindUIAScrollAncestor(ptX, ptY) {
   }
 
   ; Parent walk failed - search children for XAML ScrollBar (UWP apps like Windows Terminal)
+  _tC := QPCms()
   _result := FindScrollInChildren(_walker, _startEl, 0, _startClass)
+  If (Debug.Log["mb-timing"])
+    FileAppend, % TS() " | mb-timing | ANCESTOR | fromPoint=" Round(_tB - _tA, 1) " parentWalk=" Round(_tC - _tB, 1) " depth=" _depth " sibs=" _totalSibs " childSearch=" Round(QPCms() - _tC, 1) " path=" _ancestorPath "`n", % Debug.Log.Path
   If (IsObject(_result)) {
     ObjRelease(_walker)
     ObjRelease(_startEl)
@@ -1681,7 +1790,8 @@ MB_EndSession() {
 }
 
 MB_Init() {
-  global G_hSizeAll, G_hArrowDefault, G_hIBeamDefault
+  global G_hSizeAll, G_hArrowDefault, G_hIBeamDefault, G_MBDownHandled
+  G_MBDownHandled := 0  ; A reload mid-press would otherwise leave the release armed
   ; TODO: remove once cleanup is proven stable
   DllCall("SystemParametersInfo", "UInt", 0x201D, "UInt", 0, "Ptr", 1, "UInt", 0)
   G_hSizeAll := DllCall("LoadCursor", "Ptr", 0, "Ptr", 32646, "Ptr")  ; IDC_SIZEALL
