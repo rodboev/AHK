@@ -120,6 +120,55 @@ GetProcessCwd(pid) {
   }
 }
 
+; ⇒ Direct child PIDs of parentPid, optionally filtered by exe name. Toolhelp, not WMI.
+GetChildProcesses(parentPid, name := "") {
+  _result := []
+  _snap := DllCall("CreateToolhelp32Snapshot", "UInt", 0x2, "UInt", 0, "Ptr")  ; TH32CS_SNAPPROCESS
+  If (_snap = -1)
+    Return _result
+  ; PROCESSENTRY32W on x64: th32ProcessID at 8, th32ParentProcessID at 32, szExeFile at 44, size 568
+  VarSetCapacity(_entry, 568, 0)
+  NumPut(568, _entry, 0, "UInt")
+  If (DllCall("kernel32\Process32FirstW", "Ptr", _snap, "Ptr", &_entry)) {
+    Loop {
+      If (NumGet(_entry, 32, "UInt") = parentPid) {
+        _exe := StrGet(&_entry + 44, "UTF-16")
+        If (name = "" || _exe = name)
+          _result.Push(NumGet(_entry, 8, "UInt"))
+      }
+      If (!DllCall("kernel32\Process32NextW", "Ptr", _snap, "Ptr", &_entry))
+        Break
+    }
+  }
+  DllCall("CloseHandle", "Ptr", _snap)
+  Return _result
+}
+
+; ⇒ Read a process's command line via PEB walk (x64 only). Same walk as GetProcessCwd.
+GetProcessCommandLine(pid) {
+  _handle := DllCall("OpenProcess", "UInt", 0x0410, "Int", 0, "UInt", pid, "Ptr")  ; QUERY_INFORMATION | VM_READ
+  If (!_handle)
+    Return ""
+  _line := ""
+  VarSetCapacity(_pbi, 48, 0)
+  If (!DllCall("ntdll\NtQueryInformationProcess", "Ptr", _handle, "Int", 0, "Ptr", &_pbi, "UInt", 48, "UInt*", 0, "UInt")) {
+    VarSetCapacity(_buf, 8, 0)
+    DllCall("ReadProcessMemory", "Ptr", _handle, "Ptr", NumGet(_pbi, 8, "Ptr") + 0x20, "Ptr", &_buf, "Ptr", 8, "Ptr*", 0)
+    ; CommandLine is a UNICODE_STRING at 0x70: CurrentDirectory 0x38 + CURDIR 24 + DllPath 16 + ImagePathName 16
+    VarSetCapacity(_us, 16, 0)
+    DllCall("ReadProcessMemory", "Ptr", _handle, "Ptr", NumGet(_buf, 0, "Ptr") + 0x70, "Ptr", &_us, "Ptr", 16, "Ptr*", 0)
+    _len := NumGet(_us, 0, "UShort")
+    _ptr := NumGet(_us, 8, "Ptr")
+    If (_len && _ptr) {
+      VarSetCapacity(_text, _len + 2, 0)
+      DllCall("ReadProcessMemory", "Ptr", _handle, "Ptr", _ptr, "Ptr", &_text, "Ptr", _len, "Ptr*", 0)
+      _line := StrGet(&_text, _len // 2, "UTF-16")
+    }
+  }
+  DllCall("CloseHandle", "Ptr", _handle)
+  Return _line
+}
+
 ; ⇒ Get the CWD of a WT window's active shell child process
 ; Strategy: collect all shell descendants, match CWD against window title for disambiguation
 GetTerminalCwd(wtPid, hwnd := 0) {
@@ -212,6 +261,14 @@ UserRun(Executable, Args*) {
         }
     }
 
+    directGui := (Executable = "gui")
+    if (directGui) {
+        if (Args.Length() < 1)
+            return false
+        Executable := Args[1]
+        Args.RemoveAt(1)
+    }
+
     ; "elevate" is a sentinel: elevate the real target in Args[1]
     elevate := (Executable = "elevate")
     if (elevate) {
@@ -227,7 +284,7 @@ UserRun(Executable, Args*) {
     needsPowerShell := false
     Loop % Args.Length() {
         arg := Args[A_Index]
-        if (RegExMatch(arg, "%(.*?)%") || InStr(arg, "$env:")) {
+        if (!directGui && (RegExMatch(arg, "%(.*?)%") || InStr(arg, "$env:"))) {
             needsPowerShell := true
             break
         }
@@ -368,7 +425,10 @@ UserRun(Executable, Args*) {
 
     if (rfp != "") {
         innerCmd := _safeExeD . argStr
-        full := """" rfp """ explorer.exe conhost.exe --headless cmd.exe /C " innerCmd
+        if (directGui)
+            full := """" rfp """ explorer.exe """ _safeExeD """" argStr
+        else
+            full := """" rfp """ explorer.exe conhost.exe --headless cmd.exe /C " innerCmd
         Run, %full%, , UseErrorLevel Hide
         if (ErrorLevel) {
             MsgBox, 16, UserRun failed, % "Run failed.`nErrorLevel: " ErrorLevel "`n`nCommand:`n" full

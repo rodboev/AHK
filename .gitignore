@@ -8,3 +8,6 @@ RunFromProcess-x64.exe
 # Claude Code local settings
 .claude/*
 nearstream*
+
+# Python bytecode from herdr-new-window.py and its tests
+__pycache__/

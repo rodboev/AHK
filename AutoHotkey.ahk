@@ -24,9 +24,11 @@ Debug := { Tooltips: {"scroll-accel": 0
 , Log: { Path: A_Temp . "\AHK_Debug.log"
   , "scroll-accel": 0
   , "mbutton-drag": 0
+  , "mb-timing": 1
   , "window-spawning": 1
   , "terminal-anywhere": 0
-  , "herdr-anywhere": 0
+  , "herdr-anywhere": 1
+  , "herdr-new-window": 1
   , "tab-search": 0
   , "anti-afk": 0 }}
 
@@ -131,7 +133,9 @@ Return
 #IfWinActive
 
 ; ⇒ Other global bindings
+#If !WinActive("ahk_exe alacritty.exe")
 +!-::Send {U+2014} ; [ ShIft+Alt+Minus ] -> Em-dash
+#If
 +!0::Send {U+2022} ; [ ShIft+Alt+0] -> Bullet
 
 #If (WinActive("ahk_exe chrome.exe"))
@@ -523,49 +527,6 @@ WheelAccelDivisor() {
     WinActivate, ahk_pid %pid%
   } Else {
     UserRun("files-stable", path)
-  }
-Return
-
-; Ctrl + Shift + Plus: Relaunch active window with TrustedInstaller (NT AUTHORITY/SYSTEM) privileges
-^+=::
-  WinGet, activePid, PID, A
-  exe := GetExePath()
-  cmdLine := GetActiveWindowCommandLine(activePid)
-
-  If (cmdLine && cmdLine != ".") {
-    ; Resolve exe to full path — SYSTEM context (ti.exe) lacks user PATH entries
-    If (exe.path)
-      cmdLine := RegExReplace(cmdLine, "^(""[^""]*""|\S+)", """" . exe.path . """")
-    fullCmd := "ti.exe " . cmdLine
-    MsgBox, 4, Command to run (PID %activePid%), %fullCmd%`n`nClick Yes to run, No to cancel
-    IfMsgBox Yes
-    {
-      ; Store the original path for comparison
-      originalPath := exe.path
-
-      ; Run the elevated command
-      Run, %fullCmd%
-
-      ; Wait for new process to appear (up to 250ms)
-      startTime := A_TickCount, newProcessFound := false
-      While (!newProcessFound && A_TickCount - startTime <= 250) {
-        For process in ComObjGet("winmgmts:").ExecQuery("Select ProcessId, ExecutablePath from Win32_Process")
-          If (process.ExecutablePath = originalPath && process.ProcessId != activePid && newProcessFound := true)
-            Break
-        Sleep, 50
-      }
-
-      ; If no new process appeared, close the original app and try again
-      If (!newProcessFound) {
-        WinClose, ahk_pid %activePid%
-        startCloseTime := A_TickCount
-        While (WinExist("ahk_pid " . activePid) && A_TickCount - startCloseTime <= 500)
-          Sleep, 50
-        If (WinExist("ahk_pid " . activePid))
-          Process, Close, %activePid%
-        Run, %fullCmd%
-      }
-    }
   }
 Return
 
