@@ -7,6 +7,7 @@ from ctypes import wintypes
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import struct
 import subprocess
@@ -18,6 +19,8 @@ import uuid
 
 
 LOG_PATH = None
+# An SGR mouse report, either intact or already stripped of its ESC [ prefix.
+MOUSE_REPORT = re.compile(rb"\x1b\[<[0-9;]+[Mm]|<[0-9]+;[0-9]+;[0-9]+[Mm]")
 
 
 def write_log(path, event, detail):
@@ -380,10 +383,23 @@ def prepare(endpoint, exe, session, cwd):
     return workspace, pane
 
 
-def relay(source, destination, stopped):
+def trace_mouse(label, data, count, seen):
+    # Mouse reports arriving as literal text mean their ESC [ prefix was lost. Log both forms to find where.
+    if not LOG_PATH or seen[0] >= 40:
+        return
+    match = MOUSE_REPORT.search(data, 0, count)
+    if not match:
+        return
+    seen[0] += 1
+    start = max(0, match.start() - 8)
+    log("mouse-bytes", dir=label, n=count, at=match.start(), bytes=repr(data[start:match.end() + 4]).replace(" ", ""))
+
+
+def relay(source, destination, stopped, label=""):
     try:
         buffer = ctypes.create_string_buffer(65536)
         empty = 0
+        seen = [0]
         with pipe_operation() as read_operation, pipe_operation() as write_operation:
             while not stopped.is_set():
                 count = pipe_io(source, KERNEL.ReadFile, buffer, len(buffer), read_operation)
@@ -395,6 +411,7 @@ def relay(source, destination, stopped):
                     time.sleep(0.005)
                     continue
                 empty = 0
+                trace_mouse(label, buffer.raw, count, seen)
                 offset = 0
                 while offset < count and not stopped.is_set():
                     written = pipe_io(destination, KERNEL.WriteFile, ctypes.byref(buffer, offset), count - offset, write_operation)
@@ -409,7 +426,8 @@ def relay(source, destination, stopped):
 
 def bridge(upstream, downstream, on_ready=None):
     stopped = threading.Event()
-    workers = [threading.Thread(target=relay, args=(source, destination, stopped), daemon=True) for source, destination in [(upstream, downstream), (downstream, upstream)]]
+    directions = [(upstream, downstream, "from-server"), (downstream, upstream, "from-terminal")]
+    workers = [threading.Thread(target=relay, args=(source, destination, stopped, label), daemon=True) for source, destination, label in directions]
     for worker in workers:
         worker.start()
     try:
