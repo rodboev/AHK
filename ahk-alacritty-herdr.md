@@ -38,6 +38,7 @@ These never reach Alacritty in their original form.
 | F10, Ctrl+F10, Shift+F10, Ctrl+Shift+F10 | Everywhere except WindowsTerminal.exe | Launch or extend a Herdr workspace |
 | Esc | Alacritty active | Calls `pane.send_keys` on the API socket and suppresses the physical key |
 | Ctrl+Tab, Ctrl+Shift+Tab | Alacritty active | Rewritten to Ctrl+Down and Ctrl+Up |
+| F2 | Alacritty active | Passed through, then Ctrl+U clears Herdr's prefilled workspace name |
 | Win+E | Everywhere | Opens Explorer at the focused pane's directory |
 | Ctrl+V | Alacritty active | Clipboard normalized or image converted, then synthetic Ctrl+V |
 | Right click, Ctrl+right, Shift+right, Shift+left | Over an Alacritty window | Rewritten, see the mouse section |

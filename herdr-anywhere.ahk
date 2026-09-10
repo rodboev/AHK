@@ -11,6 +11,11 @@ F10::HerdrAnywhereLaunch()
 
 #IfWinActive ahk_exe alacritty.exe
 $Esc::HerdrAnywhereSendEscape()
+; ⇒ Herdr prefills the rename prompt with the current name and has no config to disable it.
+$F2::
+  SendInput, {F2}
+  SendInput, ^u
+Return
 $^Tab::
   If (HerdrAnywhereIsActiveClient())
     HerdrAnywhereSendWorkspaceStep("down")
