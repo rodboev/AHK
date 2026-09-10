@@ -4,6 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Keep under 30k chars; 40k char max (`wc -c CLAUDE.md`). Compress or remove content when adding.
 
+If working on alacritty/herdr related functionality see AHK-alacritty-herdr.md for important interactions between the three.
+
 ## Workflow
 
 **Log file location**: %A_Temp%\AHK_Debug.log
