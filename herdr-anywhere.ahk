@@ -335,6 +335,11 @@ HerdrAnywhereGetContextDir() {
     If (_path)
       Return _path
   }
+  If (_class = "File Pilot") {
+    _path := GetFilePilotPath()
+    If (_path)
+      Return _path
+  }
   If (_class = "CASCADIA_HOSTING_WINDOW_CLASS") {
     _path := GetTerminalDir()
     If (_path)

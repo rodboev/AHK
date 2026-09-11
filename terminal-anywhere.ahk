@@ -376,6 +376,16 @@ GetExplorerPath() {
   Return ""
 }
 
+; ⇒ Get current path of active File Pilot window
+; FPilot.exe is custom-rendered: no child controls and an empty UIA tree, so the
+; title bar's "Name (Full\Path) - File Pilot vX.Y.Z" is the only path source.
+GetFilePilotPath() {
+  WinGetTitle, _title, A
+  If (!RegExMatch(_title, "\((([A-Za-z]:\\|\\\\).*)\)\s+-\s+File Pilot", _m))
+    Return ""
+  Return InStr(FileExist(_m1), "D") ? _m1 : ""
+}
+
 GetTerminalDir() {
   global Debug
   WinGetClass, _class, A
@@ -383,6 +393,11 @@ GetTerminalDir() {
     FileAppend, % TS() . " | terminal-anywhere | " . "GetTerminalDir: class=" . _class . "`n", % Debug.Log.Path
   If (_class = "Progman")
     Return A_Desktop
+  If (_class = "File Pilot") {
+    _path := GetFilePilotPath()
+    If (_path)
+      Return RegExMatch(_path, "^[A-Za-z]:\\$") ? _path . "." : _path
+  }
   If (_class = "CabinetWClass") {
     _path := GetExplorerPath()
     if (Debug.Log["terminal-anywhere"])
