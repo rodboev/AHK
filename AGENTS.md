@@ -359,4 +359,5 @@ At `EVENT_OBJECT_CREATE`, hide windows using `WS_EX_LAYERED` + alpha 0. After mo
 ## Local Rules
 
 - Do not start, restart, or reload `AutoHotkey.ahk`; the user owns AHK lifecycle actions.
+- Do not use or run iLib
 - Only edit `AGENTS.md` or `CLAUDE.md` when the user explicitly asks.

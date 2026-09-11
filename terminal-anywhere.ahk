@@ -377,13 +377,39 @@ GetExplorerPath() {
 }
 
 ; ⇒ Get current path of active File Pilot window
-; FPilot.exe is custom-rendered: no child controls and an empty UIA tree, so the
-; title bar's "Name (Full\Path) - File Pilot vX.Y.Z" is the only path source.
+; FPilot.exe is custom-rendered: no child controls, empty UIA tree, no directory
+; handle, and a CWD that never follows navigation. The title carries the path
+; only while it is short enough to fit, so anything longer needs Copy As Path.
 GetFilePilotPath() {
   WinGetTitle, _title, A
-  If (!RegExMatch(_title, "\((([A-Za-z]:\\|\\\\).*)\)\s+-\s+File Pilot", _m))
+  ; Fast path: unelided title, e.g. "Repos (D:\Repos) - File Pilot v0.8.5"
+  If (RegExMatch(_title, "\((([A-Za-z]:\\|\\\\).*)\)\s+-\s+File Pilot", _m) && InStr(FileExist(_m1), "D"))
+    Return _m1
+  Return GetFilePilotPathViaClipboard()
+}
+
+; ⇒ Ctrl+Shift+C is File Pilot's Copy As Path: the current folder when nothing is
+; selected, otherwise one quoted path per selected item.
+GetFilePilotPathViaClipboard() {
+  _saved := ClipboardAll
+  Clipboard := ""
+  SendInput, ^+c
+  ClipWait, 0.5, 1
+  _got := Clipboard
+  Clipboard := _saved
+  _saved := ""
+  _nl := InStr(_got, "`n")
+  If (_nl)
+    _got := SubStr(_got, 1, _nl - 1)
+  _got := Trim(_got, " `t`r`n""")
+  If (!RegExMatch(_got, "^([A-Za-z]:\\|\\\\)"))
     Return ""
-  Return InStr(FileExist(_m1), "D") ? _m1 : ""
+  _attr := FileExist(_got)
+  If (_attr && !InStr(_attr, "D")) {
+    SplitPath, _got,, _dir
+    Return _dir
+  }
+  Return InStr(_attr, "D") ? _got : ""
 }
 
 GetTerminalDir() {
