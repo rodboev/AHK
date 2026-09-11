@@ -33,8 +33,7 @@ Debug := { Tooltips: {"scroll-accel": 0
   , "terminal-anywhere": 0
   , "herdr-anywhere": 1
   , "herdr-new-window": 1
-  , "tab-search": 0
-  , "anti-afk": 0 }}
+  , "tab-search": 0 }}
 
 FileDelete, % Debug.Log.Path
 
@@ -60,7 +59,6 @@ TS() {
     If (WindowSpawningEnabled)
       WS_Init(WindowSpawningSpecialOnly)
     TerminalInit()
-    AntiAFK_Init("09:30-03:30")
     If (Debug.Log["mb-timing"])
       SetTimer, MainThreadHeartbeat, 100
   }
@@ -296,114 +294,6 @@ $XButton2::
     Sleep 100
   }
 Return
-
-#IfWinActive, ahk_exe discordmaxxer.exe
-  Esc::WinClose
-#IfWinActive
-
-; ┏━━━━━━━━━━━━━━━━━━━━━━━┓
-; ┃ === ANTI-AFK (VC) === ┃
-; ┗━━━━━━━━━━━━━━━━━━━━━━━┛
-; Nudges input before Discord's idle timeout so voice chat doesn't flip to AFK.
-; Based on https://github.com/yurehito/antiafk-discordvc
-^!s:: ; [ Ctrl+Alt+S ] -> Toggle anti-AFK
-  global G_AntiAFK
-  G_AntiAFK.Running := !G_AntiAFK.Running
-  _state := G_AntiAFK.Running ? "Running" : "Paused"
-  If (G_AntiAFK.Running && !AntiAFK_InWindow())
-    _state .= " (idle until " G_AntiAFK.Window ")"
-  ToolTip, % "Anti-AFK: " _state
-  SetTimer, RemoveToolTip, -1500
-Return
-
-; activeWindow: "HH:MM-HH:MM" 24-hour, wraps past midnight; "" runs around the clock
-AntiAFK_Init(activeWindow := "") {
-  global G_AntiAFK
-  G_AntiAFK := { Running: 1
-    , LastTick: 0
-    , IdleThreshold: 58000  ; under Discord's 60s AFK cutoff
-    , Procs: ["Discord.exe", "DiscordCanary.exe", "DiscordPTB.exe", "discordmaxxer.exe"] }
-  AntiAFK_SetWindow(activeWindow)
-  SetTimer, AntiAFKTimer, 1000
-}
-
-AntiAFK_SetWindow(activeWindow) {
-  global G_AntiAFK
-  G_AntiAFK.Window := activeWindow
-  G_AntiAFK.Start := -1
-  G_AntiAFK.End := -1
-  If (activeWindow = "")
-    Return
-  If (!RegExMatch(activeWindow, "^\s*(\d{1,2}):?(\d{2})\s*-\s*(\d{1,2}):?(\d{2})\s*$", _m))
-    Return
-  G_AntiAFK.Start := _m1 * 60 + _m2
-  G_AntiAFK.End := _m3 * 60 + _m4
-}
-
-AntiAFK_InWindow() {
-  global G_AntiAFK
-  If (G_AntiAFK.Start < 0 || G_AntiAFK.Start = G_AntiAFK.End)
-    Return true
-  _now := A_Hour * 60 + A_Min
-  If (G_AntiAFK.Start < G_AntiAFK.End)
-    Return (_now >= G_AntiAFK.Start && _now < G_AntiAFK.End)
-  Return (_now >= G_AntiAFK.Start || _now < G_AntiAFK.End) ; window wraps past midnight
-}
-
-AntiAFKTimer:
-  global G_AntiAFK, Debug
-  If (!G_AntiAFK.Running)
-    Return
-  _inWindow := AntiAFK_InWindow()
-  If (Debug.Log["anti-afk"] && _inWindow != G_AntiAFK.WasInWindow) {
-    FileAppend, % TS() " | anti-afk | window | " (_inWindow ? "open" : "closed") " range=" G_AntiAFK.Window "`n", % Debug.Log.Path
-    G_AntiAFK.WasInWindow := _inWindow
-  }
-  If (!_inWindow)
-    Return
-  ; A_TimeIdlePhysical ignores synthetic input, so our own nudges don't reset it
-  If (A_TimeIdlePhysical < G_AntiAFK.IdleThreshold)
-    Return
-  If (G_AntiAFK.LastTick && A_TickCount - G_AntiAFK.LastTick < G_AntiAFK.IdleThreshold)
-    Return
-  If (!AntiAFK_TargetRunning())
-    Return
-  AntiAFK_Nudge()
-  G_AntiAFK.LastTick := A_TickCount
-Return
-
-AntiAFK_TargetRunning() {
-  global G_AntiAFK
-  For _, _proc in G_AntiAFK.Procs {
-    Process, Exist, %_proc%
-    If (ErrorLevel)
-      Return _proc
-  }
-  Return ""
-}
-
-AntiAFK_Nudge() {
-  global Debug
-  Random, _roll, 1, 100
-  If (_roll <= 70) {
-    Random, _dx, 1, 4
-    Random, _dy, -2, 2
-    DllCall("mouse_event", "UInt", 0x0001, "Int", _dx, "Int", _dy, "UInt", 0, "UInt", 0)
-    Sleep, 40
-    DllCall("mouse_event", "UInt", 0x0001, "Int", -_dx, "Int", -_dy, "UInt", 0, "UInt", 0)
-    _action := "mouse dx=" _dx " dy=" _dy
-  } Else {
-    Random, _k, 1, 2
-    _key := (_k = 1) ? "Shift" : "Ctrl"
-    Send, {%_key%}
-    _action := "key " _key
-  }
-  If (Debug.Log["anti-afk"])
-    FileAppend, % TS() " | anti-afk | nudge | " _action " target=" AntiAFK_TargetRunning() "`n", % Debug.Log.Path
-  ; Randomize spacing so the nudges aren't on a fixed cadence
-  Random, _extra, 200, 800
-  Sleep, %_extra%
-}
 
 ; ⇒ Terminal image paste: convert clipboard image to file for Claude Code
 #If (WinActive("ahk_exe WindowsTerminal.exe") || WinActive("ahk_exe alacritty.exe")) && ClipboardHasImage()
