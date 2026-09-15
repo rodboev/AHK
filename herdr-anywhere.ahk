@@ -11,32 +11,31 @@ F10::HerdrAnywhereLaunch()
 
 #IfWinActive ahk_exe alacritty.exe
 $Esc::HerdrAnywhereSendEscape()
+#IfWinActive
+
+#If WinActive("ahk_exe alacritty.exe") || WinActive("ahk_exe noctty.exe")
 ; ⇒ Herdr prefills the rename prompt with the current name and has no config to disable it.
 $F2::
+  global HerdrEscapeToHerdr
+  HerdrEscapeToHerdr := WinActive("ahk_exe alacritty.exe") != 0
   SendInput, {F2}
   SendInput, ^u
 Return
-$^Tab::
-  If (HerdrAnywhereIsActiveClient())
-    HerdrAnywhereSendWorkspaceStep("down")
-  Else
-    SendInput, ^{Tab}
-Return
-$^+Tab::
-  If (HerdrAnywhereIsActiveClient())
-    HerdrAnywhereSendWorkspaceStep("up")
-  Else
-    SendInput, ^+{Tab}
-Return
-#IfWinActive
+#If
 
 #e::HerdrAnywhereOpenExplorer()
 
 HerdrAnywhereSendEscape() {
+  global HerdrEscapeToHerdr
   _hwnd := WinExist("A")
   _client := HerdrAnywhereGetClient(_hwnd)
   If (!WinActive("ahk_id " . _hwnd))
     Return
+  If (HerdrEscapeToHerdr) {
+    HerdrEscapeToHerdr := 0
+    SendEvent, {Blind}{Esc}
+    Return
+  }
   If (!IsObject(_client) || _client.kind != "local") {
     HerdrAnywhereLog("escape-passthrough", "hwnd=" . WinExist("A"))
     SendEvent, {Blind}{Esc}
@@ -58,13 +57,6 @@ HerdrAnywhereSendEscape() {
     SendEvent, {Blind}{Esc}
 }
 
-HerdrAnywhereSendWorkspaceStep(direction) {
-  If (direction = "up")
-    SendInput, {Shift Up}{Ctrl Down}{Up}{Ctrl Up}{Shift Down}
-  Else
-    SendInput, {Ctrl Down}{Down}{Ctrl Up}
-}
-
 HerdrAnywhereLaunch(command := "", session := "") {
   If (session = "" && HerdrAnywhereIsActiveClient()) {
     HerdrAnywhereLaunchInClient(command)
@@ -74,7 +66,7 @@ HerdrAnywhereLaunch(command := "", session := "") {
 }
 
 HerdrAnywhereOpenWindow(dir, command := "", session := "") {
-  global Debug
+  global Debug, HerdrTerminal
   _python := "C:\Apps\Python313\pythonw.exe"
   If (!FileExist(_python))
     _python := FindInPath("pythonw.exe")
@@ -85,7 +77,7 @@ HerdrAnywhereOpenWindow(dir, command := "", session := "") {
   }
   HerdrAnywhereLog("open-window", "cwd=" . dir . " command=" . command . " session=" . session)
   ; The admin session's server only answers an elevated caller, so the helper has to match it.
-  _args := [session = "" ? "gui" : "elevate", _python, _helper, "--cwd", dir]
+  _args := [session = "" ? "gui" : "elevate", _python, _helper, "--terminal", HerdrTerminal, "--cwd", dir]
   If (command != "")
     _args.Push("--command"), _args.Push(command)
   If (session != "")
@@ -113,8 +105,9 @@ HerdrAnywhereTypeInClient(command, dir) {
     Return
   If (!WinActive("ahk_id " . _client.hwnd))
     Return
-  HerdrAnywhereLog("workspace", "hwnd=" . _client.hwnd . " kind=" . _client.kind . " session=" . _client.session)
-  SendInput, {Ctrl Down}n{Ctrl Up}
+  HerdrAnywhereLog("herdr-tab", "hwnd=" . _client.hwnd . " kind=" . _client.kind . " session=" . _client.session)
+  ; Noctty and Alacritty only carry the keystroke; Herdr handles Ctrl+T as new_tab.
+  SendInput, ^t
   If (command != "") {
     KeyWait, Ctrl
   }
@@ -143,14 +136,21 @@ HerdrAnywhereIsClientWindow(hwnd) {
 
 HerdrAnywhereGetClient(hwnd) {
   WinGet, _exe, ProcessName, ahk_id %hwnd%
-  If (_exe != "alacritty.exe")
+  If (_exe != "alacritty.exe" && _exe != "noctty.exe")
     Return false
-  WinGet, _alacrittyPid, PID, ahk_id %hwnd%
+  WinGet, _terminalPid, PID, ahk_id %hwnd%
   _client := false
-  For _, _pid in GetChildProcesses(_alacrittyPid, "herdr.exe") {
+  For _, _pid in GetChildProcesses(_terminalPid, "herdr.exe") {
     _connection := HerdrAnywhereParseConnection(GetProcessCommandLine(_pid))
-    If (!IsObject(_connection) || IsObject(_client))
+    If (!IsObject(_connection))
       Return false
+    If (IsObject(_client)) {
+      If (_exe != "noctty.exe"
+        || _connection.kind != _client.kind
+        || _connection.session != _client.session)
+        Return false
+      Continue
+    }
     _client := _connection
     _client.hwnd := hwnd
   }
@@ -345,7 +345,7 @@ HerdrAnywhereGetContextDir() {
     If (_path)
       Return _path
   }
-  If (WinActive("ahk_exe alacritty.exe")) {
+  If (WinActive("ahk_exe alacritty.exe") || WinActive("ahk_exe noctty.exe")) {
     _client := HerdrAnywhereGetClient(WinExist("A"))
     If (!IsObject(_client) || _client.kind != "local")
       Return A_Desktop

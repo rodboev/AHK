@@ -37,10 +37,10 @@ Debug := { Tooltips: {"scroll-accel": 0
 
 FileDelete, % Debug.Log.Path
 
-; DisplayFusion handles ordinary application launches. Keep the special window
-; routing for Run, Start, and owned #32770 dialogs in this script.
+; Route ordinary application launches and special windows in this script.
 WindowSpawningEnabled := 1
-WindowSpawningSpecialOnly := 1
+WindowSpawningSpecialOnly := 0
+HerdrTerminal := "C:\Apps\noctty\noctty.exe"
 _alacrittyDpiScale := GetAlacrittyDpiScale()
 G_AlacrittyMenuLeftWidth := 225 * _alacrittyDpiScale
 G_AlacrittyMenuTopHeight := 50 * _alacrittyDpiScale
@@ -112,7 +112,7 @@ Return
 #IfWinActive
 
 ; ⇒ Sublime Text
-#n::
++!n::
   If (WinExist("ahk_exe sublime_text.exe")) {
     If (WinActive("ahk_exe sublime_text.exe"))
       UserRun("notepad")
@@ -151,22 +151,25 @@ Return
 #IfWinActive
 
 ; ⇒ Other global bindings
-#If !WinActive("ahk_exe alacritty.exe")
+#If WinActive("ahk_exe alacritty.exe") || WinActive("ahk_exe noctty.exe")
+  $F11::SendInput, {Ctrl Down}b{Ctrl Up}z
+#If
+#If !WinActive("ahk_exe alacritty.exe") && !WinActive("ahk_exe noctty.exe")
 +!-::Send {U+2014} ; [ ShIft+Alt+Minus ] -> Em-dash
 #If
 +!0::Send {U+2022} ; [ ShIft+Alt+0] -> Bullet
 
-#If (WinActive("ahk_exe chrome.exe"))
-  ^+l::Send {Raw}https://linkedin.com/in/rodboev
-  ^+g::Send {Raw}https://github.com/rodboev
-  ^+r::Send {Raw}C:\Dropbox\Projects\basedin.nyc\resume.pdf
-  ^+b::Send {Raw}https://basedin.nyc
-  ^+p::Send {Raw}347-644-9001
-  ^+c::Send {Raw}New York
-  ^+e::Send {Raw}rod@basedin.nyc
-  ^+s::Send {Raw}Stony Brook University
-  ^+d::Send {Raw}Bachelor's Degree
-#If
+; #If (WinActive("ahk_exe chrome.exe"))
+;   ^+l::Send {Raw}https://linkedin.com/in/rodboev
+;   ^+g::Send {Raw}https://github.com/rodboev
+;   ^+r::Send {Raw}C:\Dropbox\Projects\basedin.nyc\resume.pdf
+;   ^+b::Send {Raw}https://basedin.nyc
+;   ^+p::Send {Raw}347-644-9001
+;   ^+c::Send {Raw}New York
+;   ^+e::Send {Raw}rod@basedin.nyc
+;   ^+s::Send {Raw}Stony Brook University
+;   ^+d::Send {Raw}Bachelor's Degree
+; #If
 
 #a::
   _alacrittyConfig := "C:\Users\Rod\AppData\Roaming\alacritty\alacritty.toml"
@@ -296,12 +299,9 @@ $XButton2::
 Return
 
 ; ⇒ Terminal image paste: convert clipboard image to file for Claude Code
-#If (WinActive("ahk_exe WindowsTerminal.exe") || WinActive("ahk_exe alacritty.exe")) && ClipboardHasImage()
+#If (WinActive("ahk_exe WindowsTerminal.exe") || WinActive("ahk_exe alacritty.exe") || WinActive("ahk_exe noctty.exe")) && ClipboardHasImage()
   ^v::
-    ConvertClipboardImageToFile()
-    Send ^v
-    Sleep, 100
-    FileDelete, %A_Temp%\clipboard_paste.png
+    PasteClipboardImage()
   Return
 #If (MouseIsOver("ahk_exe WindowsTerminal.exe") || AlacrittySurfaceIsUnderMouse()) && ClipboardHasImage()
   RButton::
@@ -310,38 +310,57 @@ Return
       Click Right
       Return
     }
-    If (AlacrittyMenuRightClick()) {
+    If (HerdrMenuRightClick()) {
       ActivateMouseWindow("ahk_exe alacritty.exe")
       Click Right
       Return
     }
     If (AlacrittySurfaceIsUnderMouse())
       ActivateMouseWindow("ahk_exe alacritty.exe")
-    ConvertClipboardImageToFile()
-    Send ^v
-    Sleep, 100
-    FileDelete, %A_Temp%\clipboard_paste.png
+    PasteClipboardImage()
   Return
 #If
 
 #If WinActive("ahk_exe alacritty.exe") && !ClipboardHasImage()
   $^v::PasteNormalizedClipboard()
+#If WinActive("ahk_exe noctty.exe") && !ClipboardHasImage()
+  $^v::PasteNormalizedClipboard("`n")
 #If AlacrittySurfaceIsUnderMouse() && !ClipboardHasImage()
   $RButton::
-    If (AlacrittyMenuRightClick()) {
+    If (HerdrMenuRightClick()) {
       ActivateMouseWindow("ahk_exe alacritty.exe")
       Click Right
       Return
     }
+    ActivateMouseWindow("ahk_exe alacritty.exe")
     PasteNormalizedClipboard()
   Return
 #If
 
 ; Send modified clicks to Herdr as unmodified clicks.
-#If AlacrittySurfaceIsUnderMouse()
+#If AlacrittySurfaceIsUnderMouse() || MouseIsOver("ahk_exe noctty.exe")
   $^RButton::SendInput, {RButton}
   $+RButton::SendInput, {RButton}
   $+LButton::SendInput, {LButton}
+#If
+
+#If MouseIsOver("ahk_exe noctty.exe")
+  $RButton::
+    _nocttyHwnd := MouseIsOver("ahk_exe noctty.exe")
+    ActivateMouseWindow("ahk_exe noctty.exe")
+    If (!WinActive("ahk_id " . _nocttyHwnd))
+      Return
+    If (HerdrMenuRightClick(_nocttyHwnd))
+      SendInput, {RButton}
+    Else If (ClipboardHasImage())
+      PasteClipboardImage()
+    Else
+      PasteNormalizedClipboard("`n")
+  Return
+#If
+
+#If AlacrittySurfaceIsUnderMouse() || MouseIsOver("ahk_exe noctty.exe")
+  $+MButton::SendInput, {LButton}^w
 #If
 
 #If MouseIsOverMB("ahk_exe JPEGView.exe")
@@ -821,12 +840,12 @@ ClipboardHasImage() {
   Return DllCall("IsClipboardFormatAvailable", "UInt", 2) && !DllCall("IsClipboardFormatAvailable", "UInt", 15)
 }
 
-PasteNormalizedClipboard() {
-  ActivateMouseWindow("ahk_exe alacritty.exe")
+PasteNormalizedClipboard(lineEnding := "`r") {
   _savedClipboard := ClipboardAll
   _text := Clipboard
-  _text := StrReplace(_text, "`r`n", "`r")
-  _text := StrReplace(_text, "`n", "`r")
+  _text := StrReplace(_text, "`r`n", "`n")
+  _text := StrReplace(_text, "`r", "`n")
+  _text := StrReplace(_text, "`n", lineEnding)
   If (!ClipboardSetRawText(_text))
     Clipboard := _text
   ClipWait, 0.2
@@ -859,18 +878,21 @@ GetAlacrittyDpiScale() {
   Return _dpi / 96
 }
 
-AlacrittyMenuRightClick() {
+HerdrMenuRightClick(hwnd := 0) {
   global G_AlacrittyMenuLeftWidth, G_AlacrittyMenuTopHeight
   CoordMode, Mouse, Screen
   MouseGetPos, _x, _y
-  _hwnd := AlacrittyWindowAtMouse()
+  _hwnd := hwnd ? hwnd : AlacrittyWindowAtMouse()
   If (!_hwnd)
     Return false
   WinGetPos, _left, _top, _width, _height, ahk_id %_hwnd%
   If (_x < _left || _x >= _left + _width || _y < _top || _y >= _top + _height)
     Return false
-  Return ((_x < _left + G_AlacrittyMenuLeftWidth)
-    || (_y < _top + G_AlacrittyMenuTopHeight))
+  _scale := hwnd ? DllCall("User32.dll\GetDpiForWindow", "Ptr", hwnd, "UInt") / 96 : 0
+  _leftWidth := _scale ? 225 * _scale : G_AlacrittyMenuLeftWidth
+  _topHeight := _scale ? 50 * _scale : G_AlacrittyMenuTopHeight
+  Return ((_x < _left + _leftWidth)
+    || (_y < _top + _topHeight))
 }
 
 AlacrittySurfaceIsUnderMouse() {
@@ -920,6 +942,12 @@ ClipboardSetRawText(text) {
   }
   DllCall("CloseClipboard")
   Return true
+}
+
+PasteClipboardImage() {
+  If (!ConvertClipboardImageToFile())
+    Return
+  SendInput, ^v
 }
 
 ConvertClipboardImageToFile() {
@@ -1027,9 +1055,14 @@ ClipboardSetFile(filePath) {
   NumPut(1, pDrop + 16, "Int")
   StrPut(filePath, pDrop + 20, pathLen + 1, "UTF-16")
   DllCall("GlobalUnlock", "Ptr", hDrop)
+  hText := DllCall("GlobalAlloc", "UInt", 0x42, "UPtr", (pathLen + 1) * 2, "Ptr")
+  pText := DllCall("GlobalLock", "Ptr", hText, "Ptr")
+  StrPut(filePath, pText, pathLen + 1, "UTF-16")
+  DllCall("GlobalUnlock", "Ptr", hText)
   DllCall("OpenClipboard", "Ptr", 0)
   DllCall("EmptyClipboard")
   DllCall("SetClipboardData", "UInt", 15, "Ptr", hDrop)
+  DllCall("SetClipboardData", "UInt", 13, "Ptr", hText)
   DllCall("CloseClipboard")
 }
 

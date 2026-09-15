@@ -34,6 +34,20 @@ def log(event, **fields):
         write_log(LOG_PATH, event, "".join(" %s=%s" % item for item in fields.items()))
 
 
+def find_executable(name):
+    path = Path(name)
+    if path.is_file():
+        return str(path)
+    found = shutil.which(name)
+    if found:
+        return found
+    if path.name.lower() != "herdr.exe":
+        return None
+    releases = Path.home() / ".herdr" / "packages" / "standalone" / "releases"
+    candidates = [candidate for candidate in releases.glob("*/herdr.exe") if candidate.is_file()]
+    return str(max(candidates, key=lambda candidate: candidate.stat().st_mtime)) if candidates else None
+
+
 KERNEL = ctypes.WinDLL("kernel32", use_last_error=True)
 KERNEL.CreateNamedPipeW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID]
 KERNEL.CreateNamedPipeW.restype = wintypes.HANDLE
@@ -330,13 +344,18 @@ def wait_focused_pane(exe, session, timeout=15):
     return None
 
 
-def cold_start(args, alacritty, exe):
+def terminal_command(args, terminal, exe):
+    child = [exe] + (["--session", args.session] if args.session else [])
+    if Path(terminal).name.lower() == "noctty.exe":
+        # A dedicated process preserves this window's pipe override and lifetime.
+        return [terminal, "--single-instance=false", "--window-save-state=never", "--working-directory=" + args.cwd, "-e", *child]
+    return [terminal, "--working-directory", args.cwd, "--command", *child]
+
+
+def cold_start(args, terminal, exe):
     # With no server there is no other window to protect from the resize, so no proxy is needed.
     env = {key: value for key, value in os.environ.items() if not key.startswith("HERDR_")}
-    command = [alacritty, "--working-directory", args.cwd]
-    if args.session:
-        command += ["--command", "herdr.exe", "--session", args.session]
-    subprocess.Popen(command, env=env)
+    subprocess.Popen(terminal_command(args, terminal, exe), env=env)
     if not args.command:
         return
     pane = wait_focused_pane(exe, args.session)
@@ -436,6 +455,7 @@ def main():
     parser.add_argument("--command", default="")
     parser.add_argument("--session", default="")
     parser.add_argument("--log", default="")
+    parser.add_argument("--terminal", default="alacritty.exe")
     args = parser.parse_args()
     LOG_PATH = args.log or None
     with ExitStack() as resources:
@@ -443,9 +463,11 @@ def main():
 
 
 def launch(args, resources):
-    exe, alacritty = shutil.which("herdr.exe"), shutil.which("alacritty.exe")
-    if not exe or not alacritty:
-        raise RuntimeError("Herdr and Alacritty must be on PATH")
+    exe, terminal = find_executable("herdr.exe"), find_executable(args.terminal)
+    if not exe or not terminal:
+        raise RuntimeError("Herdr or the configured terminal could not be found: " + args.terminal)
+    if Path(terminal).name.lower() not in ("alacritty.exe", "noctty.exe"):
+        raise RuntimeError("Unsupported terminal: " + terminal)
     directory = Path(os.environ["APPDATA"]) / "herdr"
     if args.session:
         directory = directory / "sessions" / args.session
@@ -457,20 +479,20 @@ def launch(args, resources):
         if error.winerror not in (2, 3):
             raise RuntimeError("Herdr's socket is present but unusable: %s" % error)
         log("no-server", session=args.session, error='"%s"' % error)
-        cold_start(args, alacritty, exe)
+        cold_start(args, terminal, exe)
         return
     workspace, pane = prepare(endpoint, exe, args.session, args.cwd)
     upstream = endpoint.pipe
     downstream = resources.enter_context(listen(proxy_path))
-    # Only this Alacritty child inherits the pipe override; pane processes keep the server's environment.
+    # Only this terminal child inherits the pipe override; pane processes keep the server's environment.
     env = {key: value for key, value in os.environ.items() if not key.startswith("HERDR_")}
     env["HERDR_CLIENT_SOCKET_PATH"] = str(proxy_path)
     if args.session:
         env["HERDR_SESSION"] = args.session
-    window = subprocess.Popen([alacritty, "--working-directory", args.cwd], env=env)
+    window = subprocess.Popen(terminal_command(args, terminal, exe), env=env)
     def watch_window():
         window.wait()
-        log("alacritty-exited", workspace=workspace)
+        log("terminal-exited", workspace=workspace)
         os._exit(0)
     threading.Thread(target=watch_window, daemon=True).start()
     connected = threading.Event()

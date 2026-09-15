@@ -5,6 +5,8 @@ from pathlib import Path
 import threading
 import time
 import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
 import uuid
 
 
@@ -19,6 +21,24 @@ class PipeRelayTests(unittest.TestCase):
 
     def setUp(self):
         self.pipes = []
+
+    def test_terminal_launch_preserves_arguments_and_clears_inherited_herdr_state(self):
+        module = self.module
+        args = SimpleNamespace(cwd="C:\\work with spaces", session="admin", command="")
+        exe = "C:\\Herdr App\\herdr.exe"
+        for terminal in ("C:\\Terminal App\\noctty.exe", "C:\\Terminal App\\alacritty.exe"):
+            with self.subTest(terminal=terminal), patch.dict(os.environ, {"HERDR_CLIENT_SOCKET_PATH": "stale", "HERDR_SESSION": "old"}), patch.object(module.subprocess, "Popen") as spawn:
+                module.cold_start(args, terminal, exe)
+                command = spawn.call_args.args[0]
+                self.assertEqual(command[0], terminal)
+                self.assertEqual(command[-3:], [exe, "--session", "admin"])
+                self.assertFalse(any(key.startswith("HERDR_") for key in spawn.call_args.kwargs["env"]))
+                if terminal.endswith("noctty.exe"):
+                    self.assertIn("--single-instance=false", command)
+                    self.assertIn("--working-directory=" + args.cwd, command)
+                    self.assertIn("-e", command)
+                else:
+                    self.assertEqual(command[1:4], ["--working-directory", args.cwd, "--command"])
 
     def tearDown(self):
         for pipe in self.pipes:

@@ -4,6 +4,16 @@ Read this before changing any keybinding, mouse binding, or launch path in the t
 
 ## The stack
 
+F2 clears Herdr's prefilled rename prompt in both terminals. Win+E resolves the focused local Herdr pane's directory in either terminal. AHK excludes both terminals from its Alt+Shift+minus text shortcut so Herdr receives the split binding. Ctrl+V and right-click paste convert clipboard images through the shared `PasteClipboardImage()` helper; both terminals normalize text line endings through `PasteNormalizedClipboard()`.
+
+I don't use tabs in Noctty. Tabs refer to Herdr tabs not the terminal emulator's or app's.
+
+Noctty right click now uses the same Herdr menu zones as Alacritty, with DPI read from the clicked Noctty window. Outside those zones it pastes through the shared AHK text and image helpers. Shift+right click and Ctrl+right click send an unmodified right click anywhere; Shift+left click also reaches Herdr unmodified. These bindings live in file:///C:/Dropbox/Projects/AHK/AutoHotkey.ahk, with zone checks in `HerdrMenuRightClick()`.
+
+F10 recognizes Herdr clients in both Alacritty and Noctty. Inside either terminal, F10 creates a Herdr tab. Outside them, `HerdrTerminal` in file:///C:/Dropbox/Projects/AHK/AutoHotkey.ahk selects the executable for new windows. It currently points to `C:\Apps\noctty\noctty.exe`; change it to `C:\Apps\Alacritty\alacritty.exe` and reload AutoHotkey to switch back. Shift+F10 keeps its separate admin-session behavior.
+
+The Python helper accepts `--terminal` and builds each terminal's launch arguments. Noctty uses `--single-instance=false` and `-e` so each window inherits its private Herdr pipe and starts Herdr directly. Shift+middle click sends a left click followed by Ctrl+W in both terminals. Noctty keeps its existing Escape handling.
+
 ```
 AutoHotkey (Windows-wide keyboard and mouse hooks)
   -> Alacritty (window, font, terminal emulation, its own key/mouse bindings)
@@ -20,9 +30,10 @@ Herdr is a background server plus a client. The client is what runs inside Alacr
 | File | Owns |
 |---|---|
 | file:///C:/Dropbox/Projects/AHK/AutoHotkey.ahk | Global hotkeys, paste normalization, right click zones, DPI scale, module includes |
-| file:///C:/Dropbox/Projects/AHK/herdr-anywhere.ahk | F10 family, Escape, Ctrl+Tab, Win+E, Herdr client detection |
+| file:///C:/Dropbox/Projects/AHK/herdr-anywhere.ahk | F10 family, Escape, Win+E, Herdr client detection |
 | file:///C:/Dropbox/Projects/AHK/herdr-new-window.py | Every F10 window: workspace creation, the pipe proxy, running the command |
 | file:///C:/Users/Rod/AppData/Roaming/alacritty/alacritty.toml | Alacritty key and mouse bindings, shell program, window size |
+| file:///C:/Users/Rod/AppData/Local/noctty/config.ghostty | Noctty key and mouse bindings, shell program, window size |
 | file:///C:/Users/Rod/AppData/Roaming/herdr/config.toml | Herdr direct bindings, prefix commands, theme, default shell |
 
 Two more files participate: file:///C:/Dropbox/Projects/AHK/terminal-anywhere.ahk supplies helper functions that herdr-anywhere calls, and file:///C:/Users/Rod/.codex/config.toml holds the Codex keymap that competes for the same keys.
@@ -36,12 +47,12 @@ These never reach Alacritty in their original form.
 | Key | Where | What happens |
 |---|---|---|
 | F10, Ctrl+F10, Shift+F10, Ctrl+Shift+F10 | Everywhere except WindowsTerminal.exe | Launch or extend a Herdr workspace |
-| Esc | Alacritty active | Calls `pane.send_keys` on the API socket and suppresses the physical key |
-| Ctrl+Tab, Ctrl+Shift+Tab | Alacritty active | Rewritten to Ctrl+Down and Ctrl+Up |
-| F2 | Alacritty active | Passed through, then Ctrl+U clears Herdr's prefilled workspace name |
+| Esc | Alacritty active | After F2, the next Esc reaches Herdr; later Esc presses call `pane.send_keys` on the API socket |
+| F2 | Alacritty active | Passed through, then Ctrl+U clears Herdr's prefilled name and arms the next Esc for Herdr |
 | Win+E | Everywhere | Opens Explorer at the focused pane's directory |
 | Ctrl+V | Alacritty active | Clipboard normalized or image converted, then synthetic Ctrl+V |
 | Right click, Ctrl+right, Shift+right, Shift+left | Over an Alacritty window | Rewritten, see the mouse section |
+| Shift+middle click | Over an Alacritty window | Sends an unmodified left click to focus the pane, then Ctrl+W to close it |
 
 ### Keys Alacritty converts into byte sequences
 
@@ -51,6 +62,9 @@ Alacritty has no idea what Herdr is. It only emits bytes. These bindings exist p
 |---|---|---|
 | Ctrl+Shift+C | `\u001B[99;6u` | CSI-u so Herdr can match `ctrl+shift+c` |
 | Ctrl+Shift+D | `\u001B[100;6u` | CSI-u so Herdr can match `ctrl+shift+d` |
+| Ctrl+Tab | `\u0002n` | Herdr prefix, then next tab |
+| Ctrl+Shift+Tab | `\u0002p` | Herdr prefix, then previous tab |
+| Ctrl+Shift+N | `\u0002N` | Herdr prefix, then new workspace |
 | Alt+Shift+= (scancode 13) | `\u0002v` | Herdr prefix, then v |
 | Alt+Shift+- (scancode 12) | `\u0002-` | Herdr prefix, then minus |
 | Ctrl+Shift+= (scancode 13) | `\u0002c` | Herdr prefix, then c |
@@ -58,7 +72,7 @@ Alacritty has no idea what Herdr is. It only emits bytes. These bindings exist p
 | Shift+F1 through Shift+F9 | `\u001B1` through `\u001B9` | Alt+1 through Alt+9, which Herdr maps to tabs |
 | Shift+Enter | `\u001B\r` | Escape then carriage return, the only newline that works everywhere |
 | Ctrl+V | Paste action |  |
-| F11 | Fullscreen | Alacritty owns this, Herdr never sees it |
+| F11 | Pane zoom | AHK suppresses the terminal binding and sends Herdr's `Ctrl+B`, then `z` command |
 
 The scancodes matter. Alacritty key names `Equals` and `Minus` do not match when Shift is held. Physical scancodes 13 and 12 do. Using the names silently produces a binding that never fires.
 
@@ -66,7 +80,7 @@ The scancodes matter. Alacritty key names `Equals` and `Minus` do not match when
 
 Everything in `[keys]` in Herdr's config is a direct binding. The pane process never receives these.
 
-Ctrl+Up, Ctrl+Shift+Tab (previous workspace). Ctrl+Down, Ctrl+Tab (next workspace). Ctrl+Left, Ctrl+Right (previous and next tab). Ctrl+T, Ctrl+Shift+= (new tab). Ctrl+W, Ctrl+F4 (close pane). Ctrl+N (new workspace). F2 (rename workspace). Ctrl+Shift+D, Alt+Shift+= (split vertical). Ctrl+Shift+C, Alt+Shift+- (split horizontal). Ctrl+Shift+arrows (focus pane). Alt+1 through Alt+9 (switch tab).
+Ctrl+Up (previous workspace). Ctrl+Down (next workspace). Ctrl+Shift+Up (previous agent). Ctrl+Shift+Down (next agent). Ctrl+Left, Ctrl+Shift+Tab (previous tab). Ctrl+Right, Ctrl+Tab (next tab). Ctrl+T, Ctrl+N, Ctrl+Shift+= (new tab). Ctrl+W, Ctrl+F4 (close pane). Ctrl+Shift+N (new workspace). F2 (rename tab). Shift+F2 (rename workspace). Shift+Up, Shift+Down, Shift+Left, and Shift+Right (focus pane). Ctrl+Shift+D, Alt+Shift+= (split vertical). Ctrl+Shift+C, Alt+Shift+- (split horizontal). Alt+1 through Alt+9 (switch tab).
 
 Plus the prefix, Ctrl+B, which is Herdr's default and is not set in the config. Herdr swallows Ctrl+B and waits for the next key.
 
@@ -92,21 +106,21 @@ Codex's config sets `copy = "ctrl-shift-c"`. Herdr claims Ctrl+Shift+C for split
 
 Before assigning any Ctrl or Ctrl+Shift key to Herdr, check what the agent TUIs already use.
 
-### 3. AutoHotkey's Ctrl+Tab depends on Herdr's Ctrl+Down binding
+### 3. Alacritty translates Ctrl+Tab into Herdr prefix commands
 
-`HerdrAnywhereSendWorkspaceStep()` in file:///C:/Dropbox/Projects/AHK/herdr-anywhere.ahk rewrites Ctrl+Tab into Ctrl+Down. That only works because Herdr's config maps `next_workspace` to `ctrl+down`. Removing the Ctrl+Down alias from Herdr's config kills Ctrl+Tab as a side effect. The `ctrl+tab` entry in Herdr's config is a second, independent path and does not cover the AutoHotkey route.
+file:///C:/Users/Rod/AppData/Roaming/alacritty/alacritty.toml translates Ctrl+Tab to `Ctrl+B`, then `n`, and Ctrl+Shift+Tab to `Ctrl+B`, then `p`. Herdr handles those prefix commands as next_tab and previous_tab. Ctrl+Left and Ctrl+Right switch tabs. Shift+arrow keys focus panes in the matching direction.
 
 ### 4. The em dash binding is disabled inside Alacritty on purpose
 
 file:///C:/Dropbox/Projects/AHK/AutoHotkey.ahk (line 137) wraps the Alt+Shift+minus em dash hotkey in `#If !WinActive("ahk_exe alacritty.exe")`. Without that guard, AutoHotkey would eat Alt+Shift+minus and Alacritty would never send `\u0002-`, so split horizontal would break. Removing the guard breaks the split. Adding a new global AutoHotkey binding on any key Alacritty needs has the same effect.
 
-### 5. Herdr must be a direct child process of Alacritty
+### 5. Herdr must be a direct child process of the terminal
 
-`HerdrAnywhereGetClient()` in file:///C:/Dropbox/Projects/AHK/herdr-anywhere.ahk finds processes whose parent is the Alacritty PID and accepts only a single `herdr.exe` child, then parses that child's command line for `--session` and `--remote`.
+`HerdrAnywhereGetClient()` in file:///C:/Dropbox/Projects/AHK/herdr-anywhere.ahk finds `herdr.exe` children of the Alacritty or Noctty PID, then parses their command lines for `--session` and `--remote`. Alacritty must have one matching child. Noctty may have several matching local children, so the function accepts them when they use the same connection.
 
 It uses `GetChildProcesses()` and `GetProcessCommandLine()` in file:///C:/Dropbox/Projects/AHK/processes.ahk, a Toolhelp snapshot plus a PEB read rather than WMI, at roughly 17ms per lookup against WMI's 112ms. `GetProcessCommandLine()` reads `RTL_USER_PROCESS_PARAMETERS.CommandLine` at offset 0x70 on x64, the same walk `GetProcessCwd()` does at 0x38 for the working directory.
 
-Everything keyed on client detection depends on this: Escape, Ctrl+Tab, F10 inside a client, Win+E, and the admin and remote distinctions. Insert any wrapper between Alacritty and Herdr, a launcher script, a session-name shim, a virtualenv Python stub, and all of it silently falls back to passthrough. Keep cmd and conhost wrappers out of the F10 path for the same reason.
+Everything keyed on client detection depends on this: Escape, F10 inside a client, Win+E, and the admin and remote distinctions. Insert any wrapper between Alacritty and Herdr, a launcher script, a session-name shim, a virtualenv Python stub, and all of it silently falls back to passthrough. Keep cmd and conhost wrappers out of the F10 path for the same reason.
 
 Corollary: `[terminal] shell = { program = "herdr.exe" }` in Alacritty's config is load-bearing. Change it and both the detection and the F10 launch path stop working.
 
@@ -156,7 +170,7 @@ Changing the normalization character reintroduces either the doubled lines or th
 
 | Situation | Path |
 |---|---|
-| Pressed inside a Herdr client | Sends Ctrl+N to that client, waits for Ctrl release, types the command |
+| Pressed inside a Herdr client | Sends Ctrl+T through the terminal to Herdr, creating a Herdr tab, then waits for Ctrl release and types the command |
 | Anywhere else | Launches the Python helper with `--cwd`, and `--command` and `--session` when set |
 
 AutoHotkey works out the context directory and launches the helper. It does not probe for a running server, create workspaces, or run commands in panes. Put that logic in the helper, not here.
@@ -221,12 +235,12 @@ All of this becomes unnecessary if Herdr gains a way to attach a new client dire
 3. If the key must reach a pane process, confirm Herdr does not claim it and that no Alacritty binding rewrites it.
 4. If the key must reach Herdr, confirm Alacritty encodes it in a form Herdr recognizes. Modified keys usually need CSI-u or a prefix sequence.
 5. If it involves the Ctrl+B prefix, list the four Alacritty sequences that hardcode `\u0002` and update them together.
-6. Reload the right things. AutoHotkey with Shift+Alt+R. Herdr reloads its own config, and `herdr config check` then `herdr server reload-config` confirms it. Alacritty live reloads most settings but keyboard bindings usually need a restart.
+6. Reload the right things. AutoHotkey with Shift+Alt+R. Herdr reloads its own config, and `herdr config check` then `herdr server reload-config` confirms it.
 
 `herdr --default-config` prints every action name with its default binding. Use it instead of guessing or reading the website. Function keys and ctrl+letter are the direct-binding forms Herdr calls most reliable; alt and punctuation with modifiers depend on the terminal.
 7. Enable `Debug.Log["herdr-anywhere"]` and `Debug.Log["herdr-new-window"]` in file:///C:/Dropbox/Projects/AHK/AutoHotkey.ahk (lines 30 and 31). Both write to `%TEMP%\AHK_Debug.log`, tagged by module name.
 
-`herdr-anywhere` events: `open-window`, `launch-reentrant`, `api-timeout`, `escape`, `escape-passthrough`, `workspace`.
+`herdr-anywhere` events: `open-window`, `launch-reentrant`, `api-timeout`, `escape`, `escape-passthrough`, `herdr-tab`.
 
 `herdr-new-window` events: `no-server`, `cold-start`, `cold-start-no-pane`, `prepared`, `attached`, `relay-stopped`, `relay-cancel-failed`, `alacritty-exited`, `attach-timeout`, `local-reconnect`, `local-reconnect-failed`, `launch-failed`. Every line carries `pid=` to separate concurrent helpers.
 
